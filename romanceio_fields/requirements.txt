@@ -1,0 +1,19 @@
+# Core runtime packages only - matches what's in .gitignore
+certifi
+colorama
+cssselect
+fake-useragent
+fasteners
+mycdp
+requests
+sbvirtualdisplay
+selenium==4.32.0
+seleniumbase==4.38.0
+typing-extensions
+urllib3
+websocket-client
+websockets
+lxml==4.9.4
+six==1.17.0
+charset-normalizer
+idna

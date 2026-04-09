@@ -1,0 +1,247 @@
+from threading import Thread
+
+from lxml.html import fromstring, tostring
+
+from calibre.ebooks.metadata.book.base import Metadata
+import calibre_plugins.romanceio.config as cfg  # type: ignore[import-not-found]  # pylint: disable=import-error
+from calibre_plugins.romanceio.parse_html import (  # type: ignore[import-not-found]  # pylint: disable=import-error
+    parse_romanceio_id,
+    convert_genres_to_calibre_tags,
+)
+
+
+class Worker(Thread):
+    """
+    Get book details from Romance.io book page in a separate thread
+    """
+
+    def __init__(self, url, result_queue, browser, log, relevance, plugin, timeout=20):
+        Thread.__init__(self)
+        self.daemon = True
+        self.url, self.result_queue = url, result_queue
+        self.log, self.timeout = log, timeout
+        self.relevance, self.plugin = relevance, plugin
+        self.browser = browser.clone_browser()
+        self.cover_url = None
+        self.romanceio_id = None
+
+    def run(self):
+        try:
+            self.get_details()
+        except (OSError, ValueError, RuntimeError, TypeError):
+            self.log.exception(f"get_details failed for url: {self.url!r}")
+
+    def get_details(self):
+        """Fetch book details, trying JSON API first, then falling back to HTML scraping."""
+        try:
+            romanceio_id = parse_romanceio_id(self.url)
+            if not romanceio_id:
+                self.log.error(f"Could not extract valid romanceio_id from URL: {self.url!r}")
+                return
+        except (ValueError, TypeError, AttributeError):
+            self.log.exception(f"Error parsing Romance.io id from url: {self.url!r}")
+            return
+
+        # Use orchestrator to try JSON first, then HTML fallback with retries
+        from calibre_plugins.romanceio.common_romanceio_search_orchestrator import (  # type: ignore[import-not-found]  # pylint: disable=import-error
+            fetch_details_with_fallback,
+        )
+
+        result = fetch_details_with_fallback(
+            romanceio_id=romanceio_id,
+            json_fetch_func=self._fetch_json,
+            html_fetch_func=self._fetch_html,
+            log_func=self.log.info,
+            max_retries=3,
+            retry_delay=2.0,
+        )
+
+        if result is None:
+            self.log.error(f"Failed to fetch details for {romanceio_id} from {self.url!r}")
+            return
+
+        # Result could be JSON dict or HTML root element
+        if isinstance(result, dict):
+            self._build_metadata_from_json(romanceio_id, result)
+        else:
+            # It's an HTML root element
+            self._build_metadata_from_html(result)
+
+    def _fetch_json(self, romanceio_id, log_func):
+        """Fetch book details from JSON API.
+
+        Returns:
+            Book dict if successful, None if not found
+        Raises:
+            Exception on technical failure (network, parsing, etc.)
+        """
+        from calibre_plugins.romanceio.common_romanceio_json_api import get_book_details_json  # type: ignore[import-not-found]  # pylint: disable=import-error
+
+        book_json = get_book_details_json(romanceio_id, log_func=log_func, timeout=30)
+        return book_json
+
+    def _fetch_html(self, romanceio_id, log_func):  # pylint: disable=unused-argument
+        """Fetch and parse HTML page for book details.
+
+        Returns:
+            lxml root element if successful, None if not found
+        Raises:
+            Exception on technical failure (network, parsing, etc.)
+        """
+        from calibre_plugins.romanceio.common_romanceio_fetch_helper import (  # type: ignore[import-not-found]  # pylint: disable=import-error
+            fetch_romanceio_book_page,
+        )
+
+        page_html, is_valid = fetch_romanceio_book_page(self.url, self.log)
+
+        if not is_valid:
+            # Invalid page (404) - not a technical failure, just not found
+            return None
+
+        if not page_html:
+            # Failed to fetch - raise to trigger retry
+            raise RuntimeError(f"Failed to fetch HTML page for {romanceio_id}")
+
+        root = fromstring(page_html)
+
+        title_node = root.xpath("//title")
+        if title_node:
+            page_title = title_node[0].text.strip()
+            if page_title is None or "search results for" in page_title:
+                return None  # Got wrong page type
+
+        errmsg = root.xpath('//*[@id="errorMessage"]')
+        if errmsg:
+            msg = tostring(errmsg, method="text", encoding="unicode").strip()
+            raise RuntimeError(f"Page contains error: {msg}")
+
+        return root
+
+    def _build_metadata_from_json(self, romanceio_id, book_json):
+        """Build Calibre Metadata object from JSON API response."""
+        from calibre_plugins.romanceio.parse_json import parse_details_from_json  # type: ignore[import-not-found]  # pylint: disable=import-error
+        from calibre_plugins.romanceio.common_romanceio_json_api import get_author_details_json  # type: ignore[import-not-found]  # pylint: disable=import-error
+
+        try:
+            parsed = parse_details_from_json(book_json, get_author_details_json)
+        except (ValueError, TypeError, KeyError, IndexError, AttributeError):
+            self.log.exception(f"Error parsing JSON for book: {romanceio_id}")
+            return
+
+        if not parsed.title or not parsed.authors or not parsed.romanceio_id:
+            self.log.error(f"Could not parse title/authors/id from JSON for: {romanceio_id}")
+            self.log.error(f"Found - ID: {parsed.romanceio_id!r} Title: {parsed.title!r} Authors: {parsed.authors!r}")
+            return
+
+        mi = Metadata(parsed.title, parsed.authors)
+        self.log.info(f"_build_metadata_from_json - romanceio_id: {parsed.romanceio_id}, mi: \n{mi}")
+        mi.set_identifier("romanceio", parsed.romanceio_id)
+        self.romanceio_id = parsed.romanceio_id
+
+        if parsed.cover_url:
+            self.cover_url = parsed.cover_url
+
+        if "series" in self.plugin.touched_fields:
+            if parsed.series is not None:
+                self.log.info(f"Series: {parsed.series!r} (index: {parsed.series_index!r})")
+                mi.series = parsed.series
+            if parsed.series_index is not None:
+                mi.series_index = parsed.series_index  # type: ignore[assignment]
+
+        if "tags" in self.plugin.touched_fields:
+            if parsed.tags:
+                self.log.info(f"Tags from Romance.io ({len(parsed.tags)}): {parsed.tags}")
+                map_genres = cfg.plugin_prefs[cfg.STORE_NAME].get(
+                    cfg.KEY_MAP_GENRES, cfg.DEFAULT_STORE_VALUES[cfg.KEY_MAP_GENRES]
+                )
+                calibre_tag_map = {}
+                if map_genres:
+                    calibre_tag_map = cfg.plugin_prefs[cfg.STORE_NAME].get(
+                        cfg.KEY_GENRE_MAPPINGS, cfg.DEFAULT_STORE_VALUES[cfg.KEY_GENRE_MAPPINGS]
+                    )
+                tags = convert_genres_to_calibre_tags(parsed.tags, map_genres, calibre_tag_map)
+                if tags:
+                    self.log.info(f"Final tags ({len(tags)}): {tags}")
+                    mi.tags = tags
+                else:
+                    self.log.info("Tags after mapping: none (all filtered out)")
+            else:
+                self.log.info("Tags from Romance.io: none")
+
+        if "pubdate" in self.plugin.touched_fields:
+            if parsed.pubdate:
+                self.log.info(f"_build_metadata_from_json - setting pubdate: {parsed.pubdate}")
+                mi.pubdate = parsed.pubdate
+            else:
+                self.log.info("_build_metadata_from_json - pubdate not found in JSON")
+
+        mi.source_relevance = self.relevance
+
+        if self.cover_url is not None:
+            self.plugin.cache_identifier_to_cover_url(self.romanceio_id, self.cover_url)
+        self.plugin.clean_downloaded_metadata(mi)
+
+        self.log.info(f"_build_metadata_from_json - final mi.pubdate: {mi.pubdate!r}")
+        self.result_queue.put(mi)
+
+    def _build_metadata_from_html(self, root):
+        """Build Calibre Metadata object from parsed HTML."""
+        from calibre_plugins.romanceio.parse_html import parse_details_from_html  # type: ignore[import-not-found]  # pylint: disable=import-error
+
+        parsed = parse_details_from_html(self.url, root, self.log.info)
+
+        if not parsed.title or not parsed.authors or not parsed.romanceio_id:
+            self.log.error(f"Could not parse all of title/authors/romanceio id from: {self.url!r}")
+            self.log.error(
+                f"Found Romance.io id: {parsed.romanceio_id!r} Title: {parsed.title!r} Authors: {parsed.authors!r}"
+            )
+            return
+
+        mi = Metadata(parsed.title, parsed.authors)
+        self.log.info(f"_build_metadata_from_html - romanceio_id: {parsed.romanceio_id}, mi: {mi}")
+        mi.set_identifier("romanceio", parsed.romanceio_id)
+        self.romanceio_id = parsed.romanceio_id
+
+        if "series" in self.plugin.touched_fields:
+            if parsed.series is not None:
+                self.log.info(f"Series: {parsed.series!r} (index: {parsed.series_index!r})")
+                mi.series = parsed.series
+            if parsed.series_index is not None:
+                mi.series_index = parsed.series_index  # type: ignore[assignment]
+
+        if "tags" in self.plugin.touched_fields:
+            if parsed.tags:
+                self.log.info(f"Tags from Romance.io ({len(parsed.tags)}): {parsed.tags}")
+                # Apply tag mapping if configured
+                map_genres = cfg.plugin_prefs[cfg.STORE_NAME].get(
+                    cfg.KEY_MAP_GENRES, cfg.DEFAULT_STORE_VALUES[cfg.KEY_MAP_GENRES]
+                )
+                calibre_tag_map = {}
+                if map_genres:
+                    calibre_tag_map = cfg.plugin_prefs[cfg.STORE_NAME].get(
+                        cfg.KEY_GENRE_MAPPINGS, cfg.DEFAULT_STORE_VALUES[cfg.KEY_GENRE_MAPPINGS]
+                    )
+                tags = convert_genres_to_calibre_tags(parsed.tags, map_genres, calibre_tag_map)
+                if tags:
+                    self.log.info(f"Final tags ({len(tags)}): {tags}")
+                    mi.tags = tags
+                else:
+                    self.log.info("Tags after mapping: none (all filtered out)")
+            else:
+                self.log.info("Tags from Romance.io: none")
+
+        if "pubdate" in self.plugin.touched_fields:
+            if parsed.pubdate:
+                self.log.info(f"_build_metadata_from_html - setting pubdate: {parsed.pubdate}")
+                mi.pubdate = parsed.pubdate
+            else:
+                self.log.info("_build_metadata_from_html - pubdate not found in HTML")
+
+        mi.source_relevance = self.relevance
+
+        if self.cover_url is not None:
+            self.plugin.cache_identifier_to_cover_url(self.romanceio_id, self.cover_url)
+        self.plugin.clean_downloaded_metadata(mi)
+
+        self.log.info(f"_build_metadata_from_html - final mi.pubdate: {mi.pubdate!r}")
+        self.result_queue.put(mi)

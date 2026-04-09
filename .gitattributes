@@ -1,0 +1,20 @@
+# Auto detect text files and perform LF normalization
+* text=auto
+
+# Shell scripts should always use LF
+*.sh text eol=lf
+
+# Python files - let Git auto-detect
+*.py text
+
+# HTML test fixtures - let Git auto-detect
+*.html text
+
+# Documentation and config files
+*.md text
+*.txt text
+*.ini text
+
+# Ensure Windows batch files use CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf

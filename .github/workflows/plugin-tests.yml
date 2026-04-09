@@ -1,0 +1,306 @@
+name: Calibre Plugin Tests
+
+on:
+  push:
+    branches: [ "*" ]  # Run on all branches
+  pull_request:
+    branches: [ "main" ]
+  schedule:
+    - cron: "0 12 * * *"  # Run daily at 4am PST (12pm UTC)
+
+permissions:
+  contents: read
+  actions: read  # Needed to query previous workflow run status
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 2  # Fetch at least 2 commits for diff comparison
+
+    - name: Detect changes and determine what to run
+      id: changes
+      run: |
+        # Check if previous workflow run failed (to catch lingering test failures)
+        FORCE_ALL_TESTS=false
+        if [ "${{ github.event_name }}" != "schedule" ]; then
+          echo "Checking previous workflow run status..."
+
+          # Get the most recent completed workflow run before this one
+          PREV_CONCLUSION=$(gh api \
+            -H "Accept: application/vnd.github+json" \
+            "/repos/${{ github.repository }}/actions/workflows/plugin-tests.yml/runs?per_page=5&branch=${{ github.ref_name }}&status=completed" \
+            --jq ".workflow_runs | map(select(.id != ${{ github.run_id }})) | .[0].conclusion // \"none\"" 2>/dev/null || echo "none")
+
+          echo "Previous run conclusion: $PREV_CONCLUSION"
+
+          if [ "$PREV_CONCLUSION" != "success" ] && [ "$PREV_CONCLUSION" != "none" ]; then
+            echo "⚠️  Previous workflow run did not succeed (conclusion: $PREV_CONCLUSION)"
+            echo "🔄 Forcing all tests to run to catch any persisting failures"
+            FORCE_ALL_TESTS=true
+          fi
+        fi
+
+        # Determine which files changed
+        if [ "${{ github.event_name }}" == "schedule" ]; then
+          # For scheduled runs, run all tests
+          echo "Scheduled run - will run all tests"
+          CHANGED_FILES="all"
+        elif [ "${{ github.event_name }}" == "pull_request" ]; then
+          # For PRs, compare against the base branch
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+        else
+          # For pushes, compare against the state before this push (handles multiple commits)
+          if [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            # Fetch the before commit if not already available
+            git fetch origin ${{ github.event.before }} 2>/dev/null || true
+            CHANGED_FILES=$(git diff --name-only ${{ github.event.before }}..HEAD 2>/dev/null || echo "all")
+          else
+            # First commit in a new branch, run all tests
+            CHANGED_FILES="all"
+          fi
+        fi
+
+        echo "Changed files:"
+        echo "$CHANGED_FILES"
+
+        # Check if changes are substantive (not just documentation)
+        # Non-substantive files: *.md, LICENSE, .gitignore, *.txt (except requirements.txt)
+        if [ "$CHANGED_FILES" == "all" ]; then
+          echo "substantive_changes=true" >> $GITHUB_OUTPUT
+          echo "✅ First commit or unable to determine changes - running full pipeline"
+        elif echo "$CHANGED_FILES" | grep -qE '^requirements\.txt$'; then
+          # requirements.txt is always substantive
+          echo "substantive_changes=true" >> $GITHUB_OUTPUT
+          echo "✅ Substantive changes detected (including requirements.txt)"
+        elif echo "$CHANGED_FILES" | grep -v -E '\.(md)$|^LICENSE$|^\\.gitignore$|\\.txt$' | grep -q .; then
+          # Has files other than markdown, LICENSE, .gitignore, .txt
+          echo "substantive_changes=true" >> $GITHUB_OUTPUT
+          echo "✅ Substantive changes detected (code, tests, or config files)"
+        else
+          # Only non-substantive files changed
+          echo "substantive_changes=false" >> $GITHUB_OUTPUT
+          echo "romanceio_changed=false" >> $GITHUB_OUTPUT
+          echo "romanceio_fields_changed=false" >> $GITHUB_OUTPUT
+          echo "core_changed=false" >> $GITHUB_OUTPUT
+          echo "⏭️  Only documentation files changed - skipping pipeline"
+          exit 0
+        fi
+
+        # Check if core/shared files changed (anything except plugin folders and certain root files)
+        # Run all tests if:
+        # - Previous run failed (FORCE_ALL_TESTS=true)
+        # - Scheduled run or first commit (CHANGED_FILES="all")
+        # - Changes are in core directories that affect all plugins
+        if [ "$FORCE_ALL_TESTS" == "true" ] || [ "$CHANGED_FILES" == "all" ] || echo "$CHANGED_FILES" | grep -v -E "^(romanceio/|romanceio_fields/|LICENSE|README\.md)$|^(romanceio/|romanceio_fields/)" | grep -q .; then
+          echo "core_changed=true" >> $GITHUB_OUTPUT
+          if [ "$FORCE_ALL_TESTS" == "true" ]; then
+            echo "Running all tests due to previous failure"
+          else
+            echo "Core files changed - will run all tests"
+          fi
+          echo "romanceio_changed=true" >> $GITHUB_OUTPUT
+          echo "romanceio_fields_changed=true" >> $GITHUB_OUTPUT
+        else
+          echo "core_changed=false" >> $GITHUB_OUTPUT
+
+          # Check if romanceio-specific files changed
+          if echo "$CHANGED_FILES" | grep -qE "^romanceio/"; then
+            echo "romanceio_changed=true" >> $GITHUB_OUTPUT
+            echo "Romanceio files changed - will run romanceio tests"
+          else
+            echo "romanceio_changed=false" >> $GITHUB_OUTPUT
+            echo "No romanceio changes detected"
+          fi
+
+          # Check if romanceio_fields-specific files changed
+          if echo "$CHANGED_FILES" | grep -qE "^romanceio_fields/"; then
+            echo "romanceio_fields_changed=true" >> $GITHUB_OUTPUT
+            echo "Romanceio_fields files changed - will run romanceio_fields tests"
+          else
+            echo "romanceio_fields_changed=false" >> $GITHUB_OUTPUT
+            echo "No romanceio_fields changes detected"
+          fi
+        fi
+
+    - name: Set up Python 3.11.9
+      if: steps.changes.outputs.substantive_changes == 'true'
+      uses: actions/setup-python@v6
+      with:
+        python-version: "3.11.9"
+        cache: 'pip'
+
+    - name: Install dependencies
+      if: steps.changes.outputs.substantive_changes == 'true'
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+
+    - name: Test tag slug conversion (common)
+      if: steps.changes.outputs.substantive_changes == 'true'
+      run: |
+        python common/test_tag_slug_conversion.py
+
+    - name: Install Calibre
+      if: steps.changes.outputs.substantive_changes == 'true'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y calibre
+        calibre-debug --version
+
+        # To test against a specific Calibre version instead of the system default:
+        # sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0 libxcb-shape0 libopengl0
+        # sudo mkdir -p /opt/calibre
+        # wget -nv -O- https://download.calibre-ebook.com/7.21.0/calibre-7.21.0-x86_64.txz | sudo tar xJ -C /opt/calibre
+        # sudo ln -sf /opt/calibre/calibre-debug /usr/bin/calibre-debug
+        # sudo ln -sf /opt/calibre/calibre-customize /usr/bin/calibre-customize
+        # calibre-debug --version
+
+    - name: Format check with Black
+      if: steps.changes.outputs.substantive_changes == 'true'
+      run: |
+        black --check --line-length=120 . || true
+
+    - name: Lint with Pylint
+      if: steps.changes.outputs.substantive_changes == 'true'
+      run: |
+        pylint --rcfile=.pylintrc romanceio/ romanceio_fields/ common/ || true
+
+    - name: Type check with Mypy
+      if: steps.changes.outputs.substantive_changes == 'true'
+      run: |
+        mypy --config-file=mypy.ini || true
+
+    - name: Build plugins
+      if: steps.changes.outputs.substantive_changes == 'true'
+      run: |
+        cd romanceio
+        bash build.sh
+        echo "Checking romanceio dependencies..."
+        ls -la seleniumbase 2>/dev/null || echo "WARNING: seleniumbase not found in romanceio/"
+        cd ../romanceio_fields
+        bash build.sh
+        echo "Checking romanceio_fields dependencies..."
+        ls -la seleniumbase 2>/dev/null || echo "WARNING: seleniumbase not found in romanceio_fields/"
+        cd ..
+
+    - name: Test romanceio plugin tag mapping
+      if: steps.changes.outputs.romanceio_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio && calibre-debug -e test_tag_mapping.py
+
+    - name: Test romanceio plugin tag slug conversion
+      if: steps.changes.outputs.romanceio_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio && calibre-debug -e test_tag_slug_conversion.py
+
+    - name: Test romanceio plugin JSON parsing
+      if: steps.changes.outputs.romanceio_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio && calibre-debug -e test_json_parsing.py
+
+    - name: Test romanceio plugin JSON search matching
+      if: steps.changes.outputs.romanceio_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio && calibre-debug -e test_json_search_matching.py
+
+    - name: Test romanceio plugin HTML search parsing
+      if: steps.changes.outputs.romanceio_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio && calibre-debug -e test_html_search_parsing.py
+
+    - name: Test that romanceio JSON vs HTML metadata parsing matches
+      if: steps.changes.outputs.romanceio_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio && calibre-debug -e test_json_html_parse_matches.py
+
+    - name: Test romanceio plugin cover download
+      if: steps.changes.outputs.romanceio_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio && calibre-debug -e test_cover_download.py
+
+    - name: Test romanceio_fields plugin tag mapping
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio_fields && calibre-debug -e test_tag_mapping.py
+
+    - name: Test romanceio_fields plugin tag slug conversion
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio_fields && calibre-debug -e test_tag_slug_conversion.py
+
+    - name: Test romanceio_fields plugin JSON parsing
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio_fields && calibre-debug -e test_json_parsing.py
+
+    - name: Test romanceio_fields plugin JSON search matching
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio_fields && calibre-debug -e test_json_search_matching.py
+
+    - name: Test romanceio_fields plugin HTML field parsing
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio_fields && calibre-debug -e test_html_fields_parsing.py
+
+    - name: Test that romanceio_fields JSON vs HTML metadata parsing matches
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio_fields && calibre-debug -e test_json_html_parse_matches.py
+
+    - name: Test romanceio plugin initialization
+      if: steps.changes.outputs.romanceio_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio && calibre-debug -e __init__.py
+
+    - name: Test romanceio_fields plugin initialization
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio_fields && calibre-debug -e __init__.py
+
+    - name: Test romanceio_fields plugin JSON API download
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio_fields && calibre-debug -e test_json_download.py
+
+    - name: Test romanceio_fields plugin HTML field download
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio_fields && xvfb-run -a calibre-debug -e test_html_fields_download.py

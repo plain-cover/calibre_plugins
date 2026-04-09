@@ -1,0 +1,34 @@
+[MASTER]
+# Ignore vendored dependencies and generated files
+ignore=calibre,.romanceio,.venv,downloaded_files,fasteners,seleniumbase,selenium,requests,urllib3,certifi,websocket,websockets,colorama,cssselect,fake_useragent,mycdp,sbvirtualdisplay,Xlib
+# Ignore test files that are copied from common/ into plugin directories
+ignore-patterns=test_json_search_matching\.py,update_static_test_data\.py,common_.*\.py
+ignored-modules=qt,qt.core,PyQt5,PyQt5.Qt,calibre,lxml,six,Queue,urllib
+extension-pkg-allow-list=qt,PyQt5
+
+[MESSAGES CONTROL]
+# Disable specific warnings
+disable=missing-function-docstring,
+        missing-module-docstring,
+        missing-class-docstring,
+        import-outside-toplevel,
+        wrong-import-position,
+        too-many-arguments,
+        too-many-positional-arguments,
+        too-many-instance-attributes,
+        too-many-locals,
+        too-many-statements,
+        too-many-return-statements,
+        too-many-branches,
+        too-many-nested-blocks,
+        too-few-public-methods
+
+[FORMAT]
+max-line-length=120
+
+[BASIC]
+# Calibre injects _ and I as builtins at runtime
+additional-builtins=_
+
+[SIMILARITIES]
+min-similarity-lines=10

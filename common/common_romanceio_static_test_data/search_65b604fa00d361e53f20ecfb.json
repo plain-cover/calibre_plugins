@@ -1,0 +1,2855 @@
+{
+  "success": true,
+  "books": [
+    {
+      "_id": "65b604fa00d361e53f20ecfb",
+      "info": {
+        "numRating": 810,
+        "avgRating": 4.317259259259263,
+        "title": "Funny Story"
+      },
+      "authors": [
+        {
+          "_id": "5e82ee17be0aaecf553e7c2f",
+          "name": "Emily Henry",
+          "url": "/authors/5e82ee17be0aaecf553e7c2f/emily-henry"
+        }
+      ],
+      "series": [],
+      "url": "/books/65b604fa00d361e53f20ecfb/funny-story-emily-henry",
+      "score": 2.5,
+      "tags": [
+        "funny",
+        "story",
+        "emily",
+        "henry"
+      ],
+      "xor": 0
+    },
+    {
+      "_id": "6270f0b6e98d4489081cd386",
+      "info": {
+        "avgRating": 4.291396226415092,
+        "title": "Book Lovers",
+        "numRating": 1060
+      },
+      "url": "/books/6270f0b6e98d4489081cd386/book-lovers-emily-henry",
+      "authors": [
+        {
+          "_id": "5e82ee17be0aaecf553e7c2f",
+          "name": "Emily Henry",
+          "url": "/authors/5e82ee17be0aaecf553e7c2f/emily-henry"
+        }
+      ],
+      "series": [],
+      "score": 1.25,
+      "tags": [
+        "book",
+        "lovers",
+        "emily",
+        "henry"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "5e82ee17be0aaecf553e7c1e",
+      "url": "/books/5e82ee17be0aaecf553e7c1e/beach-read-emily-henry",
+      "series": [],
+      "authors": [
+        {
+          "_id": "5e82ee17be0aaecf553e7c2f",
+          "name": "Emily Henry",
+          "url": "/authors/5e82ee17be0aaecf553e7c2f/emily-henry"
+        }
+      ],
+      "info": {
+        "avgRating": 4.083589743589742,
+        "numRating": 975,
+        "title": "Beach Read"
+      },
+      "score": 1.25,
+      "tags": [
+        "beach",
+        "read",
+        "emily",
+        "henry"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "608e6bea84e99a0df94383ef",
+      "url": "/books/608e6bea84e99a0df94383ef/people-we-meet-on-vacation-emily-henry",
+      "info": {
+        "numRating": 824,
+        "avgRating": 3.89126213592233,
+        "title": "People We Meet on Vacation"
+      },
+      "series": [],
+      "authors": [
+        {
+          "_id": "5e82ee17be0aaecf553e7c2f",
+          "name": "Emily Henry",
+          "url": "/authors/5e82ee17be0aaecf553e7c2f/emily-henry"
+        }
+      ],
+      "score": 1.2,
+      "tags": [
+        "people",
+        "we",
+        "meet",
+        "on",
+        "vacation",
+        "emily",
+        "henry"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "6442958c0e7dec1028fad78c",
+      "info": {
+        "numRating": 637,
+        "avgRating": 4.029717425431709,
+        "title": "Happy Place"
+      },
+      "authors": [
+        {
+          "_id": "5e82ee17be0aaecf553e7c2f",
+          "name": "Emily Henry",
+          "url": "/authors/5e82ee17be0aaecf553e7c2f/emily-henry"
+        }
+      ],
+      "series": [],
+      "url": "/books/6442958c0e7dec1028fad78c/happy-place-emily-henry",
+      "score": 1.25,
+      "tags": [
+        "happy",
+        "place",
+        "emily",
+        "henry"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "54553c4d8c7d2382c5297609",
+      "info": {
+        "title": "It's Kind of a Funny Story",
+        "avgRating": 4.034074074074075,
+        "numRating": 135
+      },
+      "url": "/books/54553c4d8c7d2382c5297609/its-kind-of-a-funny-story-ned-vizzini",
+      "series": [],
+      "authors": [
+        {
+          "_id": "54553c4d8c7d2382c529760a",
+          "name": "Ned Vizzini",
+          "url": "/authors/54553c4d8c7d2382c529760a/ned-vizzini"
+        }
+      ],
+      "score": 1.2,
+      "tags": [
+        "it's",
+        "kind",
+        "of",
+        "a",
+        "funny",
+        "story",
+        "ned",
+        "vizzini"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "6443f6e40e7dec1028fbc422",
+      "info": {
+        "numRating": 57,
+        "avgRating": 3.7794736842105263,
+        "title": "A Million Junes"
+      },
+      "authors": [
+        {
+          "_id": "5e82ee17be0aaecf553e7c2f",
+          "name": "Emily Henry",
+          "url": "/authors/5e82ee17be0aaecf553e7c2f/emily-henry"
+        }
+      ],
+      "series": [],
+      "url": "/books/6443f6e40e7dec1028fbc422/a-million-junes-emily-henry",
+      "score": 1.25,
+      "tags": [
+        "a",
+        "million",
+        "junes",
+        "emily",
+        "henry"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "6443f6da0e7dec1028fbc40c",
+      "info": {
+        "numRating": 46,
+        "avgRating": 3.6078260869565217,
+        "title": "The Love That Split the World"
+      },
+      "authors": [
+        {
+          "_id": "5e82ee17be0aaecf553e7c2f",
+          "name": "Emily Henry",
+          "url": "/authors/5e82ee17be0aaecf553e7c2f/emily-henry"
+        }
+      ],
+      "series": [],
+      "url": "/books/6443f6da0e7dec1028fbc40c/the-love-that-split-the-world-emily-henry",
+      "score": 1.2,
+      "tags": [
+        "the",
+        "love",
+        "that",
+        "split",
+        "the",
+        "world",
+        "emily",
+        "henry"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "6453712ad3c73ab2c083b35e",
+      "info": {
+        "numRating": 43,
+        "avgRating": 4.556976744186046,
+        "title": "Layover"
+      },
+      "authors": [
+        {
+          "_id": "5e82ee17be0aaecf553e7c2f",
+          "name": "Emily Henry",
+          "url": "/authors/5e82ee17be0aaecf553e7c2f/emily-henry"
+        }
+      ],
+      "series": [],
+      "url": "/books/6453712ad3c73ab2c083b35e/layover-emily-henry",
+      "score": 1.3333333333333333,
+      "tags": [
+        "layover",
+        "emily",
+        "henry"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "67815afba348f325c1ae0370",
+      "info": {
+        "numRating": 16,
+        "avgRating": 3.88,
+        "title": "That Silent Night: A Lady Emily Christmas Story"
+      },
+      "authors": [
+        {
+          "_id": "54553d728c7d2382c5297664",
+          "name": "Tasha Alexander",
+          "url": "/authors/54553d728c7d2382c5297664/tasha-alexander"
+        }
+      ],
+      "series": [
+        {
+          "title": "Lady Emily Ashton Mysteries",
+          "no_display": "10.5",
+          "no": 10.5,
+          "series": "6478c996260025b77281644a"
+        }
+      ],
+      "url": "/books/67815afba348f325c1ae0370/that-silent-night-a-lady-emily-christmas-story-tasha-alexand",
+      "score": 1.4166666666666665,
+      "tags": [
+        "that",
+        "silent",
+        "night",
+        "a",
+        "lady",
+        "emily",
+        "christmas",
+        "story",
+        "tasha",
+        "alexander"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "64398dc2752ace71f698d2b1",
+      "info": {
+        "numRating": 15,
+        "avgRating": 4.67,
+        "title": "Dissent: A Charity Romance Anthology"
+      },
+      "authors": [
+        {
+          "_id": "54555a8287eac324117fa555",
+          "name": "Brighton Walsh",
+          "url": "/authors/54555a8287eac324117fa555/brighton-walsh"
+        },
+        {
+          "_id": "57f0a2cade896e892492ffef",
+          "name": "Kennedy Fox",
+          "url": "/authors/57f0a2cade896e892492ffef/kennedy-fox"
+        },
+        {
+          "_id": "58a3fcf00d3299c6e04cc573",
+          "name": "Nicole French",
+          "url": "/authors/58a3fcf00d3299c6e04cc573/nicole-french"
+        },
+        {
+          "_id": "5455cb4c87eac324117fd229",
+          "name": "Alexis Anne",
+          "url": "/authors/5455cb4c87eac324117fd229/alexis-anne"
+        },
+        {
+          "_id": "5457aa2887eac3dcc98335c8",
+          "name": "Aidy Award",
+          "url": "/authors/5457aa2887eac3dcc98335c8/aidy-award"
+        },
+        {
+          "_id": "62cd1c9608b4d931143faac3",
+          "name": "A.M. Roark",
+          "url": "/authors/62cd1c9608b4d931143faac3/am-roark"
+        },
+        {
+          "_id": "6143443508b4d93114327757",
+          "name": "A.R. Hall",
+          "url": "/authors/6143443508b4d93114327757/ar-hall"
+        },
+        {
+          "_id": "5b03b29b01dbc864fb88b788",
+          "name": "Aarti V. Raman",
+          "url": "/authors/5b03b29b01dbc864fb88b788/aarti-v-raman"
+        },
+        {
+          "_id": "54c4c0976359b5ebb4889d49",
+          "name": "Amanda Richardson",
+          "url": "/authors/54c4c0976359b5ebb4889d49/amanda-richardson"
+        },
+        {
+          "_id": "5744389ac62092c0440853c0",
+          "name": "Amelia Wilde",
+          "url": "/authors/5744389ac62092c0440853c0/amelia-wilde"
+        },
+        {
+          "_id": "582301617bd258a27e8302e3",
+          "name": "Amie Knight",
+          "url": "/authors/582301617bd258a27e8302e3/amie-knight"
+        },
+        {
+          "_id": "54c36bfb6359b5ebb4888beb",
+          "name": "Amy Quinton",
+          "url": "/authors/54c36bfb6359b5ebb4888beb/amy-quinton"
+        },
+        {
+          "_id": "5e690704be0aaecf552d12a6",
+          "name": "Anna Michael",
+          "url": "/authors/5e690704be0aaecf552d12a6/anna-michael"
+        },
+        {
+          "_id": "6017b54508b4d931143d6e43",
+          "name": "Aria Wyatt",
+          "url": "/authors/6017b54508b4d931143d6e43/aria-wyatt"
+        },
+        {
+          "_id": "5e142caa01dbc864fba97e3e",
+          "name": "Ashley Lane",
+          "url": "/authors/5e142caa01dbc864fba97e3e/ashley-lane"
+        },
+        {
+          "_id": "5455cd2f87eac323ffb2e9c8",
+          "name": "Autumn Jones Lake",
+          "url": "/authors/5455cd2f87eac323ffb2e9c8/autumn-jones-lake"
+        },
+        {
+          "_id": "5cf214bf01dbc864fb9f47b3",
+          "name": "B. Celeste",
+          "url": "/authors/5cf214bf01dbc864fb9f47b3/b-celeste"
+        },
+        {
+          "_id": "5b80f19701dbc864fb8f0fe3",
+          "name": "B.L. Olson",
+          "url": "/authors/5b80f19701dbc864fb8f0fe3/bl-olson"
+        },
+        {
+          "_id": "5455b67987eac324117fc79e",
+          "name": "Blair Babylon",
+          "url": "/authors/5455b67987eac324117fc79e/blair-babylon"
+        },
+        {
+          "_id": "54566af287eac33e571079a1",
+          "name": "Brenda St. John Brown",
+          "url": "/authors/54566af287eac33e571079a1/brenda-st-john-brown"
+        },
+        {
+          "_id": "5455363c8c7d2382e78133cb",
+          "name": "Brenna Aubrey",
+          "url": "/authors/5455363c8c7d2382e78133cb/brenna-aubrey"
+        },
+        {
+          "_id": "60487d7008b4d931144d14b8",
+          "name": "Bri Blackwood",
+          "url": "/authors/60487d7008b4d931144d14b8/bri-blackwood"
+        },
+        {
+          "_id": "54556abb87eac324117faa21",
+          "name": "Cara Dee",
+          "url": "/authors/54556abb87eac324117faa21/cara-dee"
+        },
+        {
+          "_id": "545534198c7d2382e7813333",
+          "name": "Carmen Jenner",
+          "url": "/authors/545534198c7d2382e7813333/carmen-jenner"
+        },
+        {
+          "_id": "5832b7501b1bdc0178e954f4",
+          "name": "C.L. Matthews",
+          "url": "/authors/5832b7501b1bdc0178e954f4/cl-matthews"
+        },
+        {
+          "_id": "553eb2ac5b270e0a4cbdacc4",
+          "name": "Cassie Graham",
+          "url": "/authors/553eb2ac5b270e0a4cbdacc4/cassie-graham"
+        },
+        {
+          "_id": "54553dae8c7d2382e0414455",
+          "name": "Celia Kyle",
+          "url": "/authors/54553dae8c7d2382e0414455/celia-kyle"
+        },
+        {
+          "_id": "5455e18b87eac3369a91586b",
+          "name": "Charity Ferrell",
+          "url": "/authors/5455e18b87eac3369a91586b/charity-ferrell"
+        },
+        {
+          "_id": "5fc4a6f708b4d931146bc5c4",
+          "name": "Claire Wilder",
+          "url": "/authors/5fc4a6f708b4d931146bc5c4/claire-wilder"
+        },
+        {
+          "_id": "5455f9c187eac3369a916380",
+          "name": "Claudia Y. Burgoa",
+          "url": "/authors/5455f9c187eac3369a916380/claudia-y-burgoa"
+        },
+        {
+          "_id": "5693e20f63515e3b7379c008",
+          "name": "Dakota Willink",
+          "url": "/authors/5693e20f63515e3b7379c008/dakota-willink"
+        },
+        {
+          "_id": "5676c8e863515e3b7379328c",
+          "name": "Dani René",
+          "url": "/authors/5676c8e863515e3b7379328c/dani-ren"
+        },
+        {
+          "_id": "5f42146008b4d93114f07276",
+          "name": "Daniela Romero",
+          "url": "/authors/5f42146008b4d93114f07276/daniela-romero"
+        },
+        {
+          "_id": "584a56ff1b1bdc0178f99e01",
+          "name": "Dee Garcia",
+          "url": "/authors/584a56ff1b1bdc0178f99e01/dee-garcia"
+        },
+        {
+          "_id": "5bab21c201dbc864fb9145c8",
+          "name": "Dee Lagasse",
+          "url": "/authors/5bab21c201dbc864fb9145c8/dee-lagasse"
+        },
+        {
+          "_id": "5cdbd72d01dbc864fb9e9092",
+          "name": "Deidre-Ann Anderson",
+          "url": "/authors/5cdbd72d01dbc864fb9e9092/deidreann-anderson"
+        },
+        {
+          "_id": "545533058c7d2383163d91ee",
+          "name": "Donna Grant",
+          "url": "/authors/545533058c7d2383163d91ee/donna-grant"
+        },
+        {
+          "_id": "627a0d7a08b4d93114a4bb73",
+          "name": "Echo Grayce",
+          "url": "/authors/627a0d7a08b4d93114a4bb73/echo-grayce"
+        },
+        {
+          "_id": "5455513d8c7d2382c5297dad",
+          "name": "Elena Aitken",
+          "url": "/authors/5455513d8c7d2382c5297dad/elena-aitken"
+        },
+        {
+          "_id": "5ba337a301dbc864fb90d8bd",
+          "name": "Elle Thorpe",
+          "url": "/authors/5ba337a301dbc864fb90d8bd/elle-thorpe"
+        },
+        {
+          "_id": "5455b16e87eac323ffb2dc60",
+          "name": "Ellis Leigh",
+          "url": "/authors/5455b16e87eac323ffb2dc60/ellis-leigh"
+        },
+        {
+          "_id": "5455d17f87eac3369a915114",
+          "name": "Emily Colin",
+          "url": "/authors/5455d17f87eac3369a915114/emily-colin"
+        },
+        {
+          "_id": "5455b71b87eac324117fc7fe",
+          "name": "Emily Goodwin",
+          "url": "/authors/5455b71b87eac324117fc7fe/emily-goodwin"
+        },
+        {
+          "_id": "57c6b069c19e77f1ea705f3d",
+          "name": "Erica Alexander",
+          "url": "/authors/57c6b069c19e77f1ea705f3d/erica-alexander"
+        },
+        {
+          "_id": "61d550fe08b4d93114c1e04b",
+          "name": "Erin Parisien",
+          "url": "/authors/61d550fe08b4d93114c1e04b/erin-parisien"
+        },
+        {
+          "_id": "55d475a735a5fb65f8875365",
+          "name": "Eva Charles",
+          "url": "/authors/55d475a735a5fb65f8875365/eva-charles"
+        },
+        {
+          "_id": "5950a7883ffdba61471a9bbd",
+          "name": "Eva Moore",
+          "url": "/authors/5950a7883ffdba61471a9bbd/eva-moore"
+        },
+        {
+          "_id": "5455ea7987eac324117fe0ed",
+          "name": "Evelyn Adams",
+          "url": "/authors/5455ea7987eac324117fe0ed/evelyn-adams"
+        },
+        {
+          "_id": "5455e02287eac3369a9157ca",
+          "name": "Glenna Maynard",
+          "url": "/authors/5455e02287eac3369a9157ca/glenna-maynard"
+        },
+        {
+          "_id": "5b80f1d001dbc864fb8f0fff",
+          "name": "H.D. Carlton",
+          "url": "/authors/5b80f1d001dbc864fb8f0fff/h-d-carlton"
+        },
+        {
+          "_id": "5874b8211b1bdc01781364b8",
+          "name": "Haley Jenner",
+          "url": "/authors/5874b8211b1bdc01781364b8/haley-jenner"
+        },
+        {
+          "_id": "5455284c8c7d2382e7813049",
+          "name": "Heidi McLaughlin",
+          "url": "/authors/5455284c8c7d2382e7813049/heidi-mclaughlin"
+        },
+        {
+          "_id": "5612aff7bfc6b5c0fa93f55f",
+          "name": "Holly Mortimer",
+          "url": "/authors/5612aff7bfc6b5c0fa93f55f/holly-mortimer"
+        },
+        {
+          "_id": "5dce4dcb01dbc864fba635ea",
+          "name": "Hope Jones",
+          "url": "/authors/5dce4dcb01dbc864fba635ea/hope-jones"
+        },
+        {
+          "_id": "598974df3ffdba61471df7dd",
+          "name": "Ines Johnson",
+          "url": "/authors/598974df3ffdba61471df7dd/ines-johnson"
+        },
+        {
+          "_id": "57b58f52c19e77f1ea6fd26a",
+          "name": "Iris Morland",
+          "url": "/authors/57b58f52c19e77f1ea6fd26a/iris-morland"
+        },
+        {
+          "_id": "57447535c62092c04408641e",
+          "name": "J. Saman",
+          "url": "/authors/57447535c62092c04408641e/j-saman"
+        },
+        {
+          "_id": "5455293b8c7d2382e7813088",
+          "name": "J. Sterling",
+          "url": "/authors/5455293b8c7d2382e7813088/j-sterling"
+        },
+        {
+          "_id": "553e8c915b270e0a4cbd99b1",
+          "name": "J.H. Croix",
+          "url": "/authors/553e8c915b270e0a4cbd99b1/jh-croix"
+        },
+        {
+          "_id": "5455a95987eac324117fc0f2",
+          "name": "J.L. Beck",
+          "url": "/authors/5455a95987eac324117fc0f2/jl-beck"
+        },
+        {
+          "_id": "5e71d50cbe0aaecf55b1cc6d",
+          "name": "C. Hallman",
+          "url": "/authors/5e71d50cbe0aaecf55b1cc6d/c-hallman"
+        },
+        {
+          "_id": "5455595487eac324117fa4f2",
+          "name": "J.M. Walker",
+          "url": "/authors/5455595487eac324117fa4f2/jm-walker"
+        },
+        {
+          "_id": "56caf241c62092c0440614bd",
+          "name": "Jane Blythe",
+          "url": "/authors/56caf241c62092c0440614bd/jane-blythe"
+        },
+        {
+          "_id": "59ec5c033ffdba614722f22c",
+          "name": "Janet Berry",
+          "url": "/authors/59ec5c033ffdba614722f22c/janet-berry"
+        },
+        {
+          "_id": "5c8b731701dbc864fb9bba75",
+          "name": "Jasmin Miller",
+          "url": "/authors/5c8b731701dbc864fb9bba75/jasmin-miller"
+        },
+        {
+          "_id": "54559e5987eac324117fbb6e",
+          "name": "J.D. Hollyfield",
+          "url": "/authors/54559e5987eac324117fbb6e/jd-hollyfield"
+        },
+        {
+          "_id": "598954ae3ffdba61471df4f1",
+          "name": "Jen Stevens",
+          "url": "/authors/598954ae3ffdba61471df4f1/jen-stevens"
+        },
+        {
+          "_id": "545552ca87eac324117fa315",
+          "name": "Jenika Snow",
+          "url": "/authors/545552ca87eac324117fa315/jenika-snow"
+        },
+        {
+          "_id": "5e5617c6be0aaecf559a4b27",
+          "name": "Jenna Hartley",
+          "url": "/authors/5e5617c6be0aaecf559a4b27/jenna-hartley"
+        },
+        {
+          "_id": "64398dc408b4d93114908df0",
+          "name": "Jenna Lynn",
+          "url": "/authors/64398dc408b4d93114908df0/jenna-lynn"
+        },
+        {
+          "_id": "55546ffc9eef3b3f1d51f9b9",
+          "name": "Jennifer Sucevic",
+          "url": "/authors/55546ffc9eef3b3f1d51f9b9/jennifer-sucevic"
+        },
+        {
+          "_id": "5456b58387eac33e5c6820eb",
+          "name": "Jessica Florence",
+          "url": "/authors/5456b58387eac33e5c6820eb/jessica-florence"
+        },
+        {
+          "_id": "582963397bd258a27e86cf21",
+          "name": "Jillian Liota",
+          "url": "/authors/582963397bd258a27e86cf21/jillian-liota"
+        },
+        {
+          "_id": "5455545b8c7d2382c5297ec4",
+          "name": "Julia Kent",
+          "url": "/authors/5455545b8c7d2382c5297ec4/julia-kent"
+        },
+        {
+          "_id": "5455629187eac323ffb2bf25",
+          "name": "Kait Nolan",
+          "url": "/authors/5455629187eac323ffb2bf25/kait-nolan"
+        },
+        {
+          "_id": "5455509587eac324117fa25d",
+          "name": "Kat Latham",
+          "url": "/authors/5455509587eac324117fa25d/kat-latham"
+        },
+        {
+          "_id": "5a740efa4ee506aae8b03bde",
+          "name": "Kat Savage",
+          "url": "/authors/5a740efa4ee506aae8b03bde/kat-savage"
+        },
+        {
+          "_id": "5456862d87eac33e61c2f78e",
+          "name": "Kate Canterbary",
+          "url": "/authors/5456862d87eac33e61c2f78e/kate-canterbary"
+        },
+        {
+          "_id": "610d237308b4d93114e8e3d9",
+          "name": "Kate King",
+          "url": "/authors/610d237308b4d93114e8e3d9/kate-king"
+        },
+        {
+          "_id": "60c7009608b4d93114107c40",
+          "name": "Jessa Wilder",
+          "url": "/authors/60c7009608b4d93114107c40/jessa-wilder"
+        },
+        {
+          "_id": "54555ae087eac324117fa55e",
+          "name": "Kate Meader",
+          "url": "/authors/54555ae087eac324117fa55e/kate-meader"
+        },
+        {
+          "_id": "5455fa6787eac3369a9163c7",
+          "name": "Kathy Coopmans",
+          "url": "/authors/5455fa6787eac3369a9163c7/kathy-coopmans"
+        },
+        {
+          "_id": "605c7d8908b4d9311424ff66",
+          "name": "K.B. Cinder",
+          "url": "/authors/605c7d8908b4d9311424ff66/kb-cinder"
+        },
+        {
+          "_id": "596c566f3ffdba61471c4b72",
+          "name": "K.D. Proctor",
+          "url": "/authors/596c566f3ffdba61471c4b72/kd-proctor"
+        },
+        {
+          "_id": "5455e0a687eac323ffb2f2ad",
+          "name": "Kelly Maher",
+          "url": "/authors/5455e0a687eac323ffb2f2ad/kelly-maher"
+        },
+        {
+          "_id": "555511fd9eef3b3f1d5227b4",
+          "name": "Kim Loraine",
+          "url": "/authors/555511fd9eef3b3f1d5227b4/kim-loraine"
+        },
+        {
+          "_id": "545536fd8c7d2382e041429b",
+          "name": "Kym Grosso",
+          "url": "/authors/545536fd8c7d2382e041429b/kym-grosso"
+        },
+        {
+          "_id": "5b14d5a901dbc864fb898926",
+          "name": "Lainey Davis",
+          "url": "/authors/5b14d5a901dbc864fb898926/lainey-davis"
+        },
+        {
+          "_id": "545542158c7d2382e781370e",
+          "name": "Laramie Briscoe",
+          "url": "/authors/545542158c7d2382e781370e/laramie-briscoe"
+        },
+        {
+          "_id": "54558f9087eac323ffb2cc2d",
+          "name": "Laura Lee",
+          "url": "/authors/54558f9087eac323ffb2cc2d/laura-lee"
+        },
+        {
+          "_id": "545541898c7d2382e0414586",
+          "name": "Lauren Stewart",
+          "url": "/authors/545541898c7d2382e0414586/lauren-stewart"
+        },
+        {
+          "_id": "5bf2625101dbc864fb94ac82",
+          "name": "Lea Coll",
+          "url": "/authors/5bf2625101dbc864fb94ac82/lea-coll"
+        },
+        {
+          "_id": "5589134c9eef3b3f1d52e76a",
+          "name": "Len Webster",
+          "url": "/authors/5589134c9eef3b3f1d52e76a/len-webster"
+        },
+        {
+          "_id": "54e1af2e6359b5ebb48a182c",
+          "name": "Lili Valente",
+          "url": "/authors/54e1af2e6359b5ebb48a182c/lili-valente"
+        },
+        {
+          "_id": "54cb43c36359b5ebb488f8cd",
+          "name": "Linnea May",
+          "url": "/authors/54cb43c36359b5ebb488f8cd/linnea-may"
+        },
+        {
+          "_id": "580f2729de896e892494a1f8",
+          "name": "Lisa Shelby",
+          "url": "/authors/580f2729de896e892494a1f8/lisa-shelby"
+        },
+        {
+          "_id": "5e2e8d2f01dbc864fbaab1b8",
+          "name": "Lissanne Jones",
+          "url": "/authors/5e2e8d2f01dbc864fbaab1b8/lissanne-jones"
+        },
+        {
+          "_id": "583bea161b1bdc0178ef416b",
+          "name": "Lucy Lennox",
+          "url": "/authors/583bea161b1bdc0178ef416b/lucy-lennox"
+        },
+        {
+          "_id": "588ee6fe1b1bdc01781ed2bd",
+          "name": "Mary Ann Marlowe",
+          "url": "/authors/588ee6fe1b1bdc01781ed2bd/mary-ann-marlowe"
+        },
+        {
+          "_id": "58da0fb60d3299c6e064529d",
+          "name": "Max Henry",
+          "url": "/authors/58da0fb60d3299c6e064529d/max-henry"
+        },
+        {
+          "_id": "566ffcaa08e937813195ac6c",
+          "name": "Megan Ryder",
+          "url": "/authors/566ffcaa08e937813195ac6c/megan-ryder"
+        },
+        {
+          "_id": "5455531687eac324117fa334",
+          "name": "Melissa Andrea",
+          "url": "/authors/5455531687eac324117fa334/melissa-andrea"
+        },
+        {
+          "_id": "58184152c6841c86c2cd978b",
+          "name": "Melissa Marino",
+          "url": "/authors/58184152c6841c86c2cd978b/melissa-marino"
+        },
+        {
+          "_id": "5d11ba0801dbc864fba04671",
+          "name": "Melonie Johnson",
+          "url": "/authors/5d11ba0801dbc864fba04671/melonie-johnson"
+        },
+        {
+          "_id": "5d072cb901dbc864fb9fdf0b",
+          "name": "Mia Harlan",
+          "url": "/authors/5d072cb901dbc864fb9fdf0b/mia-harlan"
+        },
+        {
+          "_id": "56fa5bb0c62092c044072561",
+          "name": "Mignon Mykel",
+          "url": "/authors/56fa5bb0c62092c044072561/mignon-mykel"
+        },
+        {
+          "_id": "5b0673b101dbc864fb88d9e0",
+          "name": "Molly O'Hare",
+          "url": "/authors/5b0673b101dbc864fb88d9e0/molly-ohare"
+        },
+        {
+          "_id": "54579e9e87eac3e56719f446",
+          "name": "Monica Corwin",
+          "url": "/authors/54579e9e87eac3e56719f446/monica-corwin"
+        },
+        {
+          "_id": "5455afa487eac323ffb2db7d",
+          "name": "Morgan Jane Mitchell",
+          "url": "/authors/5455afa487eac323ffb2db7d/morgan-jane-mitchell"
+        },
+        {
+          "_id": "631da11308b4d931146d6b53",
+          "name": "N.A. Moore",
+          "url": "/authors/631da11308b4d931146d6b53/na-moore"
+        },
+        {
+          "_id": "5c80c21e01dbc864fb9b44f4",
+          "name": "Natasha Raulerson",
+          "url": "/authors/5c80c21e01dbc864fb9b44f4/natasha-raulerson"
+        },
+        {
+          "_id": "5455ea8687eac324117fe0f5",
+          "name": "Nicole Blanchard",
+          "url": "/authors/5455ea8687eac324117fe0f5/nicole-blanchard"
+        },
+        {
+          "_id": "545544c48c7d2382e78137e1",
+          "name": "Nina Levine",
+          "url": "/authors/545544c48c7d2382e78137e1/nina-levine"
+        },
+        {
+          "_id": "5455ccb987eac324117fd2e1",
+          "name": "Pamela DuMond",
+          "url": "/authors/5455ccb987eac324117fd2e1/pamela-dumond"
+        },
+        {
+          "_id": "5455c10287eac323ffb2e3c9",
+          "name": "Patricia D. Eddy",
+          "url": "/authors/5455c10287eac323ffb2e3c9/patricia-d-eddy"
+        },
+        {
+          "_id": "5d9d7e7401dbc864fba46273",
+          "name": "Persephone Autumn",
+          "url": "/authors/5d9d7e7401dbc864fba46273/persephone-autumn"
+        },
+        {
+          "_id": "5455a63787eac323ffb2d6d9",
+          "name": "R.L. Kenderson",
+          "url": "/authors/5455a63787eac323ffb2d6d9/rl-kenderson"
+        },
+        {
+          "_id": "545558e887eac324117fa4ce",
+          "name": "Rachel Brookes",
+          "url": "/authors/545558e887eac324117fa4ce/rachel-brookes"
+        },
+        {
+          "_id": "5f5094e608b4d93114baf0a6",
+          "name": "Raven James",
+          "url": "/authors/5f5094e608b4d93114baf0a6/raven-james"
+        },
+        {
+          "_id": "545591d287eac3369a91322f",
+          "name": "Vanessa Booke",
+          "url": "/authors/545591d287eac3369a91322f/vanessa-booke"
+        },
+        {
+          "_id": "5455ed3287eac336ae6a1abd",
+          "name": "Rebecca Paula",
+          "url": "/authors/5455ed3287eac336ae6a1abd/rebecca-paula"
+        },
+        {
+          "_id": "5455355e8c7d2382e7813393",
+          "name": "Rebecca Yarros",
+          "url": "/authors/5455355e8c7d2382e7813393/rebecca-yarros"
+        },
+        {
+          "_id": "5456817687eac33e61c2f4fc",
+          "name": "Regina Kyle",
+          "url": "/authors/5456817687eac33e61c2f4fc/regina-kyle"
+        },
+        {
+          "_id": "585103a11b1bdc0178fcdd6e",
+          "name": "R. Castro",
+          "url": "/authors/585103a11b1bdc0178fcdd6e/r-castro"
+        },
+        {
+          "_id": "5497fb487a5936fb0406607e",
+          "name": "Roxie Noir",
+          "url": "/authors/5497fb487a5936fb0406607e/roxie-noir"
+        },
+        {
+          "_id": "58a81cb40d3299c6e04e2525",
+          "name": "S. Cinders",
+          "url": "/authors/58a81cb40d3299c6e04e2525/s-cinders"
+        },
+        {
+          "_id": "559154069eef3b3f1d530f12",
+          "name": "Sade Rena",
+          "url": "/authors/559154069eef3b3f1d530f12/sade-rena"
+        },
+        {
+          "_id": "58ae89630d3299c6e04f51eb",
+          "name": "Saffron A. Kent",
+          "url": "/authors/58ae89630d3299c6e04f51eb/saffron-a-kent"
+        },
+        {
+          "_id": "590973af0d3299c6e06f2985",
+          "name": "Samantha Lind",
+          "url": "/authors/590973af0d3299c6e06f2985/samantha-lind"
+        },
+        {
+          "_id": "54566b2a87eac33e571079b0",
+          "name": "Sarah M. Cradit",
+          "url": "/authors/54566b2a87eac33e571079b0/sarah-m-cradit"
+        },
+        {
+          "_id": "559b6e2535a5fb65f886acc9",
+          "name": "Scarlett Cole",
+          "url": "/authors/559b6e2535a5fb65f886acc9/scarlett-cole"
+        },
+        {
+          "_id": "5ab5f78401dbc864fb851d02",
+          "name": "S.E. Rose",
+          "url": "/authors/5ab5f78401dbc864fb851d02/se-rose"
+        },
+        {
+          "_id": "5d035c1201dbc864fb9fbff8",
+          "name": "Shaw Hart",
+          "url": "/authors/5d035c1201dbc864fb9fbff8/shaw-hart"
+        },
+        {
+          "_id": "62df934108b4d931145c1255",
+          "name": "Sydney St. James",
+          "url": "/authors/62df934108b4d931145c1255/sydney-st-james"
+        },
+        {
+          "_id": "5ad8314b01dbc864fb867bc6",
+          "name": "S.J. Sylvis",
+          "url": "/authors/5ad8314b01dbc864fb867bc6/sj-sylvis"
+        },
+        {
+          "_id": "5ff9646908b4d93114798d47",
+          "name": "Skye Alder",
+          "url": "/authors/5ff9646908b4d93114798d47/skye-alder"
+        },
+        {
+          "_id": "64398dc608b4d93114908fcd",
+          "name": "Stephanie Anne",
+          "url": "/authors/64398dc608b4d93114908fcd/stephanie-anne"
+        },
+        {
+          "_id": "5ba87e8201dbc864fb912ab8",
+          "name": "Suzanne Baltsar",
+          "url": "/authors/5ba87e8201dbc864fb912ab8/suzanne-baltsar"
+        },
+        {
+          "_id": "577608d2c19e77f1ea6dc560",
+          "name": "Sylvie Stewart",
+          "url": "/authors/577608d2c19e77f1ea6dc560/sylvie-stewart"
+        },
+        {
+          "_id": "5455422c8c7d2382e7813713",
+          "name": "T.K. Leigh",
+          "url": "/authors/5455422c8c7d2382e7813713/tk-leigh"
+        },
+        {
+          "_id": "54553f8b8c7d2382e781364c",
+          "name": "Tabatha Vargo",
+          "url": "/authors/54553f8b8c7d2382e781364c/tabatha-vargo"
+        },
+        {
+          "_id": "560b7abbbfc6b5c0fa93d43f",
+          "name": "Tamara Lush",
+          "url": "/authors/560b7abbbfc6b5c0fa93d43f/tamara-lush"
+        },
+        {
+          "_id": "585bc56e1b1bdc017803e3fd",
+          "name": "Taryn Quinn",
+          "url": "/authors/585bc56e1b1bdc017803e3fd/taryn-quinn"
+        },
+        {
+          "_id": "545544558c7d2382e78137b2",
+          "name": "Tawna Fenske",
+          "url": "/authors/545544558c7d2382e78137b2/tawna-fenske"
+        },
+        {
+          "_id": "5455c67587eac324117fcfd6",
+          "name": "T. Gephart",
+          "url": "/authors/5455c67587eac324117fcfd6/t-gephart"
+        },
+        {
+          "_id": "545527298c7d2382e781300a",
+          "name": "Toni Aleo",
+          "url": "/authors/545527298c7d2382e781300a/toni-aleo"
+        },
+        {
+          "_id": "5457643d87eac3dcc9832186",
+          "name": "Tracy Krimmer",
+          "url": "/authors/5457643d87eac3dcc9832186/tracy-krimmer"
+        },
+        {
+          "_id": "5c875b2101dbc864fb9b8e09",
+          "name": "Tricia Lynne",
+          "url": "/authors/5c875b2101dbc864fb9b8e09/tricia-lynne"
+        },
+        {
+          "_id": "54558aad87eac323ffb2ca68",
+          "name": "Trish Milburn",
+          "url": "/authors/54558aad87eac323ffb2ca68/trish-milburn"
+        },
+        {
+          "_id": "56b88e93c62092c044059d02",
+          "name": "V.F. Mason",
+          "url": "/authors/56b88e93c62092c044059d02/vf-mason"
+        },
+        {
+          "_id": "55ba0cce35a5fb65f8870629",
+          "name": "Vivian Wood",
+          "url": "/authors/55ba0cce35a5fb65f8870629/vivian-wood"
+        },
+        {
+          "_id": "5c48149101dbc864fb9891e7",
+          "name": "Zoe Ashwood",
+          "url": "/authors/5c48149101dbc864fb9891e7/zoe-ashwood"
+        },
+        {
+          "_id": "5455575287eac324117fa457",
+          "name": "Zoe York",
+          "url": "/authors/5455575287eac324117fa457/zoe-york"
+        },
+        {
+          "_id": "643ad3fb08b4d93114ac395d",
+          "name": "Laura Hall",
+          "url": "/authors/643ad3fb08b4d93114ac395d/laura-hall"
+        }
+      ],
+      "series": [],
+      "url": "/books/64398dc2752ace71f698d2b1/dissent-a-charity-romance-anthology-brighton-walsh-kennedy-f",
+      "score": 1.2559347181008902,
+      "tags": [
+        "dissent",
+        "a",
+        "charity",
+        "romance",
+        "anthology",
+        "brighton",
+        "walsh",
+        "kennedy",
+        "fox",
+        "nicole",
+        "french",
+        "alexis",
+        "anne",
+        "aidy",
+        "award",
+        "am",
+        "roark",
+        "ar",
+        "hall",
+        "aarti",
+        "v",
+        "raman",
+        "amanda",
+        "richardson",
+        "amelia",
+        "wilde",
+        "amie",
+        "knight",
+        "amy",
+        "quinton",
+        "anna",
+        "michael",
+        "aria",
+        "wyatt",
+        "ashley",
+        "lane",
+        "autumn",
+        "jones",
+        "lake",
+        "b",
+        "celeste",
+        "bl",
+        "olson",
+        "blair",
+        "babylon",
+        "brenda",
+        "st",
+        "john",
+        "brown",
+        "brenna",
+        "aubrey",
+        "bri",
+        "blackwood",
+        "cara",
+        "dee",
+        "carmen",
+        "jenner",
+        "cl",
+        "matthews",
+        "cassie",
+        "graham",
+        "celia",
+        "kyle",
+        "charity",
+        "ferrell",
+        "claire",
+        "wilder",
+        "claudia",
+        "y",
+        "burgoa",
+        "dakota",
+        "willink",
+        "dani",
+        "rené",
+        "daniela",
+        "romero",
+        "dee",
+        "garcia",
+        "dee",
+        "lagasse",
+        "deidreann",
+        "anderson",
+        "donna",
+        "grant",
+        "echo",
+        "grayce",
+        "elena",
+        "aitken",
+        "elle",
+        "thorpe",
+        "ellis",
+        "leigh",
+        "emily",
+        "colin",
+        "emily",
+        "goodwin",
+        "erica",
+        "alexander",
+        "erin",
+        "parisien",
+        "eva",
+        "charles",
+        "eva",
+        "moore",
+        "evelyn",
+        "adams",
+        "glenna",
+        "maynard",
+        "hd",
+        "carlton",
+        "haley",
+        "jenner",
+        "heidi",
+        "mclaughlin",
+        "holly",
+        "mortimer",
+        "hope",
+        "jones",
+        "ines",
+        "johnson",
+        "iris",
+        "morland",
+        "j",
+        "saman",
+        "j",
+        "sterling",
+        "jh",
+        "croix",
+        "jl",
+        "beck",
+        "c",
+        "hallman",
+        "jm",
+        "walker",
+        "jane",
+        "blythe",
+        "janet",
+        "berry",
+        "jasmin",
+        "miller",
+        "jd",
+        "hollyfield",
+        "jen",
+        "stevens",
+        "jenika",
+        "snow",
+        "jenna",
+        "hartley",
+        "jenna",
+        "lynn",
+        "jennifer",
+        "sucevic",
+        "jessica",
+        "florence",
+        "jillian",
+        "liota",
+        "julia",
+        "kent",
+        "kait",
+        "nolan",
+        "kat",
+        "latham",
+        "kat",
+        "savage",
+        "kate",
+        "canterbary",
+        "kate",
+        "king",
+        "jessa",
+        "wilder",
+        "kate",
+        "meader",
+        "kathy",
+        "coopmans",
+        "kb",
+        "cinder",
+        "kd",
+        "proctor",
+        "kelly",
+        "maher",
+        "kim",
+        "loraine",
+        "kym",
+        "grosso",
+        "lainey",
+        "davis",
+        "laramie",
+        "briscoe",
+        "laura",
+        "lee",
+        "lauren",
+        "stewart",
+        "lea",
+        "coll",
+        "len",
+        "webster",
+        "lili",
+        "valente",
+        "linnea",
+        "may",
+        "lisa",
+        "shelby",
+        "lissanne",
+        "jones",
+        "lucy",
+        "lennox",
+        "mary",
+        "ann",
+        "marlowe",
+        "max",
+        "henry",
+        "megan",
+        "ryder",
+        "melissa",
+        "andrea",
+        "melissa",
+        "marino",
+        "melonie",
+        "johnson",
+        "mia",
+        "harlan",
+        "mignon",
+        "mykel",
+        "molly",
+        "o'hare",
+        "monica",
+        "corwin",
+        "morgan",
+        "jane",
+        "mitchell",
+        "na",
+        "moore",
+        "natasha",
+        "raulerson",
+        "nicole",
+        "blanchard",
+        "nina",
+        "levine",
+        "pamela",
+        "dumond",
+        "patricia",
+        "d",
+        "eddy",
+        "persephone",
+        "autumn",
+        "rl",
+        "kenderson",
+        "rachel",
+        "brookes",
+        "raven",
+        "james",
+        "vanessa",
+        "booke",
+        "rebecca",
+        "paula",
+        "rebecca",
+        "yarros",
+        "regina",
+        "kyle",
+        "r",
+        "castro",
+        "roxie",
+        "noir",
+        "s",
+        "cinders",
+        "sade",
+        "rena",
+        "saffron",
+        "a",
+        "kent",
+        "samantha",
+        "lind",
+        "sarah",
+        "m",
+        "cradit",
+        "scarlett",
+        "cole",
+        "se",
+        "rose",
+        "shaw",
+        "hart",
+        "sydney",
+        "st",
+        "james",
+        "sj",
+        "sylvis",
+        "skye",
+        "alder",
+        "stephanie",
+        "anne",
+        "suzanne",
+        "baltsar",
+        "sylvie",
+        "stewart",
+        "tk",
+        "leigh",
+        "tabatha",
+        "vargo",
+        "tamara",
+        "lush",
+        "taryn",
+        "quinn",
+        "tawna",
+        "fenske",
+        "t",
+        "gephart",
+        "toni",
+        "aleo",
+        "tracy",
+        "krimmer",
+        "tricia",
+        "lynne",
+        "trish",
+        "milburn",
+        "vf",
+        "mason",
+        "vivian",
+        "wood",
+        "zoe",
+        "ashwood",
+        "zoe",
+        "york",
+        "laura",
+        "hall"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "54558c9b87eac336ae69e69f",
+      "info": {
+        "title": "Emily and Colin’s Wedding: A Tears of Pearl Prequel Story",
+        "avgRating": 3.6600000000000006,
+        "numRating": 11
+      },
+      "url": "/books/54558c9b87eac336ae69e69f/emily-and-colins-wedding-a-tears-of-pearl-prequel-story-tasha-alexander",
+      "series": [
+        {
+          "series": "58fe0f314167a733426306d7",
+          "no_display": "3.5",
+          "title": "Lady Emily",
+          "no": 3.5
+        }
+      ],
+      "authors": [
+        {
+          "_id": "54553d728c7d2382c5297664",
+          "name": "Tasha Alexander",
+          "url": "/authors/54553d728c7d2382c5297664/tasha-alexander"
+        }
+      ],
+      "score": 1.4166666666666665,
+      "tags": [
+        "emily",
+        "and",
+        "colin’s",
+        "wedding",
+        "a",
+        "tears",
+        "of",
+        "pearl",
+        "prequel",
+        "story",
+        "tasha",
+        "alexander"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "559cda1535a5fb65f886af2d",
+      "info": {
+        "title": "A Story of Now",
+        "avgRating": 4.2,
+        "numRating": 10
+      },
+      "url": "/books/559cda1535a5fb65f886af2d/a-story-of-now-emily-obeirne",
+      "series": [
+        {
+          "no_display": "1",
+          "series": "58fe15854167a73342631a81",
+          "no": 1,
+          "title": "Story of Now Book"
+        }
+      ],
+      "authors": [
+        {
+          "_id": "559cda1535a5fb65f886af2f",
+          "name": "Emily O’Beirne",
+          "url": "/authors/559cda1535a5fb65f886af2f/emily-obeirne"
+        }
+      ],
+      "score": 1.5,
+      "tags": [
+        "a",
+        "story",
+        "of",
+        "now",
+        "emily",
+        "o’beirne"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "563d629c08e937813194cccb",
+      "info": {
+        "title": "The Story of Us",
+        "avgRating": 4,
+        "numRating": 2
+      },
+      "url": "/books/563d629c08e937813194cccb/the-story-of-us-stephanie-henry",
+      "series": [],
+      "authors": [
+        {
+          "_id": "563d629c08e937813194ccce",
+          "name": "Stephanie Henry",
+          "url": "/authors/563d629c08e937813194ccce/stephanie-henry"
+        }
+      ],
+      "score": 1.25,
+      "tags": [
+        "the",
+        "story",
+        "of",
+        "us",
+        "stephanie",
+        "henry"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "69394b0c2a76b627f3280b24",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "An Otherworldly Love Story"
+      },
+      "authors": [
+        {
+          "_id": "66c5d0dca21e2f41c4079963",
+          "name": "HM Hodgson",
+          "url": "/authors/66c5d0dca21e2f41c4079963/hm-hodgson"
+        },
+        {
+          "_id": "62ce9e6908b4d9311467275d",
+          "name": "Emily Blackwood",
+          "url": "/authors/62ce9e6908b4d9311467275d/emily-blackwood"
+        },
+        {
+          "_id": "63d62a3d08b4d93114f33d59",
+          "name": "Evangaline Pierce",
+          "url": "/authors/63d62a3d08b4d93114f33d59/evangaline-pierce"
+        },
+        {
+          "_id": "59eb03223ffdba614722ca17",
+          "name": "Crystal J. Johnson",
+          "url": "/authors/59eb03223ffdba614722ca17/crystal-j-johnson"
+        },
+        {
+          "_id": "5d773d5101dbc864fba35a30",
+          "name": "Felicity Vaughn",
+          "url": "/authors/5d773d5101dbc864fba35a30/felicity-vaughn"
+        }
+      ],
+      "series": [
+        {
+          "title": "Love Stories",
+          "no_display": "7",
+          "no": 7,
+          "series": "69394b0c2a76b627f3280b2b"
+        }
+      ],
+      "url": "/books/69394b0c2a76b627f3280b24/an-otherworldly-love-story-hm-hodgson-emily-blackwood-evangaline-pierce-crystal-j-johnson-felicity-vaughn",
+      "score": 1.375,
+      "tags": [
+        "an",
+        "otherworldly",
+        "love",
+        "story",
+        "hm",
+        "hodgson",
+        "emily",
+        "blackwood",
+        "evangaline",
+        "pierce",
+        "crystal",
+        "j",
+        "johnson",
+        "felicity",
+        "vaughn"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "698442dea436ad67caa1de59",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "After Hours: A Spicy, Funny Story of Work, Love, and Self"
+      },
+      "authors": [
+        {
+          "_id": "6984419670402d96b530b9f2",
+          "name": "Riley Caldwell",
+          "url": "/authors/6984419670402d96b530b9f2/riley-caldwell"
+        }
+      ],
+      "series": [
+        {
+          "title": "Mae Hart at Sea: Spicy, Funny Cruise-Ship Women’s Fiction",
+          "no_display": "3",
+          "no": 3,
+          "series": "69844196a436ad67caa1da3d"
+        }
+      ],
+      "url": "/books/698442dea436ad67caa1de59/after-hours-a-spicy-funny-story-of-work-love-and-self-riley-",
+      "score": 1.3552631578947367,
+      "tags": [
+        "after",
+        "hours",
+        "a",
+        "spicy",
+        "funny",
+        "story",
+        "of",
+        "work",
+        "love",
+        "and",
+        "self",
+        "riley",
+        "caldwell"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "698443dda436ad67caa1e1f1",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "Embarkation: A Spicy, Funny Story of Work, Love, and Self"
+      },
+      "authors": [
+        {
+          "_id": "6984419670402d96b530b9f2",
+          "name": "Riley Caldwell",
+          "url": "/authors/6984419670402d96b530b9f2/riley-caldwell"
+        }
+      ],
+      "series": [
+        {
+          "title": "Mae Hart at Sea: Spicy, Funny Cruise-Ship Women’s Fiction",
+          "no_display": "1",
+          "no": 1,
+          "series": "69844196a436ad67caa1da3d"
+        }
+      ],
+      "url": "/books/698443dda436ad67caa1e1f1/embarkation-a-spicy-funny-story-of-work-love-and-self-riley-",
+      "score": 1.3552631578947367,
+      "tags": [
+        "embarkation",
+        "a",
+        "spicy",
+        "funny",
+        "story",
+        "of",
+        "work",
+        "love",
+        "and",
+        "self",
+        "riley",
+        "caldwell"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "69844196a436ad67caa1da38",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "Cabin Fever: A Spicy, Funny Story of Work, Love, and Self"
+      },
+      "authors": [
+        {
+          "_id": "6984419670402d96b530b9f2",
+          "name": "Riley Caldwell",
+          "url": "/authors/6984419670402d96b530b9f2/riley-caldwell"
+        }
+      ],
+      "series": [
+        {
+          "title": "Mae Hart at Sea: Spicy, Funny Cruise-Ship Women’s Fiction",
+          "no_display": "5",
+          "no": 5,
+          "series": "69844196a436ad67caa1da3d"
+        }
+      ],
+      "url": "/books/69844196a436ad67caa1da38/cabin-fever-a-spicy-funny-story-of-work-love-and-self-riley-",
+      "score": 1.35,
+      "tags": [
+        "cabin",
+        "fever",
+        "a",
+        "spicy",
+        "funny",
+        "story",
+        "of",
+        "work",
+        "love",
+        "and",
+        "self",
+        "riley",
+        "caldwell"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "69844217a436ad67caa1dc20",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "Storm Protocol: A Spicy, Funny Story of Work, Love, and Self"
+      },
+      "authors": [
+        {
+          "_id": "6984419670402d96b530b9f2",
+          "name": "Riley Caldwell",
+          "url": "/authors/6984419670402d96b530b9f2/riley-caldwell"
+        }
+      ],
+      "series": [
+        {
+          "title": "Mae Hart at Sea: Spicy, Funny Cruise-Ship Women’s Fiction",
+          "no_display": "7",
+          "no": 7,
+          "series": "69844196a436ad67caa1da3d"
+        }
+      ],
+      "url": "/books/69844217a436ad67caa1dc20/storm-protocol-a-spicy-funny-story-of-work-love-and-self-ril",
+      "score": 1.35,
+      "tags": [
+        "storm",
+        "protocol",
+        "a",
+        "spicy",
+        "funny",
+        "story",
+        "of",
+        "work",
+        "love",
+        "and",
+        "self",
+        "riley",
+        "caldwell"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "69844224a436ad67caa1dc48",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "Inspection Week: A Spicy, Funny Story of Work, Love, and Self"
+      },
+      "authors": [
+        {
+          "_id": "6984419670402d96b530b9f2",
+          "name": "Riley Caldwell",
+          "url": "/authors/6984419670402d96b530b9f2/riley-caldwell"
+        }
+      ],
+      "series": [
+        {
+          "title": "Mae Hart at Sea: Spicy, Funny Cruise-Ship Women’s Fiction",
+          "no_display": "6",
+          "no": 6,
+          "series": "69844196a436ad67caa1da3d"
+        }
+      ],
+      "url": "/books/69844224a436ad67caa1dc48/inspection-week-a-spicy-funny-story-of-work-love-and-self-ri",
+      "score": 1.35,
+      "tags": [
+        "inspection",
+        "week",
+        "a",
+        "spicy",
+        "funny",
+        "story",
+        "of",
+        "work",
+        "love",
+        "and",
+        "self",
+        "riley",
+        "caldwell"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "562e2f7808e9378131945475",
+      "info": {
+        "title": "EROTICA: THE FIRST TIME: Taboo Romance Erotic Steamy Short Story  (Older Man Younger Woman Romance Forbidden Love BBW Short Stories)",
+        "avgRating": 0,
+        "numRating": 0
+      },
+      "url": "/books/562e2f7808e9378131945475/erotica-the-first-time-taboo-romance-erotic-steamy-short-story-older-man-younger-woman-romance-forbidden-love-bbw-short-stories-emily-ross",
+      "series": [],
+      "authors": [
+        {
+          "_id": "562e2f7908e9378131945477",
+          "name": "Emily Ross",
+          "url": "/authors/562e2f7908e9378131945477/emily-ross"
+        }
+      ],
+      "score": 1.3452380952380953,
+      "tags": [
+        "erotica",
+        "the",
+        "first",
+        "time",
+        "taboo",
+        "romance",
+        "erotic",
+        "steamy",
+        "short",
+        "story",
+        "older",
+        "man",
+        "younger",
+        "woman",
+        "romance",
+        "forbidden",
+        "love",
+        "bbw",
+        "short",
+        "stories",
+        "emily",
+        "ross"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "698442f0a436ad67caa1de91",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "Shore Leave Rules: A Spicy, Funny Story of Work, Love, and Self"
+      },
+      "authors": [
+        {
+          "_id": "6984419670402d96b530b9f2",
+          "name": "Riley Caldwell",
+          "url": "/authors/6984419670402d96b530b9f2/riley-caldwell"
+        }
+      ],
+      "series": [
+        {
+          "title": "Mae Hart at Sea: Spicy, Funny Cruise-Ship Women’s Fiction",
+          "no_display": "4",
+          "no": 4,
+          "series": "69844196a436ad67caa1da3d"
+        }
+      ],
+      "url": "/books/698442f0a436ad67caa1de91/shore-leave-rules-a-spicy-funny-story-of-work-love-and-self-",
+      "score": 1.3452380952380953,
+      "tags": [
+        "shore",
+        "leave",
+        "rules",
+        "a",
+        "spicy",
+        "funny",
+        "story",
+        "of",
+        "work",
+        "love",
+        "and",
+        "self",
+        "riley",
+        "caldwell"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "6896f4af7a3b753031ea6907",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "The Complete Illustrated Collection, Vol. 1: Forty Novels and Stories including Anne of Green Gables, the Emily Trilogy, The Story Girl, The Blue Castle, and Chronicles of Avonlea"
+      },
+      "authors": [
+        {
+          "_id": "64351ed808b4d9311423cd9b",
+          "name": "Lucy Maud Montgomery",
+          "url": "/authors/64351ed808b4d9311423cd9b/lucy-maud-montgomery"
+        }
+      ],
+      "series": [],
+      "url": "/books/6896f4af7a3b753031ea6907/the-complete-illustrated-collection-vol-1-forty-novels-and-stories-including-anne-of-green-gables-the-emily-trilogy-the-story-girl-the-blue-castle-and-chronicles-of-avonlea-lucy-maud-montgomery",
+      "score": 1.3369565217391304,
+      "tags": [
+        "the",
+        "complete",
+        "illustrated",
+        "collection",
+        "vol",
+        "1",
+        "forty",
+        "novels",
+        "and",
+        "stories",
+        "including",
+        "anne",
+        "of",
+        "green",
+        "gables",
+        "the",
+        "emily",
+        "trilogy",
+        "the",
+        "story",
+        "girl",
+        "the",
+        "blue",
+        "castle",
+        "and",
+        "chronicles",
+        "of",
+        "avonlea",
+        "lucy",
+        "maud",
+        "montgomery"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "67eba61c3fcc265ce375c34d",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "Erotca Short Story for Adult: An Erotic Tale of Seduction, Age Gap, MF First Time, Light Bondage, and Desire - Steamy Erotica Stories of Passion and Pleasure - Book 1"
+      },
+      "authors": [
+        {
+          "_id": "67eba61ca21e2f41c454b2b8",
+          "name": "Emily Carter",
+          "url": "/authors/67eba61ca21e2f41c454b2b8/emily-carter"
+        }
+      ],
+      "series": [],
+      "url": "/books/67eba61c3fcc265ce375c34d/erotca-short-story-for-adult-an-erotic-tale-of-seduction-age-gap-mf-first-time-light-bondage-and-desire-steamy-erotica-stories-of-passion-and-pleasure-book-1-emily-carter",
+      "score": 1.3333333333333335,
+      "tags": [
+        "erotca",
+        "short",
+        "story",
+        "for",
+        "adult",
+        "an",
+        "erotic",
+        "tale",
+        "of",
+        "seduction",
+        "age",
+        "gap",
+        "mf",
+        "first",
+        "time",
+        "light",
+        "bondage",
+        "and",
+        "desire",
+        "steamy",
+        "erotica",
+        "stories",
+        "of",
+        "passion",
+        "and",
+        "pleasure",
+        "book",
+        "1",
+        "emily",
+        "carter"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "58d660840d3299c6e063cf60",
+      "info": {
+        "title": "Lost Angel",
+        "avgRating": 0,
+        "numRating": 0
+      },
+      "url": "/books/58d660840d3299c6e063cf60/lost-angel-emily-story",
+      "series": [],
+      "authors": [
+        {
+          "_id": "58834fbe1b1bdc01781822aa",
+          "name": "Emily Story",
+          "url": "/authors/58834fbe1b1bdc01781822aa/emily-story"
+        }
+      ],
+      "score": 1.25,
+      "tags": [
+        "lost",
+        "angel",
+        "emily",
+        "story"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "647451239e02a2d6bb655cb8",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "Redeeming You: Hunter's Story"
+      },
+      "authors": [
+        {
+          "_id": "6474512308b4d931144a3303",
+          "name": "B. Henry",
+          "url": "/authors/6474512308b4d931144a3303/b-henry"
+        }
+      ],
+      "series": [],
+      "url": "/books/647451239e02a2d6bb655cb8/redeeming-you-hunters-story-b-henry",
+      "score": 1.2,
+      "tags": [
+        "redeeming",
+        "you",
+        "hunter's",
+        "story",
+        "b",
+        "henry"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "66a120edb5555e6f1094b6af",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "A LOVE STORY FOR THE AGES"
+      },
+      "authors": [
+        {
+          "_id": "57669ee6c19e77f1ea6d68f7",
+          "name": "Emily Wilson",
+          "url": "/authors/57669ee6c19e77f1ea6d68f7/emily-wilson"
+        }
+      ],
+      "series": [],
+      "url": "/books/66a120edb5555e6f1094b6af/a-love-story-for-the-ages-emily-wilson",
+      "score": 1.2,
+      "tags": [
+        "a",
+        "love",
+        "story",
+        "for",
+        "the",
+        "ages",
+        "emily",
+        "wilson"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "56cb16f5c62092c04406190c",
+      "info": {
+        "title": "His Damaged Redemption: Kaden's Story",
+        "avgRating": 0,
+        "numRating": 0
+      },
+      "url": "/books/56cb16f5c62092c04406190c/his-damaged-redemption-kadens-story-emily-zajac",
+      "series": [],
+      "authors": [
+        {
+          "_id": "555482179eef3b3f1d520114",
+          "name": "Emily Zajac",
+          "url": "/authors/555482179eef3b3f1d520114/emily-zajac"
+        }
+      ],
+      "score": 1.1666666666666667,
+      "tags": [
+        "his",
+        "damaged",
+        "redemption",
+        "kaden's",
+        "story",
+        "emily",
+        "zajac"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "5c2c823601dbc864fb972fd1",
+      "info": {
+        "title": "Funny Twist: Love Story",
+        "avgRating": 0,
+        "numRating": 0
+      },
+      "authors": [
+        {
+          "_id": "5c2c823601dbc864fb972fd4",
+          "name": "Oleg Drobotun",
+          "url": "/authors/5c2c823601dbc864fb972fd4/oleg-drobotun"
+        }
+      ],
+      "series": [],
+      "url": "/books/5c2c823601dbc864fb972fd1/funny-twist-love-story-oleg-drobotun",
+      "score": 1.1666666666666667,
+      "tags": [
+        "funny",
+        "twist",
+        "love",
+        "story",
+        "oleg",
+        "drobotun"
+      ],
+      "xor": 2
+    },
+    {
+      "_id": "67596cbf31d6cceca84de453",
+      "info": {
+        "numRating": 50,
+        "avgRating": 3.596,
+        "title": "The Turn of the Screw and Other Stories"
+      },
+      "authors": [
+        {
+          "_id": "553cbd605b270e0a4cbd69b3",
+          "name": "Henry James",
+          "url": "/authors/553cbd605b270e0a4cbd69b3/henry-james"
+        }
+      ],
+      "series": [],
+      "url": "/books/67596cbf31d6cceca84de453/the-turn-of-the-screw-and-other-stories-henry-james",
+      "score": 1.2,
+      "tags": [
+        "the",
+        "turn",
+        "of",
+        "the",
+        "screw",
+        "and",
+        "other",
+        "stories",
+        "henry",
+        "james"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "5458337e87eac37719d15ba6",
+      "info": {
+        "title": "The Stories We Tell",
+        "avgRating": 3.6,
+        "numRating": 23
+      },
+      "url": "/books/5458337e87eac37719d15ba6/the-stories-we-tell-patti-callahan-henry",
+      "series": [],
+      "authors": [
+        {
+          "_id": "5455b2ca87eac3369a914228",
+          "name": "Patti Callahan Henry",
+          "url": "/authors/5455b2ca87eac3369a914228/patti-callahan-henry"
+        }
+      ],
+      "score": 1.2,
+      "tags": [
+        "the",
+        "stories",
+        "we",
+        "tell",
+        "patti",
+        "callahan",
+        "henry"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "54559c9587eac323ffb2d24b",
+      "info": {
+        "title": "Emily's Story",
+        "avgRating": 4.156000000000001,
+        "numRating": 10
+      },
+      "url": "/books/54559c9587eac323ffb2d24b/emilys-story-delen-mcclain",
+      "series": [
+        {
+          "series": "58fe12f14167a73342631259",
+          "no_display": "2",
+          "title": "Fang Chronicles",
+          "no": 2
+        }
+      ],
+      "authors": [
+        {
+          "_id": "5455675287eac323ffb2c085",
+          "name": "D'Elen McClain",
+          "url": "/authors/5455675287eac323ffb2c085/delen-mcclain"
+        }
+      ],
+      "score": 1.1666666666666667,
+      "tags": [
+        "emily's",
+        "story",
+        "d'elen",
+        "mcclain"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "563cc44308e9378131948dfc",
+      "info": {
+        "title": "Romance Sex Stories Collection: A Womans Fantasy",
+        "avgRating": 3,
+        "numRating": 1
+      },
+      "url": "/books/563cc44308e9378131948dfc/romance-sex-stories-collection-a-womans-fantasy-emily-sharp",
+      "series": [
+        {
+          "no_display": "1",
+          "series": "5903494ae45f8c60a843847e",
+          "no": 1,
+          "title": "romance, romance short stories, lesbian, mmf taboo for women, menage, lesbian, gay"
+        }
+      ],
+      "authors": [
+        {
+          "_id": "54b261cd6359b5ebb48764c5",
+          "name": "Emily Sharp",
+          "url": "/authors/54b261cd6359b5ebb48764c5/emily-sharp"
+        }
+      ],
+      "score": 1.3552631578947367,
+      "tags": [
+        "romance",
+        "sex",
+        "stories",
+        "collection",
+        "a",
+        "womans",
+        "fantasy",
+        "emily",
+        "sharp"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "653f7775fe8835da5c9b61c4",
+      "info": {
+        "numRating": 1,
+        "avgRating": 4,
+        "title": "Emily's Trials"
+      },
+      "authors": [
+        {
+          "_id": "5455cfc887eac336ae6a09e7",
+          "name": "Henry McLaughlin",
+          "url": "/authors/5455cfc887eac336ae6a09e7/henry-mclaughlin"
+        }
+      ],
+      "series": [],
+      "url": "/books/653f7775fe8835da5c9b61c4/emilys-trials-henry-mclaughlin",
+      "score": 1.25,
+      "tags": [
+        "emily's",
+        "trials",
+        "henry",
+        "mclaughlin"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "54b261cc6359b5ebb48764c4",
+      "info": {
+        "title": "Erotic Romance Sex Stories Collection: A Babysitter's Erotica Fantasy",
+        "avgRating": 0,
+        "numRating": 0
+      },
+      "url": "/books/54b261cc6359b5ebb48764c4/erotic-romance-sex-stories-collection-a-babysitters-erotica-fantasy-emily-sharp-erin-rosco",
+      "series": [
+        {
+          "no_display": "1",
+          "series": "59033e7ae45f8c60a8437362",
+          "no": 1,
+          "title": "erotic romance, sex stories, erotica fantasy, erotica, erotica for women, erotic books, taboo erotica short stories"
+        }
+      ],
+      "authors": [
+        {
+          "_id": "54b261cd6359b5ebb48764c5",
+          "name": "Emily Sharp",
+          "url": "/authors/54b261cd6359b5ebb48764c5/emily-sharp"
+        },
+        {
+          "_id": "54b261cd6359b5ebb48764c6",
+          "name": "Erin Rosco",
+          "url": "/authors/54b261cd6359b5ebb48764c6/erin-rosco"
+        }
+      ],
+      "score": 1.490740740740741,
+      "tags": [
+        "erotic",
+        "romance",
+        "sex",
+        "stories",
+        "collection",
+        "a",
+        "babysitter's",
+        "erotica",
+        "fantasy",
+        "emily",
+        "sharp",
+        "erin",
+        "rosco"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "5c72b80801dbc864fb9aa58a",
+      "info": {
+        "title": "AUNT,SISTER,NEIGHBOUR LUST STORIES: Taboo Erotic Stories",
+        "avgRating": 0,
+        "numRating": 0
+      },
+      "url": "/books/5c72b80801dbc864fb9aa58a/auntsisterneighbour-lust-stories-taboo-erotic-stories-patrick-henry",
+      "series": [],
+      "authors": [
+        {
+          "_id": "5c72b80801dbc864fb9aa58c",
+          "name": "Patrick Henry",
+          "url": "/authors/5c72b80801dbc864fb9aa58c/patrick-henry"
+        }
+      ],
+      "score": 1.45,
+      "tags": [
+        "auntsisterneighbour",
+        "lust",
+        "stories",
+        "taboo",
+        "erotic",
+        "stories",
+        "patrick",
+        "henry"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "57fb72b3de896e89249356d6",
+      "info": {
+        "title": "BILLIONAIRE SHORT STORIES: Stepbrother Wants  (New Adult Dark Billionaire Short Stories Collection)  (Mix: Romance Collection)",
+        "avgRating": 0,
+        "numRating": 0
+      },
+      "url": "/books/57fb72b3de896e89249356d6/billionaire-short-stories-stepbrother-wants-new-adult-dark-billionaire-short-stories-collection-mix-romance-collection-henry-nolan",
+      "series": [],
+      "authors": [
+        {
+          "_id": "57fb72b3de896e89249356da",
+          "name": "Henry Nolan",
+          "url": "/authors/57fb72b3de896e89249356da/henry-nolan"
+        }
+      ],
+      "score": 1.3676470588235294,
+      "tags": [
+        "billionaire",
+        "short",
+        "stories",
+        "stepbrother",
+        "wants",
+        "new",
+        "adult",
+        "dark",
+        "billionaire",
+        "short",
+        "stories",
+        "collection",
+        "mix",
+        "romance",
+        "collection",
+        "henry",
+        "nolan"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "67378139dc28eb7aa4443b29",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "Sex in Portugal. 4: Sexy Erotic Stories for Adults Illustrated with Hentai Pictures – Naked Illustrations"
+      },
+      "authors": [
+        {
+          "_id": "5d15cd7701dbc864fba06f4a",
+          "name": "Emily White",
+          "url": "/authors/5d15cd7701dbc864fba06f4a/emily-white"
+        }
+      ],
+      "series": [
+        {
+          "title": "Erotic Sexy Stories Collection with Explicit ... Girls. Only for Adults 18+.",
+          "no_display": "231",
+          "no": 231,
+          "series": "67378139dc28eb7aa4443b32"
+        }
+      ],
+      "url": "/books/67378139dc28eb7aa4443b29/sex-in-portugal-4-sexy-erotic-stories-for-adults-illustrated-with-hentai-pictures-naked-illustrations-emily-white",
+      "score": 1.3409090909090908,
+      "tags": [
+        "sex",
+        "in",
+        "portugal",
+        "4",
+        "sexy",
+        "erotic",
+        "stories",
+        "for",
+        "adults",
+        "illustrated",
+        "with",
+        "hentai",
+        "pictures",
+        "–",
+        "naked",
+        "illustrations",
+        "emily",
+        "white"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "673881cbdc28eb7aa444ac96",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "Forbidden Fantasies. 6: Sexy Erotic Stories for Adults Illustrated with Hentai Pictures – Naked Illustrations"
+      },
+      "authors": [
+        {
+          "_id": "5d15cd7701dbc864fba06f4a",
+          "name": "Emily White",
+          "url": "/authors/5d15cd7701dbc864fba06f4a/emily-white"
+        }
+      ],
+      "series": [
+        {
+          "title": "Erotic Sexy Stories Collection with Explicit ... Girls. Only for Adults 18+.",
+          "no_display": "233",
+          "no": 233,
+          "series": "67378139dc28eb7aa4443b32"
+        }
+      ],
+      "url": "/books/673881cbdc28eb7aa444ac96/forbidden-fantasies-6-sexy-erotic-stories-for-adults-illustrated-with-hentai-pictures-naked-illustrations-emily-white",
+      "score": 1.3409090909090908,
+      "tags": [
+        "forbidden",
+        "fantasies",
+        "6",
+        "sexy",
+        "erotic",
+        "stories",
+        "for",
+        "adults",
+        "illustrated",
+        "with",
+        "hentai",
+        "pictures",
+        "–",
+        "naked",
+        "illustrations",
+        "emily",
+        "white"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "67b5bba413fb249000dd0094",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "The Ultimate Henry Rider Haggard Collection: Allan Quatermain Series, Ayesha Series, Lost World Novels, Short Stories, Essays & Autobiography"
+      },
+      "authors": [
+        {
+          "_id": "67b5bb63a21e2f41c4f5c6d1",
+          "name": "HENRY RIDER HAGGARD",
+          "url": "/authors/67b5bb63a21e2f41c4f5c6d1/henry-rider-haggard"
+        },
+        {
+          "_id": "6538cda3ab9bdf7fce60c3a1",
+          "name": "Original Thinkers Institute",
+          "url": "/authors/6538cda3ab9bdf7fce60c3a1/original-thinkersinstitute"
+        }
+      ],
+      "series": [],
+      "url": "/books/67b5bba413fb249000dd0094/the-ultimate-henry-rider-haggard-collection-allan-quatermain-series-ayesha-series-lost-world-novels-short-stories-essays-autobiography-henry-rider-haggard-original-thinkersinstitute",
+      "score": 1.3369565217391304,
+      "tags": [
+        "the",
+        "ultimate",
+        "henry",
+        "rider",
+        "haggard",
+        "collection",
+        "allan",
+        "quatermain",
+        "series",
+        "ayesha",
+        "series",
+        "lost",
+        "world",
+        "novels",
+        "short",
+        "stories",
+        "essays",
+        "autobiography",
+        "henry",
+        "rider",
+        "haggard",
+        "original",
+        "thinkers institute"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "64fc25e351ddeb2ad6705bb7",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "Emily Is Dangerous Sexy And Kinky — Amazing Sex Stories Mega Bundle: Taboo Kinky Sexy Family | Ganged First Time | Shared & Used | Cute Milked Dominant | Romance, Naughty Erotic Adult Sex Stories"
+      },
+      "authors": [
+        {
+          "_id": "64fc25e3ab9bdf7fce6281ff",
+          "name": "Marcus Taylor",
+          "url": "/authors/64fc25e3ab9bdf7fce6281ff/marcus-taylor"
+        }
+      ],
+      "series": [],
+      "url": "/books/64fc25e351ddeb2ad6705bb7/emily-is-dangerous-sexy-and-kinky-amazing-sex-stories-mega-bundle-taboo-kinky-sexy-family-ganged-first-time-shared-used-cute-milked-dominant-romance-naughty-erotic-adult-sex-stories-marcus-taylor",
+      "score": 1.3189655172413794,
+      "tags": [
+        "emily",
+        "is",
+        "dangerous",
+        "sexy",
+        "and",
+        "kinky",
+        "—",
+        "amazing",
+        "sex",
+        "stories",
+        "mega",
+        "bundle",
+        "taboo",
+        "kinky",
+        "sexy",
+        "family",
+        "|",
+        "ganged",
+        "first",
+        "time",
+        "|",
+        "shared",
+        "used",
+        "|",
+        "cute",
+        "milked",
+        "dominant",
+        "|",
+        "romance",
+        "naughty",
+        "erotic",
+        "adult",
+        "sex",
+        "stories",
+        "marcus",
+        "taylor"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "659d026d2ba06e02b96ba5bd",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "THE BOOK OF EMILY LEE"
+      },
+      "authors": [
+        {
+          "_id": "659d026da21e2f41c439b14b",
+          "name": "JNISSI STORIES",
+          "url": "/authors/659d026da21e2f41c439b14b/jnissi-stories"
+        }
+      ],
+      "series": [],
+      "url": "/books/659d026d2ba06e02b96ba5bd/the-book-of-emily-lee-jnissi-stories",
+      "score": 1.2,
+      "tags": [
+        "the",
+        "book",
+        "of",
+        "emily",
+        "lee",
+        "jnissi",
+        "stories"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "697b28825da5344e7ca86ccf",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "Stories Like Scars"
+      },
+      "authors": [
+        {
+          "_id": "554082439eef3b3f1d511a67",
+          "name": "Emily Cooper",
+          "url": "/authors/554082439eef3b3f1d511a67/emily-cooper"
+        }
+      ],
+      "series": [],
+      "url": "/books/697b28825da5344e7ca86ccf/stories-like-scars-emily-cooper",
+      "score": 1.2,
+      "tags": [
+        "stories",
+        "like",
+        "scars",
+        "emily",
+        "cooper"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "6576d7c335000cbef7d36138",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "GTA 6 Story Book | gta 6 concept story | gta stories | gta story book"
+      },
+      "authors": [
+        {
+          "_id": "6576d7c3ab9bdf7fce3a1739",
+          "name": "Rockstar Brook",
+          "url": "/authors/6576d7c3ab9bdf7fce3a1739/rockstar-brook"
+        }
+      ],
+      "series": [],
+      "url": "/books/6576d7c335000cbef7d36138/gta-6-story-book-gta-6-concept-story-gta-stories-gta-story-book-rockstar-brook",
+      "score": 1.1875,
+      "tags": [
+        "gta",
+        "6",
+        "story",
+        "book",
+        "|",
+        "gta",
+        "6",
+        "concept",
+        "story",
+        "|",
+        "gta",
+        "stories",
+        "|",
+        "gta",
+        "story",
+        "book",
+        "rockstar",
+        "brook"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "67a495ad23843d350ac3233f",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "The Complete Emily Starr Trilogy: Emily of New Moon + Emily Climbs + Emily's Quest: Unabridged"
+      },
+      "authors": [
+        {
+          "_id": "64351ed808b4d9311423cd9b",
+          "name": "Lucy Maud Montgomery",
+          "url": "/authors/64351ed808b4d9311423cd9b/lucy-maud-montgomery"
+        }
+      ],
+      "series": [],
+      "url": "/books/67a495ad23843d350ac3233f/the-complete-emily-starr-trilogy-emily-of-new-moon-emily-climbs-emilys-quest-unabridged-lucy-maud-montgomery",
+      "score": 1.1875,
+      "tags": [
+        "the",
+        "complete",
+        "emily",
+        "starr",
+        "trilogy",
+        "emily",
+        "of",
+        "new",
+        "moon",
+        "+",
+        "emily",
+        "climbs",
+        "+",
+        "emily's",
+        "quest",
+        "unabridged",
+        "lucy",
+        "maud",
+        "montgomery"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "570bb89dc62092c0440772ba",
+      "info": {
+        "title": "My Funny Stories: Various Chapters",
+        "avgRating": 0,
+        "numRating": 0
+      },
+      "url": "/books/570bb89dc62092c0440772ba/my-funny-stories-various-chapters-michael-jones",
+      "series": [],
+      "authors": [
+        {
+          "_id": "560e7e8abfc6b5c0fa93e603",
+          "name": "Michael Jones",
+          "url": "/authors/560e7e8abfc6b5c0fa93e603/michael-jones"
+        }
+      ],
+      "score": 1.1666666666666667,
+      "tags": [
+        "my",
+        "funny",
+        "stories",
+        "various",
+        "chapters",
+        "michael",
+        "jones"
+      ],
+      "xor": 3
+    },
+    {
+      "_id": "65a4f7c32d9dc0c74bf2a61f",
+      "info": {
+        "numRating": 32,
+        "avgRating": 4.3121875,
+        "title": "Cluelessly Yours"
+      },
+      "authors": [
+        {
+          "_id": "571f524dc62092c04407cff4",
+          "name": "Max Monroe",
+          "url": "/authors/571f524dc62092c04407cff4/max-monroe"
+        }
+      ],
+      "series": [
+        {
+          "series": "65a4f7c32d9dc0c74bf2a622",
+          "title": "It's A Funny Story",
+          "no_display": "3",
+          "no": 3
+        }
+      ],
+      "url": "/books/65a4f7c32d9dc0c74bf2a61f/cluelessly-yours-max-monroe",
+      "score": 1.2,
+      "tags": [
+        "cluelessly",
+        "yours",
+        "max",
+        "monroe"
+      ],
+      "xor": 4
+    },
+    {
+      "_id": "69886763cc30b16b4f37dc7c",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "THE EMILIE LORING ROMANCES BOOKS 1-15: a collection of fifteen classic heartwarming love stories"
+      },
+      "authors": [
+        {
+          "_id": "5b62bc1201dbc864fb8d7a4c",
+          "name": "Emilie Loring",
+          "url": "/authors/5b62bc1201dbc864fb8d7a4c/emilie-loring"
+        }
+      ],
+      "series": [],
+      "url": "/books/69886763cc30b16b4f37dc7c/the-emilie-loring-romances-books-1-15-a-collection-of-fiftee",
+      "score": 1.3928571428571428,
+      "tags": [
+        "the",
+        "emilie",
+        "loring",
+        "romances",
+        "books",
+        "115",
+        "a",
+        "collection",
+        "of",
+        "fifteen",
+        "classic",
+        "heartwarming",
+        "love",
+        "stories",
+        "emilie",
+        "loring"
+      ],
+      "xor": 4
+    },
+    {
+      "_id": "5b0ba24601dbc864fb8918f0",
+      "info": {
+        "title": "Crossdressing Stories: A Collection of Crossdressing Stories",
+        "avgRating": 0,
+        "numRating": 0
+      },
+      "url": "/books/5b0ba24601dbc864fb8918f0/crossdressing-stories-a-collection-of-crossdressing-stories-sissy-stories",
+      "series": [],
+      "authors": [
+        {
+          "_id": "57ee7ab1de896e892492f061",
+          "name": "Sissy Stories",
+          "url": "/authors/57ee7ab1de896e892492f061/sissy-stories"
+        }
+      ],
+      "score": 1.25,
+      "tags": [
+        "crossdressing",
+        "stories",
+        "a",
+        "collection",
+        "of",
+        "crossdressing",
+        "stories",
+        "sissy",
+        "stories"
+      ],
+      "xor": 4
+    },
+    {
+      "_id": "68aeae9fcc810a27fc6f5b34",
+      "info": {
+        "numRating": 0,
+        "avgRating": 0,
+        "title": "2 in 1- Dirty Erotic Sex Stories for Adults - Erotica for Women Short Stories - Adult Erotic Stories - Forbidden Sex Stories - Sex in Public Stories - ... Explicit Stories - Forbidden Seduction"
+      },
+      "authors": [
+        {
+          "_id": "67b5bb2fa21e2f41c4f5b6d6",
+          "name": "Love Inwood",
+          "url": "/authors/67b5bb2fa21e2f41c4f5b6d6/love-inwood"
+        }
+      ],
+      "series": [],
+      "url": "/books/68aeae9fcc810a27fc6f5b34/2-in-1-dirty-erotic-sex-stories-for-adults-erotica-for-women-short-stories-adult-erotic-stories-forbidden-sex-stories-sex-in-public-stories-explicit-stories-forbidden-seduction-love-inwood",
+      "score": 1.2115384615384617,
+      "tags": [
+        "2",
+        "in",
+        "1",
+        "dirty",
+        "erotic",
+        "sex",
+        "stories",
+        "for",
+        "adults",
+        "erotica",
+        "for",
+        "women",
+        "short",
+        "stories",
+        "adult",
+        "erotic",
+        "stories",
+        "forbidden",
+        "sex",
+        "stories",
+        "sex",
+        "in",
+        "public",
+        "stories",
+        "explicit",
+        "stories",
+        "forbidden",
+        "seduction",
+        "love",
+        "inwood"
+      ],
+      "xor": 4
+    }
+  ]
+}

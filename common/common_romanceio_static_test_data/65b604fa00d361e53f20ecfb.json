@@ -1,0 +1,478 @@
+{
+  "info": {
+    "originalSteamRating": 0,
+    "avgSteamRating": 3.1111111111111116,
+    "numSteamRating": 261,
+    "numRating": 810,
+    "numReviews": 101,
+    "avgRating": 4.317259259259263,
+    "title": "Funny Story",
+    "numPages": 416,
+    "published": 1713837600,
+    "format": "Paperback",
+    "description": "A shimmering, joyful new novel about a pair of opposites with the wrong thing in common, from #1 New York Times bestselling author Emily Henry.<br/><br/>Daphne always loved the way her fiancé Peter told their story. How they met (on a blustery day), fell in love (over an errant hat), and moved back to his lakeside hometown to begin their life together. He really was good at telling it…right up until the moment he realized he was actually in love with his childhood best friend Petra.<br/> <br/>Which is how Daphne begins her new Stranded in beautiful Waning Bay, Michigan, without friends or family but with a dream job as a children’s librarian (that barely pays the bills), and proposing to be roommates with the only person who could possibly understand her Petra’s ex, Miles Nowak.<br/> <br/> Scruffy and chaotic—with a penchant for taking solace in the sounds of heart break love ballads —Miles is exactly the opposite of practical, buttoned up Daphne, whose coworkers know so little about her they have a running bet that she’s either FBI or in witness protection. The roommates mainly avoid one another, until one day, while drowning their sorrows, they form a tenuous friendship and a plan. If said plan also involves posting deliberately misleading photos of their summer adventures together, well, who could blame them?<br/> <br/>But it’s all just for show, of course, because there’s no way Daphne would actually start her new chapter by falling in love with her ex-fiancé’s new fiancée’s ex…right?",
+    "title_series": "Funny Story Emily Henry",
+    "scoreRating": 4.2985512367491205
+  },
+  "card": {
+    "topics": {
+      "collections": {
+        "relationship": [
+          {
+            "_id": "6628fed5a21e2f41c4388d59",
+            "topic": "fake relationship",
+            "votes": 67,
+            "title": "fake relationship"
+          },
+          {
+            "_id": "6627bd67a21e2f41c4edaebf",
+            "topic": "friends to lovers",
+            "votes": 59,
+            "title": "friends to lovers"
+          },
+          {
+            "_id": "6627bd67a21e2f41c4edaec2",
+            "topic": "forced proximity",
+            "votes": 53,
+            "title": "forced proximity"
+          },
+          {
+            "_id": "6628fedea21e2f41c4388f60",
+            "topic": "hurt-comfort",
+            "votes": 40,
+            "title": "hurt/comfort"
+          },
+          {
+            "_id": "662bb545a21e2f41c4ed0b6a",
+            "topic": "slow burn",
+            "votes": 34,
+            "title": "slow burn"
+          },
+          {
+            "_id": "677d3484a21e2f41c4bc0fe2",
+            "topic": "grovel",
+            "votes": 5,
+            "title": "good grovel"
+          },
+          {
+            "_id": "662bb540a21e2f41c4ed09fe",
+            "topic": "grumpy sunshine",
+            "votes": 3,
+            "title": "grumpy & sunshine"
+          },
+          {
+            "_id": "695c858e70402d96b5c01356",
+            "topic": "friends-benefits",
+            "votes": 1,
+            "title": "friends with benefits"
+          }
+        ],
+        "time-period-primary": [
+          {
+            "_id": "65b604faa21e2f41c44e2ee1",
+            "topic": "contemporary",
+            "votes": 64,
+            "title": "contemporary"
+          }
+        ],
+        "romance-primary": [
+          {
+            "_id": "6628fec9a21e2f41c4388b03",
+            "topic": "m-f",
+            "votes": 61,
+            "title": "m-f romance"
+          }
+        ],
+        "location": [
+          {
+            "_id": "6628fefba21e2f41c438970f",
+            "topic": "small town",
+            "votes": 56,
+            "title": "small town"
+          }
+        ],
+        "characters": [
+          {
+            "_id": "6628ff2ca21e2f41c438a2c0",
+            "topic": "sweet-hero",
+            "votes": 49,
+            "title": "sweet/gentle hero"
+          },
+          {
+            "_id": "662b3880a21e2f41c4ce4f88",
+            "topic": "competent heroine",
+            "votes": 38,
+            "title": "competent heroine"
+          },
+          {
+            "_id": "663f7215a21e2f41c47834cf",
+            "topic": "working class hero",
+            "votes": 34,
+            "title": "working class hero"
+          },
+          {
+            "_id": "662b3887a21e2f41c4ce513e",
+            "topic": "sweet heroine",
+            "votes": 31,
+            "title": "sweet/gentle heroine"
+          },
+          {
+            "_id": "662d618ba21e2f41c4498235",
+            "topic": "sunny hero",
+            "votes": 27,
+            "title": "sunny/happy hero"
+          },
+          {
+            "_id": "662b3884a21e2f41c4ce5073",
+            "topic": "independent heroine",
+            "votes": 26,
+            "title": "independent heroine"
+          },
+          {
+            "_id": "662b38a7a21e2f41c4ce5898",
+            "topic": "tortured hero",
+            "votes": 17,
+            "title": "tortured hero"
+          },
+          {
+            "_id": "677d34b1a21e2f41c4bc1d3b",
+            "topic": "working class heroine",
+            "votes": 12,
+            "title": "working class heroine"
+          },
+          {
+            "_id": "662b38b6a21e2f41c4ce5bfb",
+            "topic": "tortured heroine",
+            "votes": 8,
+            "title": "tortured heroine"
+          },
+          {
+            "_id": "6805c5a1a21e2f41c4e56ccf",
+            "topic": "shy heroine",
+            "votes": 7,
+            "title": "shy heroine"
+          },
+          {
+            "_id": "68abbaca70402d96b5d541ed",
+            "topic": "career professional",
+            "votes": 6,
+            "title": "white collar heroine"
+          }
+        ],
+        "story": [
+          {
+            "_id": "6627bd67a21e2f41c4edaec4",
+            "topic": "found-family",
+            "votes": 45,
+            "title": "found family"
+          },
+          {
+            "_id": "6729976aa21e2f41c41b3cd6",
+            "topic": "betrayal",
+            "votes": 6,
+            "title": "betrayal"
+          }
+        ],
+        "geography": [
+          {
+            "_id": "662b386ea21e2f41c4ce4b56",
+            "topic": "michigan",
+            "votes": 41,
+            "title": "michigan"
+          },
+          {
+            "_id": "662d616da21e2f41c4497b3d",
+            "topic": "usa",
+            "votes": 33,
+            "title": "usa"
+          }
+        ],
+        "geography-continents": [
+          {
+            "_id": "66622112a21e2f41c467e01f",
+            "topic": "north-america",
+            "votes": 11,
+            "title": "north america"
+          }
+        ]
+      },
+      "list": [
+        "fake relationship",
+        "contemporary",
+        "m-f",
+        "friends to lovers",
+        "small town",
+        "forced proximity",
+        "sweet-hero",
+        "found-family",
+        "michigan",
+        "hurt-comfort",
+        "competent heroine",
+        "slow burn",
+        "working class hero",
+        "usa",
+        "sweet heroine",
+        "sunny hero",
+        "independent heroine",
+        "tortured hero",
+        "working class heroine",
+        "north-america",
+        "tortured heroine",
+        "shy heroine",
+        "betrayal",
+        "career professional",
+        "grovel",
+        "grumpy sunshine",
+        "friends-benefits"
+      ]
+    },
+    "background": {
+      "dominant": "#496fef",
+      "background": "#0f1423",
+      "gradient": "linear-gradient(145deg, #0f1423 0%, #111a3b 45%, #0f1423 100%)",
+      "blobA": "#6281e9",
+      "blobB": "#372388",
+      "blobC": "#372388",
+      "shadow": "rgba(73, 111, 239, 0.45)",
+      "accent": "#8b9dd9",
+      "text": "#e8e9ed",
+      "isDark": true,
+      "isBright": false
+    }
+  },
+  "image": {
+    "source": "https://images-na.ssl-images-amazon.com/images/S/compressed.photo.goodreads.com/books/1697779422i/198397258.jpg",
+    "url": "65b604fa00d361e53f20ecfb.jpg"
+  },
+  "itunes": {
+    "links": {
+      "US": "https://books.apple.com/us/book/funny-story/id6452501721?uo=4&at=1010lu3M"
+    }
+  },
+  "amazon": {
+    "ids": [
+      "0593910575",
+      "B0CCNBRNRQ",
+      "9780593441282",
+      "9780593441220",
+      "0593441281",
+      "9780593826287",
+      "9780241624135",
+      "9780241624142",
+      "9780241624128",
+      "0593441214",
+      "9788367784474",
+      "2928377225186",
+      "9780241707579",
+      "9783426284346",
+      "9780593826300",
+      "9780593441213",
+      "9789511491873",
+      "9780241998175"
+    ],
+    "tropes": [
+      "Feel-Good",
+      "Genre Fiction",
+      "Literature & Fiction",
+      "Subjects",
+      "Books",
+      "Women's Fiction",
+      "Contemporary",
+      "Romance",
+      "Romantic Comedy"
+    ],
+    "url": "https://www.amazon.com/dp/0593910575?tag=romanceandsmu-20&linkCode=ogi&th=1&psc=1",
+    "mediumImage": "https://m.media-amazon.com/images/I/41aLBtdqAnL._SL160_.jpg",
+    "largeImage": "https://m.media-amazon.com/images/I/41aLBtdqAnL._SL500_.jpg",
+    "paapi5_url": "https://www.amazon.com/dp/0593910575?tag=romanceandsmu-20&linkCode=ogi&th=1&psc=1"
+  },
+  "goodreads": {
+    "urls": [
+      "198397258-funny-story",
+      "194802722",
+      "195498541",
+      "194803835",
+      "194802722-funny-story",
+      "194803835-funny-story",
+      "199354786",
+      "196890737",
+      "203382782",
+      "220999062",
+      "220999062-funny-story",
+      "194985375",
+      "195820062",
+      "213344247"
+    ],
+    "tropes": [
+      "romance",
+      "contemporary",
+      "fiction",
+      "contemporary-romance",
+      "adult",
+      "chick-lit",
+      "adult-fiction",
+      "to-read",
+      "romance",
+      "2024-releases",
+      "2024",
+      "2024-tbr",
+      "wishlist",
+      "contemporary",
+      "currently-reading",
+      "to-buy",
+      "fiction",
+      "unreleased",
+      "to-be-released",
+      "tbr-2024",
+      "coming-soon",
+      "anticipated-releases",
+      "2024-release",
+      "want-to-buy",
+      "upcoming-releases",
+      "contemporary-romance",
+      "romance-tbr",
+      "adult",
+      "new-releases",
+      "tbr",
+      "not-yet-released",
+      "wish-list",
+      "upcoming",
+      "tbr-romance",
+      "chick-lit",
+      "not-out-yet",
+      "need-to-buy",
+      "2024-anticipated-releases",
+      "2024-new-releases",
+      "not-released-yet",
+      "2024-books",
+      "books-to-buy",
+      "rom-com",
+      "arcs",
+      "most-anticipated",
+      "anticipated",
+      "netgalley",
+      "2024-reads",
+      "2024-anticipated",
+      "2024-most-anticipated",
+      "pre-ordered",
+      "preordered",
+      "2024-reading-list",
+      "arc",
+      "adult-romance",
+      "emily-henry",
+      "not-released",
+      "2024-to-read",
+      "anticipated-2024",
+      "future-releases",
+      "tbr-unreleased",
+      "on-my-radar",
+      "physical-tbr",
+      "summer-reads",
+      "romcom",
+      "not-yet-published",
+      "to-read-2024",
+      "buy",
+      "2024-anticipated-reads",
+      "want-to-read-2024",
+      "2023",
+      "not-published-yet",
+      "adult-fiction",
+      "waiting-for-release",
+      "april",
+      "april-2024",
+      "summer",
+      "most-anticipated-2024",
+      "want-to-read-romance",
+      "do-not-own",
+      "24-in-2024",
+      "2024-want-to-read",
+      "releases-2024",
+      "preorders",
+      "2024-hopefuls",
+      "book-club",
+      "library",
+      "to-read-romance",
+      "favorites",
+      "2024-must-reads",
+      "beach-reads",
+      "to-be-published",
+      "new-releases-2024",
+      "standalone",
+      "anticipated-reads",
+      "giveaways",
+      "books-i-want",
+      "anticipated-2024-releases",
+      "rom-coms",
+      "24-books-for-2024",
+      "fake-dating",
+      "pre-orders",
+      "to-read-in-2024",
+      "romance-to-read",
+      "anticipated-releases-2024",
+      "preorder",
+      "own"
+    ],
+    "image": "https://images-na.ssl-images-amazon.com/images/S/compressed.photo.goodreads.com/books/1697779422i/198397258.jpg",
+    "shelfid": "196167481-funny-story",
+    "avgRating": "4.22",
+    "numRating": 888588
+  },
+  "audio": {
+    "last_checked": 1753876934
+  },
+  "similar_books": {
+    "books": []
+  },
+  "_id": "65b604fa00d361e53f20ecfb",
+  "authors": [
+    "5e82ee17be0aaecf553e7c2f"
+  ],
+  "tropes": [
+    "fake relationship",
+    "contemporary",
+    "m-f",
+    "friends to lovers",
+    "small town",
+    "humor",
+    "forced proximity",
+    "first-person-pov",
+    "sweet-hero",
+    "found-family",
+    "hurt-comfort",
+    "competent heroine",
+    "slow burn",
+    "sweet heroine",
+    "angst",
+    "sunny hero",
+    "working class hero",
+    "independent heroine",
+    "tortured hero",
+    "working class heroine",
+    "mature couple",
+    "tortured heroine",
+    "other-man-woman",
+    "michigan",
+    "usa",
+    "north-america",
+    "past-child-abuse",
+    "mental-trauma",
+    "shy heroine",
+    "past-child-neglect",
+    "audiobook",
+    "childfree-couple",
+    "betrayal",
+    "career professional",
+    "grumpy sunshine",
+    "standalone",
+    "open-door",
+    "standalone-first"
+  ],
+  "tropes_length": 37,
+  "hide_explorer": false,
+  "series": [],
+  "updated": "2024-01-28T07:40:42.186Z",
+  "url": "/books/65b604fa00d361e53f20ecfb/funny-story-emily-henry",
+  "__v": 315,
+  "scraped": true,
+  "promoted_on_instagram": false
+}
