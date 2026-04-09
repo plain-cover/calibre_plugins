@@ -220,6 +220,9 @@ def build_plugin(adjust_imports_func):
 
     create_zip_file(zip_file_name, "w", files, exclude=exclude)
 
+    size_mb = os.path.getsize(zip_file_name) / (1024 * 1024)
+    print(f"Plugin zip size: {size_mb:.1f} MB")
+
 
 def pre_build_setup():
     """Run pre-build tasks before creating the plugin zip.
