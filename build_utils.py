@@ -19,6 +19,9 @@ def add_folder_to_zip(my_zip_file, folder, exclude=None):
     for file in glob(folder + "/*"):
         if file in exclude_list:
             continue
+        # Also check basename directly to handle path separator differences on Windows
+        if os.path.basename(file) in exclude:
+            continue
         if os.path.isfile(file):
             my_zip_file.write(file, file)
         elif os.path.isdir(file):
@@ -111,6 +114,8 @@ def get_plugin_subfolders(exclude_folders=None):
             "downloaded_files",  # SeleniumBase runtime downloads
             "__pycache__",  # Python bytecode cache
             "test_data",  # Test HTML files
+            "common_romanceio_static_test_data",  # Test fixtures, not needed at runtime
+            "bin",  # CLI executables (sbase, seleniumbase, etc.), not used by plugin
         }
 
     cwd = os.getcwd()
@@ -119,7 +124,12 @@ def get_plugin_subfolders(exclude_folders=None):
         subfolder_path = os.path.join(cwd, subfolder)
         if os.path.isdir(subfolder_path):
             # Filter out our special development folders like .build and .tx
-            if not subfolder.startswith(".") and subfolder not in exclude_folders:
+            # Also filter out pip metadata directories (not needed at runtime)
+            if (
+                not subfolder.startswith(".")
+                and subfolder not in exclude_folders
+                and not subfolder.endswith(".dist-info")
+            ):
                 folders.append(subfolder)
     return folders
 
@@ -201,7 +211,7 @@ def build_plugin(adjust_imports_func):
     adjust_imports_func()
 
     files = get_plugin_subfolders()
-    exclude = ["*.pyc", "*~", "*.xcf", "build.py", "*.po", "*.pot"]
+    exclude = ["*.pyc", "*~", "*.xcf", "build.py", "*.po", "*.pot", "drivers"]
     files.extend(glob("*.py"))
     files.extend(glob("*.md"))
     files.extend(glob("*.html"))
