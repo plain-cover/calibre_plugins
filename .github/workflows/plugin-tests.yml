@@ -148,21 +148,6 @@ jobs:
       run: |
         python -m pytest common/test_orchestrator_404.py -v
 
-    - name: Install Calibre
-      if: steps.changes.outputs.substantive_changes == 'true'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y calibre
-        calibre-debug --version
-
-        # To test against a specific Calibre version instead of the system default:
-        # sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0 libxcb-shape0 libopengl0
-        # sudo mkdir -p /opt/calibre
-        # wget -nv -O- https://download.calibre-ebook.com/7.21.0/calibre-7.21.0-x86_64.txz | sudo tar xJ -C /opt/calibre
-        # sudo ln -sf /opt/calibre/calibre-debug /usr/bin/calibre-debug
-        # sudo ln -sf /opt/calibre/calibre-customize /usr/bin/calibre-customize
-        # calibre-debug --version
-
     - name: Format check with Black
       if: steps.changes.outputs.substantive_changes == 'true'
       run: |
@@ -177,6 +162,21 @@ jobs:
       if: steps.changes.outputs.substantive_changes == 'true'
       run: |
         mypy --config-file=mypy.ini || true
+
+    - name: Install Calibre
+      if: steps.changes.outputs.substantive_changes == 'true'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y calibre
+        calibre-debug --version
+
+        # To test against a specific Calibre version instead of the system default:
+        # sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0 libxcb-shape0 libopengl0
+        # sudo mkdir -p /opt/calibre
+        # wget -nv -O- https://download.calibre-ebook.com/7.21.0/calibre-7.21.0-x86_64.txz | sudo tar xJ -C /opt/calibre
+        # sudo ln -sf /opt/calibre/calibre-debug /usr/bin/calibre-debug
+        # sudo ln -sf /opt/calibre/calibre-customize /usr/bin/calibre-customize
+        # calibre-debug --version
 
     - name: Build plugins
       if: steps.changes.outputs.substantive_changes == 'true'

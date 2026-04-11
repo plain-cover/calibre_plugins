@@ -188,7 +188,7 @@ TEST_BOOKS = [
             "title": "Pride and Prejudice",
             "authors": ["Jane Austen"],
             "series": None,
-            "pubdate": (1813, 1, 28),
+            "pubdate": lambda d: d is not None and d.year == 1813,  # HTML gives Jan 1; JSON API gives Jan 28
             "steam": 1,
             "star_rating": lambda x: x and x >= 4.0,  # Should be ~4.54 (range 0-5)
             "rating_count": lambda x: x and x > 1000,  # Should be ~1351
@@ -204,7 +204,7 @@ TEST_BOOKS = [
             "title": "Pride and Prejudice",
             "authors": ["Jane Austen"],
             "series": None,
-            "pubdate": (1813, 1, 28),
+            "pubdate": lambda d: d is not None and d.year == 1813,  # HTML gives Jan 1; JSON API gives Jan 28
             "steam": 1,
             "star_rating": lambda x: x is not None and 0 <= x <= 5,  # Range 0-5, should be ~4.54
             "rating_count": lambda x: x and x > 1000,  # Should be ~1351

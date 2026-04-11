@@ -17,7 +17,7 @@ try:
 except ImportError:
     from Queue import Empty, Queue  # type: ignore[import-not-found,no-redef]  # Python 2 compatibility
 
-from typing import cast, List, Tuple
+from typing import Any, Callable, cast, List, Tuple
 from six import text_type as unicode
 
 from lxml.html import fromstring
@@ -461,7 +461,18 @@ if __name__ == "__main__":
         if "pubdate" in book.expected_fields:
             expected_pubdate = book.expected_fields["pubdate"]
             if expected_pubdate is not None:
-                expected.append(pubdate_test(*cast(Tuple[int, int, int], expected_pubdate)))
+                if callable(expected_pubdate):
+
+                    def _make_pubdate_checker(fn: Callable) -> Callable:
+                        def checker(mi: Any) -> bool:
+                            return bool(fn(mi.pubdate))
+
+                        checker.__doc__ = f"pubdate check: {fn}"
+                        return checker
+
+                    expected.append(_make_pubdate_checker(expected_pubdate))
+                else:
+                    expected.append(pubdate_test(*cast(Tuple[int, int, int], expected_pubdate)))
 
         test_cases.append((query, expected))
 

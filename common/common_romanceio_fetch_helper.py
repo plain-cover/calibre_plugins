@@ -4,6 +4,7 @@ Used by both romanceio and romanceio_fields plugins.
 """
 
 import importlib
+import importlib.abc
 import os
 import platform
 import random
@@ -63,7 +64,7 @@ class VendoredModule(types.ModuleType):
         return sys.modules.get(submodule_name)
 
 
-class VendoredPackageFinder:
+class VendoredPackageFinder(importlib.abc.MetaPathFinder):
     """Find vendored packages and handle circular imports by creating module aliases"""
 
     def __init__(self, plugin_name, packages=None):
@@ -72,15 +73,25 @@ class VendoredPackageFinder:
         # Build map of package names to their prefixes
         self.packages = {pkg: f"{self.plugin_prefix}.{pkg}" for pkg in (packages or VENDORED_PACKAGES)}
 
-    def find_module(self, fullname: str, _path: Optional[Sequence[str]] = None) -> Optional["VendoredPackageFinder"]:
-        """Check if this is a vendored package import that needs redirection"""
+    def find_module(self, fullname: str, _path: Optional[Sequence[str]] = None) -> Optional["VendoredPackageFinder"]:  # type: ignore[override]
+        """Check if this is a vendored package import that needs redirection."""
         package_name = fullname.split(".")[0]
         return self if package_name in self.packages else None
 
     def load_module(self, fullname: str) -> types.ModuleType:
         """Load module and register under both real and alias names"""
-        if fullname in sys.modules:
-            return sys.modules[fullname]
+        # Only early-return for modules that are fully initialized.
+        # When called from Python's find_spec backward-compat path, _installed_safely
+        # pre-inserts an empty types.ModuleType into sys.modules before calling us.
+        # Returning that placeholder would break all subsequent submodule imports.
+        # We distinguish real/placeholder by checking for our own VendoredModule marker.
+        existing = sys.modules.get(fullname)
+        if existing is not None and isinstance(existing, VendoredModule):
+            # Our own re-entrancy placeholder — return to prevent infinite recursion
+            return existing
+        if existing is not None and getattr(existing, "__file__", None) is not None:
+            # Fully-loaded module (has __file__) — safe to reuse
+            return existing
 
         # Ensure parent module is loaded first
         if "." in fullname:
@@ -133,7 +144,7 @@ class VendoredPackageFinder:
             # like 'seleniumbase.fixtures.constants' are resolved correctly.
             was_in = self in sys.meta_path
             if was_in:
-                sys.meta_path.remove(self)
+                sys.meta_path.remove(self)  # type: ignore[arg-type]
             try:
                 imported = importlib.import_module(fullname)
                 sys.modules[fullname] = imported
@@ -147,7 +158,7 @@ class VendoredPackageFinder:
                 raise ImportError(f"No module named {fullname!r}")
             finally:
                 if was_in:
-                    sys.meta_path.insert(0, self)
+                    sys.meta_path.insert(0, self)  # type: ignore[arg-type]
 
 
 def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=None):
@@ -219,35 +230,36 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
             finder: VendoredPackageFinder = VendoredPackageFinder(plugin_name)  # type: ignore[assignment]
             sys.meta_path.insert(0, finder)  # type: ignore[arg-type]
 
-        # Add the plugin's zip (or directory) to sys.path so vendored packages
+        # Add the plugin's package directory to sys.path so vendored packages
         # can be imported directly via zipimport. This is required in calibre GUI
         # mode where the plugin is loaded from a zip that isn't on sys.path.
+        #
+        # Key insight: vendored packages (seleniumbase/, selenium/, …) sit ALONGSIDE
+        # the plugin's __init__.py, so the correct sys.path entry is the plugin's
+        # own package directory — not the zip root:
+        #   __file__  = 'Romance.io.zip/romanceio/__init__.py'
+        #   dirname   = 'Romance.io.zip/romanceio'   ← add this
+        #   zip root  = 'Romance.io.zip'             ← WRONG (seleniumbase not at top level)
+        #
+        # Calibre sometimes also sets __path__ to the bare zip root; we detect that
+        # and append plugin_name to reconstruct the correct subpath.
         plugin_module = sys.modules.get(f"calibre_plugins.{plugin_name}")
         if plugin_module:
             plugin_sys_path = None
-            # Try __file__ first (calibre sets this to <zip>/__init__.py or similar)
+            # dirname(__file__) gives the package dir for both real and zip paths
             plugin_file = getattr(plugin_module, "__file__", None)
             if plugin_file:
-                plugin_file_norm = os.path.normpath(str(plugin_file))
-                if ".zip" in plugin_file_norm.lower():
-                    idx = plugin_file_norm.lower().find(".zip")
-                    candidate = plugin_file_norm[: idx + 4]
-                    if os.path.isfile(candidate):
-                        plugin_sys_path = candidate
-                elif os.path.isfile(plugin_file_norm):
-                    plugin_sys_path = os.path.dirname(plugin_file_norm)
+                plugin_sys_path = os.path.dirname(os.path.normpath(str(plugin_file)))
             # Fall back to __path__
             if not plugin_sys_path:
                 for p in getattr(plugin_module, "__path__", None) or []:
                     p_norm = os.path.normpath(str(p))
-                    if ".zip" in p_norm.lower():
-                        idx = p_norm.lower().find(".zip")
-                        candidate = p_norm[: idx + 4]
-                        if os.path.isfile(candidate):
-                            plugin_sys_path = candidate
-                            break
-                    elif os.path.isdir(p_norm):
+                    if p_norm.lower().endswith(".zip") and os.path.isfile(p_norm):
+                        # Calibre set __path__ to the zip root; plugin dir is one level deeper
+                        plugin_sys_path = os.path.join(p_norm, plugin_name)
+                    elif p_norm:
                         plugin_sys_path = p_norm
+                    if plugin_sys_path:
                         break
             if plugin_sys_path and plugin_sys_path not in sys.path:
                 sys.path.insert(0, plugin_sys_path)
