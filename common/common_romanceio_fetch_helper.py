@@ -161,6 +161,10 @@ class VendoredPackageFinder(importlib.abc.MetaPathFinder):
                     sys.meta_path.insert(0, self)  # type: ignore[arg-type]
 
 
+class ChromeNotInstalledError(RuntimeError):
+    """Raised when Chrome is not installed on the system.  Not retryable."""
+
+
 def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=None):
     """
     Fetch a page using SeleniumBase with Cloudflare bypass.
@@ -450,6 +454,9 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
             return driver.page_source
 
         except Exception as e:  # pylint: disable=broad-except
+            msg = str(e)
+            if "chrome not found" in msg.lower() or "install it first" in msg.lower():
+                raise ChromeNotInstalledError(msg) from e
             _log(f"Chrome error: {type(e).__name__}: {e}")
             import traceback
 
@@ -462,6 +469,8 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
                     time.sleep(0.5)  # Give Chrome time to close
                 except Exception as quit_err:  # pylint: disable=broad-except
                     _log(f"Error closing driver: {quit_err}")
+    except ChromeNotInstalledError:
+        raise  # propagate immediately — no point retrying
     except Exception as e:  # pylint: disable=broad-except
         _log(f"Top-level error in fetch_page: {type(e).__name__}: {e}")
         import traceback

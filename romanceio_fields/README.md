@@ -171,6 +171,11 @@ This means popular/agreed-upon tags are preferred when capping.
 - Check that your custom columns are created and mapped correctly in plugin settings
 - Verify the lookup names match exactly (case-sensitive)
 
+**Chrome is not installed ("Chrome is not installed - HTML metadata fallback is unavailable"):**
+- The plugin uses Chrome to load Romance.io pages (required to bypass Cloudflare)
+- Install Chrome from [google.com/chrome](https://www.google.com/chrome/)
+- Without Chrome, the plugin cannot fetch data
+
 **Slow performance:**
 - Expected: 10–30 seconds per book - browser automation is required to bypass Cloudflare
 

@@ -65,7 +65,13 @@ calibre-debug test_json_html_parse_matches.py -- --live=<id>    # Specific book 
 
 ![Calibre "Edit metadata" menu emphasizing the "Ids" field where users can manually enter the Romance.io ID](../images/Edit%20metadata%20-%20set%20ID.png)
 
+**Chrome is not installed ("Chrome is not installed - HTML metadata fallback is unavailable"):**
+- The plugin uses Chrome to scrape Romance.io as a fallback when the JSON API is unavailable
+- Install Chrome from [google.com/chrome](https://www.google.com/chrome/) to enable this fallback
+- Without Chrome, metadata download will still work when the JSON API is available
+
 **Browser/chromedriver errors:**
+- Ensure Chrome is installed ([google.com/chrome](https://www.google.com/chrome/))
 - Check your internet connection
 - Check logs for errors
 

@@ -1,5 +1,5 @@
-"""
-Tests that a JSON API 404 (JsonApiEndpointError) is handled correctly:
+"""Tests that permanent failures (JsonApiEndpointError, ChromeNotInstalledError) are
+handled correctly:
   - No retries are attempted (returns immediately after the first failure)
   - The error is caught and converted to a graceful None result, not an exception
 """
@@ -12,6 +12,7 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 from common.common_romanceio_json_api import JsonApiEndpointError
+from common.common_romanceio_fetch_helper import ChromeNotInstalledError
 from common.common_romanceio_search_orchestrator import (
     SearchResult,
     _retry_with_delay,
@@ -27,6 +28,10 @@ from common.common_romanceio_search_orchestrator import (
 
 def _raise_404(*_args, **_kwargs):
     raise JsonApiEndpointError("JSON API endpoint unavailable (404): https://example.com")
+
+
+def _raise_chrome_not_installed(*_args, **_kwargs):
+    raise ChromeNotInstalledError("Chrome not found! Install it first!")
 
 
 def _return_none(*_args, **_kwargs):
@@ -165,6 +170,43 @@ def test_search_with_fallback_404_no_html_returns_none():
         authors=["Author"],
         json_search_func=lambda title, authors, log: (_ for _ in ()).throw(JsonApiEndpointError("404")),
         html_search_func=_return_none,
+        log_func=log_func,
+        max_retries=3,
+        retry_delay=0,
+    )
+
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# ChromeNotInstalledError tests
+# ---------------------------------------------------------------------------
+
+
+def test_chrome_not_installed_does_not_retry():
+    """ChromeNotInstalledError must exit after exactly 1 attempt, never retrying."""
+    attempts = []
+
+    def func():
+        attempts.append(1)
+        raise ChromeNotInstalledError("Chrome not found! Install it first!")
+
+    log_func, logs = _collecting_log()
+    result = _retry_with_delay(func, "HTML scraping", max_retries=3, retry_delay=0, log_func=log_func)
+
+    assert len(attempts) == 1, f"Expected 1 attempt, got {len(attempts)}"
+    assert result == SearchResult(success=False, result=None)
+    assert any("chrome is not installed" in msg.lower() for msg in logs)
+    assert not any("retry attempt" in msg.lower() for msg in logs)
+
+
+def test_chrome_not_installed_fetch_details_returns_none():
+    """ChromeNotInstalledError during HTML fetch yields None without retrying."""
+    log_func, _ = _collecting_log()
+    result = fetch_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=_raise_404,
+        html_fetch_func=_raise_chrome_not_installed,
         log_func=log_func,
         max_retries=3,
         retry_delay=0,
