@@ -14,8 +14,16 @@ except ImportError:
 
 try:
     from urllib.request import Request, urlopen
+    from urllib.error import HTTPError
 except ImportError:
     from urllib2 import Request, urlopen  # type: ignore[import-not-found,no-redef]
+    from urllib2 import HTTPError  # type: ignore[import-not-found,no-redef]
+
+
+class JsonApiEndpointError(RuntimeError):
+    """Raised when a Romance.io JSON API endpoint returns HTTP 404 (endpoint is down/retired)."""
+
+    pass
 
 
 def _make_json_request(url: str, timeout: int = 30, log_func: Optional[Callable] = None) -> Optional[Dict[str, Any]]:
@@ -55,6 +63,16 @@ def _make_json_request(url: str, timeout: int = 30, log_func: Optional[Callable]
 
         result = json.loads(data.decode("utf-8"))
         return result
+    except HTTPError as e:
+        if e.code == 404:
+            msg = f"JSON API endpoint unavailable (404): {url}"
+            if log_func:
+                log_func(msg)
+            raise JsonApiEndpointError(msg) from e
+        error_msg = f"JSON API request failed: HTTPError {e.code}: {e}"
+        if log_func:
+            log_func(error_msg)
+        raise
     except Exception as e:
         error_msg = f"JSON API request failed: {type(e).__name__}: {e}"
         if log_func:

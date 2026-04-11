@@ -14,6 +14,8 @@ if parent_dir not in sys.path:
 
 from typing import Optional, List, Callable, Any, NamedTuple, Dict
 
+from .common_romanceio_json_api import JsonApiEndpointError  # pylint: disable=import-outside-toplevel
+
 
 class SearchResult(NamedTuple):
     """Result of a search operation with retry logic.
@@ -85,6 +87,9 @@ def _retry_with_delay(
             error_type = type(e).__name__
             error_msg = str(e)
             log_func(f"✗ {method_name} attempt {attempt} failed: {error_type}: {error_msg}")
+            if isinstance(e, JsonApiEndpointError):
+                log_func("  Endpoint is down (404), skipping retries.")
+                return SearchResult(success=False, result=None)
             if attempt < max_retries:
                 log_func(f"  Will retry in {retry_delay}s...")
 

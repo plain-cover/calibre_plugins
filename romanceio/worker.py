@@ -92,15 +92,14 @@ class Worker(Thread):
             fetch_romanceio_book_page,
         )
 
-        page_html, is_valid = fetch_romanceio_book_page(self.url, self.log)
+        page_html, is_valid = fetch_romanceio_book_page(self.url, plugin_name="romanceio", log=self.log)
 
         if not is_valid:
-            # Invalid page (404) - not a technical failure, just not found
+            if not page_html:
+                # Chrome failed to fetch the page entirely - technical failure, should retry
+                raise RuntimeError(f"Chrome failed to fetch page for {romanceio_id}: {self.url}")
+            # Page loaded but content is a 404 - not a technical failure, just not found
             return None
-
-        if not page_html:
-            # Failed to fetch - raise to trigger retry
-            raise RuntimeError(f"Failed to fetch HTML page for {romanceio_id}")
 
         root = fromstring(page_html)
 

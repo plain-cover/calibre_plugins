@@ -3,9 +3,11 @@ Shared helper for fetching pages with SeleniumBase.
 Used by both romanceio and romanceio_fields plugins.
 """
 
+import importlib
 import os
 import platform
 import random
+import shutil
 import sys
 import tempfile
 import time
@@ -112,8 +114,6 @@ class VendoredPackageFinder:
         sys.modules[fullname] = placeholder
 
         try:
-            import importlib
-
             imported = importlib.import_module(real_name)
             sys.modules[fullname] = imported
             sys.modules[real_name] = imported
@@ -127,10 +127,30 @@ class VendoredPackageFinder:
         except Exception:
             sys.modules.pop(fullname, None)
             sys.modules.pop(real_name, None)
-            raise
+            # Redirect via calibre_plugins namespace failed (e.g. in calibre GUI mode).
+            # Fall back to a direct import via sys.path so zipimport can handle it.
+            # Import the full dotted name (not just the top-level package) so submodules
+            # like 'seleniumbase.fixtures.constants' are resolved correctly.
+            was_in = self in sys.meta_path
+            if was_in:
+                sys.meta_path.remove(self)
+            try:
+                imported = importlib.import_module(fullname)
+                sys.modules[fullname] = imported
+                sys.modules[real_name] = imported
+                if "." in fullname:
+                    parent_name, attr_name = fullname.rsplit(".", 1)
+                    if parent_name in sys.modules:
+                        setattr(sys.modules[parent_name], attr_name, imported)
+                return imported
+            except Exception:
+                raise ImportError(f"No module named {fullname!r}")
+            finally:
+                if was_in:
+                    sys.meta_path.insert(0, self)
 
 
-def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30):
+def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=None):
     """
     Fetch a page using SeleniumBase with Cloudflare bypass.
 
@@ -145,30 +165,45 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30):
         plugin_name: Name of the plugin ('romanceio' or 'romanceio_fields') for imports
         wait_for_element: Optional element to wait for in page source
         max_wait: Maximum seconds to wait for page load
+        log_func: Optional logging function to route errors to calibre's job log
 
     Returns:
         Page HTML as string, or None on error
     """
+
+    def _log(msg):
+        print(msg)
+        if log_func:
+            log_func(msg)
+
     try:
-        # Set up temp directories for SeleniumBase
-        temp_base = tempfile.gettempdir()
-        sb_drivers_dir = os.path.abspath(os.path.join(temp_base, "seleniumbase", "drivers"))
-        downloads_dir = os.path.abspath(os.path.join(temp_base, "sb_downloads"))
+        # Use a stable driver directory under the user's home dir so chromedriver
+        # persists across calibre sessions (calibre rotates its own temp dir each run)
+        stable_base = os.path.join(os.path.expanduser("~"), ".calibre_selenium")
+        sb_drivers_dir = os.path.abspath(os.path.join(stable_base, "drivers"))
+        downloads_dir = os.path.abspath(os.path.join(stable_base, "downloads"))
         # Use unique user_data_dir for each Chrome instance to prevent locking issues
         # when multiple instances run simultaneously (e.g., search + worker threads)
-        user_data_dir = os.path.abspath(os.path.join(temp_base, "sb_user_data", f"profile_{os.getpid()}_{time.time()}"))
+        user_data_dir = os.path.abspath(os.path.join(stable_base, "user_data", f"profile_{os.getpid()}_{time.time()}"))
 
         # Ensure all directories exist with proper permissions
         for dir_path in [sb_drivers_dir, downloads_dir, user_data_dir]:
             os.makedirs(dir_path, exist_ok=True)
 
-        # Clear cached SeleniumBase/fasteners modules to ensure fresh import
-        cached_sb_modules = [
-            key
-            for key in sys.modules
-            if key.startswith(f"calibre_plugins.{plugin_name}.seleniumbase")
-            or key.startswith(f"calibre_plugins.{plugin_name}.fasteners")
-        ]
+        # Clear cached SeleniumBase/fasteners modules to ensure fresh import.
+        # Clear both the calibre_plugins.{plugin_name}.* namespace AND the bare
+        # selenium/seleniumbase namespace - the latter is used when the zip is on sys.path.
+        _sb_prefixes = (
+            f"calibre_plugins.{plugin_name}.seleniumbase",
+            f"calibre_plugins.{plugin_name}.fasteners",
+            "seleniumbase",
+            "selenium",
+            "fasteners",
+            "mycdp",
+            "websockets",
+            "websocket",
+        )
+        cached_sb_modules = [key for key in list(sys.modules) if key.startswith(_sb_prefixes)]
         for module_name in cached_sb_modules:
             del sys.modules[module_name]
 
@@ -184,11 +219,47 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30):
             finder: VendoredPackageFinder = VendoredPackageFinder(plugin_name)  # type: ignore[assignment]
             sys.meta_path.insert(0, finder)  # type: ignore[arg-type]
 
-        # Import and patch constants FIRST to avoid Windows permission errors
-        constants = __import__(
-            f"calibre_plugins.{plugin_name}.seleniumbase.fixtures.constants",
-            fromlist=["Files", "MultiBrowser"],
-        )
+        # Add the plugin's zip (or directory) to sys.path so vendored packages
+        # can be imported directly via zipimport. This is required in calibre GUI
+        # mode where the plugin is loaded from a zip that isn't on sys.path.
+        plugin_module = sys.modules.get(f"calibre_plugins.{plugin_name}")
+        if plugin_module:
+            plugin_sys_path = None
+            # Try __file__ first (calibre sets this to <zip>/__init__.py or similar)
+            plugin_file = getattr(plugin_module, "__file__", None)
+            if plugin_file:
+                plugin_file_norm = os.path.normpath(str(plugin_file))
+                if ".zip" in plugin_file_norm.lower():
+                    idx = plugin_file_norm.lower().find(".zip")
+                    candidate = plugin_file_norm[: idx + 4]
+                    if os.path.isfile(candidate):
+                        plugin_sys_path = candidate
+                elif os.path.isfile(plugin_file_norm):
+                    plugin_sys_path = os.path.dirname(plugin_file_norm)
+            # Fall back to __path__
+            if not plugin_sys_path:
+                for p in getattr(plugin_module, "__path__", None) or []:
+                    p_norm = os.path.normpath(str(p))
+                    if ".zip" in p_norm.lower():
+                        idx = p_norm.lower().find(".zip")
+                        candidate = p_norm[: idx + 4]
+                        if os.path.isfile(candidate):
+                            plugin_sys_path = candidate
+                            break
+                    elif os.path.isdir(p_norm):
+                        plugin_sys_path = p_norm
+                        break
+            if plugin_sys_path and plugin_sys_path not in sys.path:
+                sys.path.insert(0, plugin_sys_path)
+
+        # Import and patch constants FIRST to avoid Windows permission errors.
+        # Use bare module names (e.g. "seleniumbase.fixtures.constants") rather than
+        # "calibre_plugins.{plugin_name}.seleniumbase.fixtures.constants".  In calibre
+        # GUI mode the plugin is loaded from a zip and Python's FileFinder tries to
+        # open 'Romance.io.zip\seleniumbase' as a real directory, causing
+        # FileNotFoundError.  Bare-name imports go through VendoredPackageFinder which
+        # redirects to the plugin namespace and falls back to zipimport on failure.
+        constants = importlib.import_module("seleniumbase.fixtures.constants")
 
         # Patch Files constants immediately
         constants.Files.DOWNLOADS_FOLDER = downloads_dir
@@ -219,36 +290,39 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30):
                     )
 
         # Now import other modules - they will pick up the patched constants
-        sb_install = __import__(
-            f"calibre_plugins.{plugin_name}.seleniumbase.console_scripts.sb_install",
-            fromlist=["sb_install"],
-        )
-        download_helper = __import__(
-            f"calibre_plugins.{plugin_name}.seleniumbase.core.download_helper",
-            fromlist=["download_helper"],
-        )
-        patcher = __import__(
-            f"calibre_plugins.{plugin_name}.seleniumbase.undetected.patcher",
-            fromlist=["patcher"],
-        )
+        sb_install = importlib.import_module("seleniumbase.console_scripts.sb_install")
+        download_helper = importlib.import_module("seleniumbase.core.download_helper")
+        patcher = importlib.import_module("seleniumbase.undetected.patcher")
 
         sb_install.DRIVER_DIR = sb_drivers_dir  # type: ignore[attr-defined]
         download_helper.downloads_path = downloads_dir  # type: ignore[attr-defined]
         patcher.Patcher.data_path = sb_drivers_dir
 
-        browser_launcher = __import__(
-            f"calibre_plugins.{plugin_name}.seleniumbase.core.browser_launcher",
-            fromlist=["browser_launcher"],
-        )
+        browser_launcher = importlib.import_module("seleniumbase.core.browser_launcher")
 
         is_windows = platform.system() == "Windows"
         uc_driver_name = "uc_driver.exe" if is_windows else "uc_driver"
         undetected_name = "undetected_chromedriver.exe" if is_windows else "undetected_chromedriver"
+        chromedriver_name = "chromedriver.exe" if is_windows else "chromedriver"
+
+        # browser_launcher.py computes DRIVER_DIR from drivers.__file__ at import time.
+        # When loaded from a zip, drivers.__file__ is a virtual path inside the zip,
+        # not a real directory.  Patch DRIVER_DIR to our stable real directory and
+        # repair os.environ["PATH"] accordingly.
+        old_driver_dir = getattr(browser_launcher, "DRIVER_DIR", None)
+        browser_launcher.DRIVER_DIR = sb_drivers_dir  # type: ignore[attr-defined]
+        if old_driver_dir and old_driver_dir != sb_drivers_dir:
+            path_env = os.environ.get("PATH", "")
+            path_env = path_env.replace(old_driver_dir + os.pathsep, "")
+            path_env = path_env.replace(old_driver_dir, "")
+            if sb_drivers_dir not in path_env:
+                path_env = sb_drivers_dir + os.pathsep + path_env
+            os.environ["PATH"] = path_env
 
         browser_launcher.LOCAL_UC_DRIVER = os.path.join(sb_drivers_dir, uc_driver_name)  # type: ignore[attr-defined]
+        browser_launcher.LOCAL_CHROMEDRIVER = os.path.join(sb_drivers_dir, chromedriver_name)  # type: ignore[attr-defined]
 
         # Install chromedriver if needed (SeleniumBase downloads it as "chromedriver")
-        chromedriver_name = "chromedriver.exe" if is_windows else "chromedriver"
         chromedriver_path = os.path.join(sb_drivers_dir, chromedriver_name)
         uc_driver_path = os.path.join(sb_drivers_dir, uc_driver_name)
 
@@ -257,8 +331,6 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30):
 
         # Copy chromedriver to uc_driver if needed
         if os.path.exists(chromedriver_path) and not os.path.exists(uc_driver_path):
-            import shutil
-
             shutil.copy2(chromedriver_path, uc_driver_path)
 
         # SeleniumBase's undetected mode expects to find both "uc_driver" and "undetected_chromedriver"
@@ -270,14 +342,9 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30):
                 temp_patcher.patch_exe()
 
             if not os.path.exists(undetected_path):
-                import shutil
-
                 shutil.copy2(uc_driver_path, undetected_path)
 
-        Driver = __import__(  # pylint: disable=invalid-name
-            f"calibre_plugins.{plugin_name}.seleniumbase",
-            fromlist=["Driver"],
-        ).Driver
+        Driver = importlib.import_module("seleniumbase.plugins.driver_manager").Driver  # pylint: disable=invalid-name
 
         driver = None
         try:
@@ -325,7 +392,7 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30):
                     # If page source is empty or very small, wait for it to load
                     if not page_source or len(page_source) < 100:
                         size = len(page_source) if page_source else 0
-                        print(f"Page source too small ({size} bytes), waiting...")
+                        _log(f"Page source too small ({size} bytes), waiting...")
                         time.sleep(1)
                         continue
 
@@ -334,23 +401,22 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30):
                     has_cloudflare = any(indicator.lower() in page_lower for indicator in cloudflare_indicators)
 
                     if has_cloudflare:
-                        # Debug: show which indicator was matched
                         matched = [ind for ind in cloudflare_indicators if ind.lower() in page_lower]
-                        print(f"CloudFlare challenge detected (matched: {matched}), waiting...")
+                        _log(f"CloudFlare challenge detected (matched: {matched}), waiting...")
                         time.sleep(1)
                         continue
 
                     # Page loaded successfully
-                    print(f"Page loaded successfully ({len(page_source)} bytes)")
+                    _log(f"Page loaded successfully ({len(page_source)} bytes)")
                     cleared = True
                     break
 
                 except Exception as e:  # pylint: disable=broad-except
-                    print(f"Error checking page: {e}")
+                    _log(f"Error checking page: {e}")
                     time.sleep(1)
 
             if not cleared:
-                print("Timeout waiting for Cloudflare")
+                _log("Timeout waiting for Cloudflare")
                 return None
 
             # Now wait for the actual content to load
@@ -367,12 +433,12 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30):
                         return page_source
                     time.sleep(0.5)
 
-                print(f"Timeout waiting for element: {wait_for_element}")
+                _log(f"Timeout waiting for element: {wait_for_element}")
                 return None
             return driver.page_source
 
         except Exception as e:  # pylint: disable=broad-except
-            print(f"Error: {e}")
+            _log(f"Chrome error: {type(e).__name__}: {e}")
             import traceback
 
             traceback.print_exc()
@@ -383,9 +449,9 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30):
                     driver.quit()
                     time.sleep(0.5)  # Give Chrome time to close
                 except Exception as quit_err:  # pylint: disable=broad-except
-                    print(f"Error closing driver: {quit_err}")
+                    _log(f"Error closing driver: {quit_err}")
     except Exception as e:  # pylint: disable=broad-except
-        print(f"Top-level error: {e}")
+        _log(f"Top-level error in fetch_page: {type(e).__name__}: {e}")
         import traceback
 
         traceback.print_exc()
@@ -426,10 +492,10 @@ def fetch_romanceio_book_page(url, plugin_name, log=None):
             print(msg)
 
     # First fetch without waiting for specific element to check for 404
-    page_html = fetch_page(url, plugin_name, wait_for_element=None, max_wait=30)
+    page_html = fetch_page(url, plugin_name, wait_for_element=None, max_wait=60, log_func=log_msg)
 
     if not page_html:
-        log_error("Failed to fetch page")
+        log_error("Failed to fetch page (Chrome timed out or crashed - check terminal for details)")
         return None, False
 
     if "the page you are looking for can't be found" in page_html.lower():
@@ -440,10 +506,10 @@ def fetch_romanceio_book_page(url, plugin_name, log=None):
     if "book-stats" not in page_html:
         log_msg("book-stats not found on first load, waiting for it to render...")
         # Retry with explicit wait for book-stats element
-        page_html = fetch_page(url, plugin_name, wait_for_element="book-stats", max_wait=30)
+        page_html = fetch_page(url, plugin_name, wait_for_element="book-stats", max_wait=30, log_func=log_msg)
 
         if not page_html:
-            log_error("Failed to fetch page on retry")
+            log_error("Failed to fetch page on retry (Chrome timed out or crashed - check terminal for details)")
             return None, False
 
         if "book-stats" not in page_html:

@@ -211,7 +211,17 @@ def build_plugin(adjust_imports_func):
     adjust_imports_func()
 
     files = get_plugin_subfolders()
-    exclude = ["*.pyc", "*~", "*.xcf", "build.py", "*.po", "*.pot", "drivers"]
+    # Exclude driver binaries but keep drivers/__init__.py so seleniumbase can
+    # import the drivers subpackage (browser_launcher.py does: from seleniumbase import drivers)
+    exclude = [
+        "*.pyc", "*~", "*.xcf", "build.py", "*.po", "*.pot",
+        "uc_driver", "uc_driver.exe",
+        "chromedriver", "chromedriver.exe",
+        "geckodriver", "geckodriver.exe",
+        "msedgedriver", "msedgedriver.exe",
+        "IEDriverServer.exe", "headless_ie_selenium.exe",
+        "undetected_chromedriver", "undetected_chromedriver.exe",
+    ]
     files.extend(glob("*.py"))
     files.extend(glob("*.md"))
     files.extend(glob("*.html"))
