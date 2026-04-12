@@ -17,7 +17,7 @@ try:
 except ImportError:
     from Queue import Empty, Queue  # type: ignore[import-not-found,no-redef]  # Python 2 compatibility
 
-from typing import cast, List, Tuple
+from typing import Any, Callable, cast, List, Tuple
 from six import text_type as unicode
 
 from lxml.html import fromstring
@@ -34,7 +34,7 @@ from calibre.constants import numeric_version as calibre_version
 PLUGIN_NAME = "Romance.io"
 PLUGIN_DESCRIPTION = "Downloads metadata from Romance.io"
 PLUGIN_AUTHOR = "plain-cover"
-PLUGIN_VERSION = (1, 0, 0)
+PLUGIN_VERSION = (1, 0, 1)
 PLUGIN_MINIMUM_CALIBRE_VERSION = (2, 0, 0)
 
 
@@ -43,7 +43,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
     name = "Romance.io"  # Must match PLUGIN_NAME
     description = "Downloads metadata from Romance.io"  # Must match PLUGIN_DESCRIPTION
     author = "plain-cover"  # Must match PLUGIN_AUTHOR
-    version = (1, 0, 0)  # Must match PLUGIN_VERSION
+    version = (1, 0, 1)  # Must match PLUGIN_VERSION
     minimum_calibre_version = (2, 0, 0)  # Must match PLUGIN_MINIMUM_CALIBRE_VERSION
 
     capabilities = frozenset(["identify", "cover"])
@@ -167,6 +167,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
         if identifiers is None:
             identifiers = {}
         matches = []
+        search_fallback: dict = {}  # populated during search if a JSON match is found
         romanceio_id = identifiers.get(self.ID_NAME, None)
         log.debug(f"identify - start. title={title}, authors={authors}, identifiers={identifiers}")
         # Unlike the other metadata sources, if we have a Romance.io ID then we
@@ -195,7 +196,19 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
 
                     books = search_books_json(title, authors, 30, log_func)
                     if books and len(books) > 0:
-                        return find_best_json_match(books, title, authors, log_func)
+                        match_id = find_best_json_match(books, title, authors, log_func)
+                        if match_id:
+                            # Capture title/authors from search result so Worker can show a
+                            # minimal result even if the detail-page fetch later fails.
+                            for b in books:
+                                if b.get("_id") == match_id:
+                                    info = b.get("info", {})
+                                    search_fallback["title"] = info.get("title", "")
+                                    search_fallback["authors"] = [
+                                        a.get("name", "") for a in b.get("authors", []) if a.get("name")
+                                    ]
+                                    break
+                        return match_id
                     return None
 
                 def html_search(title, authors, log_func):
@@ -223,7 +236,10 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
 
         from .worker import Worker
 
-        workers = [Worker(url, result_queue, br, log, i, self) for i, url in enumerate(matches)]
+        workers = [
+            Worker(url, result_queue, br, log, i, self, search_fallback=search_fallback)
+            for i, url in enumerate(matches)
+        ]
 
         for w in workers:
             w.start()
@@ -461,7 +477,18 @@ if __name__ == "__main__":
         if "pubdate" in book.expected_fields:
             expected_pubdate = book.expected_fields["pubdate"]
             if expected_pubdate is not None:
-                expected.append(pubdate_test(*cast(Tuple[int, int, int], expected_pubdate)))
+                if callable(expected_pubdate):
+
+                    def _make_pubdate_checker(fn: Callable) -> Callable:
+                        def checker(mi: Any) -> bool:
+                            return bool(fn(mi.pubdate))
+
+                        checker.__doc__ = f"pubdate check: {fn}"
+                        return checker
+
+                    expected.append(_make_pubdate_checker(expected_pubdate))
+                else:
+                    expected.append(pubdate_test(*cast(Tuple[int, int, int], expected_pubdate)))
 
         test_cases.append((query, expected))
 

@@ -8,6 +8,7 @@ fake-useragent==2.2.0
 black==24.10.0
 pylint==3.3.2
 mypy==1.13.0
+pytest==8.3.5
 
 # Type stubs for IDE support
 types-lxml==2024.9.16

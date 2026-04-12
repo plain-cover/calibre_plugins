@@ -245,6 +245,10 @@ def do_metadata_download(
         assert job.result is not None
         results = job.result
         book_id = job.book_id
+        # Print any log lines collected inside the child process so they appear
+        # in the calibre job log (child stdout is not captured directly).
+        for log_line in results.pop("__log__", []):
+            print(log_line)
         book_results_map[book_id] = results
         count = count + 1
         notification(float(count) / total, "Downloading metadata from Romance.io")
@@ -260,6 +264,17 @@ def get_romanceio_fields_for_book(
     romanceio_id: str, fields_to_run: List[str], max_tags: int, prefer_html: bool = False
 ) -> Dict[str, Any]:
     """Download and parse requested Romance.io fields for a single book."""
+    logs: List[str] = []
+
+    def log(msg: str) -> None:
+        logs.append(msg)
+
+    def _result(fields: Dict[str, Any]) -> Dict[str, Any]:
+        """Attach collected log lines to a result dict and return it."""
+        if logs:
+            fields["__log__"] = logs
+        return fields
+
     try:
         iterator = None
 
@@ -279,41 +294,41 @@ def get_romanceio_fields_for_book(
 
                 if prefer_html:
                     # Skip JSON API and fetch directly from the website for exact tag matching
-                    print(f"prefer_html=True: fetching HTML directly for {romanceio_id}")
-                    result = _fetch_html(romanceio_id, print)
+                    log(f"prefer_html=True: fetching HTML directly for {romanceio_id}")
+                    result = _fetch_html(romanceio_id, log)
                     if result is None:
-                        print(f"Failed to fetch HTML data for {romanceio_id}")
-                        return {}
-                    return _build_fields(result, fields_to_run, max_tags, from_json=False)
+                        log(f"Failed to fetch HTML data for {romanceio_id}")
+                        return _result({})
+                    return _result(_build_fields(result, fields_to_run, max_tags, from_json=False))
 
                 result = fetch_details_with_fallback(
                     romanceio_id=romanceio_id,
                     json_fetch_func=fetch_json,
                     html_fetch_func=fetch_html,
-                    log_func=print,
+                    log_func=log,
                     max_retries=3,
                     retry_delay=2.0,
                 )
 
                 if result is None:
-                    print(f"Failed to fetch data for {romanceio_id}")
-                    return {}
+                    log(f"Failed to fetch data for {romanceio_id}")
+                    return _result({})
 
                 # Result is either JSON dict or HTML root element
                 if isinstance(result, dict):
-                    return _build_fields(result, fields_to_run, max_tags, from_json=True)
+                    return _result(_build_fields(result, fields_to_run, max_tags, from_json=True))
                 # It's an HTML root element
-                return _build_fields(result, fields_to_run, max_tags, from_json=False)
+                return _result(_build_fields(result, fields_to_run, max_tags, from_json=False))
             finally:
                 if iterator:
                     iterator.__exit__()
                     iterator = None
     except DRMError:
-        return {}
+        return _result({})
     except (ValueError, TypeError, AttributeError, KeyError, IndexError) as e:
-        print(f"Error parsing Romance.io data: {e}")
-        traceback.print_exc()
-        return {}
+        log(f"Error parsing Romance.io data: {e}")
+        log(traceback.format_exc())
+        return _result({})
 
 
 def _fetch_json(

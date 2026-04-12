@@ -18,6 +18,8 @@ test_data.py
 !common/test_data.py
 test_json_search_matching.py
 !common/test_json_search_matching.py
+test_orchestrator_404.py
+!common/test_orchestrator_404.py
 test_tag_slug_conversion.py
 !common/test_tag_slug_conversion.py
 update_static_test_data.py

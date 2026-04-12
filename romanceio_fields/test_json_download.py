@@ -57,9 +57,14 @@ def fetch_and_parse_json(romanceio_id: str, is_negative_test: bool) -> tuple:
 
     parse_fields_from_json = parse_json.parse_fields_from_json
     get_book_details_json = common_json_api.get_book_details_json
+    json_api_endpoint_error = common_json_api.JsonApiEndpointError
 
     print(f"Fetching JSON API data for {romanceio_id}...")
-    book_json = get_book_details_json(romanceio_id, log_func=print, timeout=30)
+    try:
+        book_json = get_book_details_json(romanceio_id, log_func=print, timeout=30)
+    except json_api_endpoint_error as e:
+        print(f"⚠️  SKIPPED: JSON API endpoint unavailable: {e}")
+        return (None, True)
 
     if book_json is None:
         print(f"○ JSON API returned no data for {romanceio_id}")
