@@ -15,7 +15,7 @@ class Worker(Thread):
     Get book details from Romance.io book page in a separate thread
     """
 
-    def __init__(self, url, result_queue, browser, log, relevance, plugin, timeout=20):
+    def __init__(self, url, result_queue, browser, log, relevance, plugin, timeout=20, search_fallback=None):
         Thread.__init__(self)
         self.daemon = True
         self.url, self.result_queue = url, result_queue
@@ -24,6 +24,7 @@ class Worker(Thread):
         self.browser = browser.clone_browser()
         self.cover_url = None
         self.romanceio_id = None
+        self.search_fallback = search_fallback or {}
 
     def run(self):
         try:
@@ -57,7 +58,18 @@ class Worker(Thread):
         )
 
         if result is None:
-            self.log.error(f"Failed to fetch details for {romanceio_id} from {self.url!r}")
+            # Both JSON API and HTML scraping failed. If we captured basic metadata
+            # from the search step (e.g. Chrome not installed), emit a minimal result
+            # so the book still appears as a Romance.io match in calibre.
+            fallback_title = self.search_fallback.get("title", "")
+            fallback_authors = self.search_fallback.get("authors", [])
+            if fallback_title and fallback_authors:
+                self.log.info(
+                    f"Detail fetch failed — using search result as minimal fallback for {romanceio_id}"
+                )
+                self._build_minimal_metadata(romanceio_id, fallback_title, fallback_authors)
+            else:
+                self.log.error(f"Failed to fetch details for {romanceio_id} from {self.url!r}")
             return
 
         # Result could be JSON dict or HTML root element
@@ -115,6 +127,26 @@ class Worker(Thread):
             raise RuntimeError(f"Page contains error: {msg}")
 
         return root
+
+    def _build_minimal_metadata(self, romanceio_id, title, authors):
+        """Build a minimal Metadata object from search-result data when full detail fetch fails.
+
+        This ensures the book still appears as a Romance.io match in calibre even when
+        Chrome is not installed (or any other permanent detail-fetch failure), so the
+        user at least gets the ID link and cover.
+        """
+        mi = Metadata(title, authors)
+        mi.set_identifier("romanceio", romanceio_id)
+        self.romanceio_id = romanceio_id
+
+        # Cover URL is predictable from the ID even without fetching the detail page
+        cover_url = f"https://s3.amazonaws.com/romance.io/books/large/{romanceio_id}.jpg"
+        self.cover_url = cover_url
+        self.plugin.cache_identifier_to_cover_url(romanceio_id, cover_url)
+
+        mi.source_relevance = self.relevance
+        self.plugin.clean_downloaded_metadata(mi)
+        self.result_queue.put(mi)
 
     def _build_metadata_from_json(self, romanceio_id, book_json):
         """Build Calibre Metadata object from JSON API response."""

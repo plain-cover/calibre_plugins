@@ -167,6 +167,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
         if identifiers is None:
             identifiers = {}
         matches = []
+        search_fallback: dict = {}  # populated during search if a JSON match is found
         romanceio_id = identifiers.get(self.ID_NAME, None)
         log.debug(f"identify - start. title={title}, authors={authors}, identifiers={identifiers}")
         # Unlike the other metadata sources, if we have a Romance.io ID then we
@@ -195,7 +196,19 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
 
                     books = search_books_json(title, authors, 30, log_func)
                     if books and len(books) > 0:
-                        return find_best_json_match(books, title, authors, log_func)
+                        match_id = find_best_json_match(books, title, authors, log_func)
+                        if match_id:
+                            # Capture title/authors from search result so Worker can show a
+                            # minimal result even if the detail-page fetch later fails.
+                            for b in books:
+                                if b.get("_id") == match_id:
+                                    info = b.get("info", {})
+                                    search_fallback["title"] = info.get("title", "")
+                                    search_fallback["authors"] = [
+                                        a.get("name", "") for a in b.get("authors", []) if a.get("name")
+                                    ]
+                                    break
+                        return match_id
                     return None
 
                 def html_search(title, authors, log_func):
@@ -223,7 +236,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
 
         from .worker import Worker
 
-        workers = [Worker(url, result_queue, br, log, i, self) for i, url in enumerate(matches)]
+        workers = [Worker(url, result_queue, br, log, i, self, search_fallback=search_fallback) for i, url in enumerate(matches)]
 
         for w in workers:
             w.start()
