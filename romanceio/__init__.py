@@ -236,7 +236,10 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
 
         from .worker import Worker
 
-        workers = [Worker(url, result_queue, br, log, i, self, search_fallback=search_fallback) for i, url in enumerate(matches)]
+        workers = [
+            Worker(url, result_queue, br, log, i, self, search_fallback=search_fallback)
+            for i, url in enumerate(matches)
+        ]
 
         for w in workers:
             w.start()

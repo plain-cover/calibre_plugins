@@ -64,9 +64,7 @@ class Worker(Thread):
             fallback_title = self.search_fallback.get("title", "")
             fallback_authors = self.search_fallback.get("authors", [])
             if fallback_title and fallback_authors:
-                self.log.info(
-                    f"Detail fetch failed — using search result as minimal fallback for {romanceio_id}"
-                )
+                self.log.info(f"Detail fetch failed — using search result as minimal fallback for {romanceio_id}")
                 self._build_minimal_metadata(romanceio_id, fallback_title, fallback_authors)
             else:
                 self.log.error(f"Failed to fetch details for {romanceio_id} from {self.url!r}")
