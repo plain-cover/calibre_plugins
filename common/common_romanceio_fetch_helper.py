@@ -193,7 +193,7 @@ def sanitize_html_for_lxml(html: str) -> str:
     return cleaned.encode("utf-8", errors="replace").decode("utf-8")
 
 
-def parse_html_from_selenium(html: str):
+def parse_html_from_selenium(html: str) -> "lxml.html.HtmlElement":  # type: ignore[name-defined]
     """Parse Selenium page_source HTML safely with lxml.
 
     Strips XML 1.0 illegal chars and lone surrogates, then parses using
