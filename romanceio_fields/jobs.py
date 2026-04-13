@@ -374,7 +374,9 @@ def _fetch_html(
         # Failed to fetch - technical failure
         raise RuntimeError(f"Failed to fetch HTML page for {romanceio_id}")
 
-    root = fromstring(raw_html)
+    from calibre_plugins.romanceio_fields.common_romanceio_fetch_helper import sanitize_html_for_lxml  # type: ignore[import-not-found]  # pylint: disable=import-error
+
+    root = fromstring(sanitize_html_for_lxml(raw_html))
     return root
 
 

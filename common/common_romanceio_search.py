@@ -19,6 +19,11 @@ except ImportError:
     fromstring = None  # type: ignore[assignment]  # Will fail if HTML parsing is actually needed
 
 try:
+    from .common_romanceio_fetch_helper import sanitize_html_for_lxml
+except ImportError:
+    sanitize_html_for_lxml = None  # type: ignore[assignment]  # Will fail if HTML parsing is actually needed
+
+try:
     from calibre.utils.icu import lower  # type: ignore[misc]
 except ImportError:
     # Fallback for when running outside Calibre environment
@@ -487,7 +492,7 @@ def search_for_romanceio_id(title, authors, fetch_page_func, log_func=print):
         raise RuntimeError(error_msg)
 
     try:
-        root = fromstring(raw_html)  # type: ignore[misc]
+        root = fromstring(sanitize_html_for_lxml(raw_html))  # type: ignore[misc]
     except (ValueError, TypeError, OSError) as e:
         error_msg = f"Failed to parse Romance.io search page HTML: {e}"
         log_func(error_msg)

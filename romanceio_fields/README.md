@@ -131,6 +131,7 @@ calibre-debug test_json_parsing.py          # Star rating, steam, vote count, ta
 calibre-debug test_json_search_matching.py  # Best-match selection from JSON search results
 calibre-debug test_tag_mapping.py           # Display-name consistency, topics-page HTML extraction
 calibre-debug test_tag_slug_conversion.py   # Slug-to-display-name conversion (copied from common/)
+calibre-debug test_html_sanitizer.py        # sanitize_html_for_lxml() strips XML 1.0 illegal chars (copied from common/)
 ```
 
 **HTML unit tests** (offline, uses static HTML from `common_romanceio_static_test_data/`):
@@ -147,7 +148,7 @@ calibre-debug test_json_html_parse_matches.py -- --live         # 1 live book
 calibre-debug test_json_html_parse_matches.py -- --live=<id>    # Specific book ID
 ```
 
-> `test_json_search_matching.py` and `test_tag_slug_conversion.py` are copied from `common/` during build.
+> `test_json_search_matching.py`, `test_tag_slug_conversion.py`, and `test_html_sanitizer.py` are copied from `common/` during build.
 
 ## Tag Filtering Detail
 
@@ -182,7 +183,8 @@ This means popular/agreed-upon tags are preferred when capping.
 ## Support
 
 Report issues on [GitHub Issues](https://github.com/plain-cover/calibre_plugins/issues). Include:
-- Exact title and author in Calibre, and the expected Romance.io URL
+- Exact **title and author in Calibre**, and the **expected Romance.io URL**
+- **Which plugin** - if the issue happened when clicking the magnifying glass icon, then it is due to the **Romance.io Fields** plugin; if it happened during a metadata download, it is the **Romance.io** plugin
 - **Calibre version** - shown in the bottom-left of the Calibre window, or via **Help > About Calibre**
 - **Plugin version** - **Preferences > Plugins**, find the plugin (Romance.io Fields), note the version (e.g. 1.0.0)
 - **Error logs** - if a job fails, a pop-up appears with the error. Otherwise, click the job count in the bottom-right of Calibre, select the failed job, and click **Show job details**. Copy and paste the output.
