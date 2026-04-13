@@ -1,6 +1,6 @@
 from threading import Thread
 
-from lxml.html import fromstring, tostring
+from lxml.html import tostring
 
 from calibre.ebooks.metadata.book.base import Metadata
 import calibre_plugins.romanceio.config as cfg  # type: ignore[import-not-found]  # pylint: disable=import-error
@@ -112,9 +112,9 @@ class Worker(Thread):
             return None
 
         log_func(f"HTML fetch: parsing {len(page_html)} bytes of HTML for {romanceio_id}")
-        from calibre_plugins.romanceio.common_romanceio_fetch_helper import sanitize_html_for_lxml  # type: ignore[import-not-found]  # pylint: disable=import-error
+        from calibre_plugins.romanceio.common_romanceio_fetch_helper import parse_html_from_selenium  # type: ignore[import-not-found]  # pylint: disable=import-error
 
-        root = fromstring(sanitize_html_for_lxml(page_html))
+        root = parse_html_from_selenium(page_html)
 
         title_node = root.xpath("//title")
         if title_node:

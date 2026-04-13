@@ -67,7 +67,7 @@ def _retry_with_delay(
 
             # Function completed without exception - return success with result
             # (even if result is None, which means search succeeded but no match found)
-            if result:
+            if result is not None:
                 # Limit log output for large results
                 if isinstance(result, str):
                     log_func(f"✓ {method_name} found match: {result}")
@@ -216,7 +216,7 @@ def fetch_details_with_fallback(
         log_func=log_func,
     )
 
-    if html_fetch.result:
+    if html_fetch.result is not None:
         return html_fetch.result
 
     if html_fetch.success:

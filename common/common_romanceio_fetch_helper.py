@@ -174,16 +174,45 @@ class ChromeNotInstalledError(RuntimeError):
 _XML10_ILLEGAL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
 
 
-def sanitize_html_for_lxml(html: str) -> bytes:
-    """Prepare a Selenium page_source string for lxml.html.fromstring().
+def sanitize_html_for_lxml(html: str) -> str:
+    """Strip XML 1.0 illegal chars and lone surrogates from a Selenium page_source string.
 
-    Strips all XML 1.0 illegal characters and encodes to UTF-8 bytes.
-    Lone Unicode surrogates (which Python allows in str but can't encode to UTF-8)
-    are replaced with U+FFFD via errors='replace'.
+    Returns a clean str with all XML 1.0 illegal characters removed and lone surrogates
+    replaced with U+FFFD via a UTF-8 round-trip.
 
-    Use this instead of bare fromstring(str) whenever the HTML comes from Selenium.
+    NOTE: Do NOT pass the result of this function to bare lxml.html.fromstring() --
+    that can still raise XMLSyntaxError: internal error on Windows due to lxml's internal
+    str-to-bytes conversion path. Use parse_html_from_selenium() instead, which passes
+    bytes with an explicit HTMLParser(encoding="utf-8") to bypass that path entirely.
+
+    This function is retained as a standalone sanitizer for contexts that need a clean
+    str without immediately parsing it.
     """
-    return _XML10_ILLEGAL_CHARS_RE.sub("", html).encode("utf-8", errors="replace")
+    cleaned = _XML10_ILLEGAL_CHARS_RE.sub("", html)
+    # Round-trip through UTF-8 to replace any lone surrogates with U+FFFD
+    return cleaned.encode("utf-8", errors="replace").decode("utf-8")
+
+
+def parse_html_from_selenium(html: str):
+    """Parse Selenium page_source HTML safely with lxml.
+
+    Strips XML 1.0 illegal chars and lone surrogates, then parses using
+    lxml.html.HTMLParser(encoding="utf-8") with bytes. This bypasses the
+    PyUnicode_AsUTF8AndSize str-encoding path that can produce
+    XMLSyntaxError: internal error for certain characters that libxml2
+    rejects even after str sanitization (e.g. C1 control chars like \\x85
+    in specific HTML positions). Passing bytes with an explicit encoding
+    forces libxml2 to use its own UTF-8 decode path which has better recovery.
+
+    Returns:
+        lxml.html.HtmlElement: parsed document root
+    """
+    from lxml.html import HTMLParser, fromstring as _html_fromstring  # local import - lxml may be vendored
+
+    cleaned = _XML10_ILLEGAL_CHARS_RE.sub("", html)
+    html_bytes = cleaned.encode("utf-8", errors="replace")
+    parser = HTMLParser(encoding="utf-8")
+    return _html_fromstring(html_bytes, parser=parser)
 
 
 def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=None):

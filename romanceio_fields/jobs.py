@@ -6,7 +6,6 @@ We use jobs to manage downloading fields from Romance.io.
 import traceback
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
-from lxml.html import fromstring
 
 from calibre.customize.ui import quick_metadata
 from calibre.ebooks import DRMError
@@ -374,9 +373,9 @@ def _fetch_html(
         # Failed to fetch - technical failure
         raise RuntimeError(f"Failed to fetch HTML page for {romanceio_id}")
 
-    from calibre_plugins.romanceio_fields.common_romanceio_fetch_helper import sanitize_html_for_lxml  # type: ignore[import-not-found]  # pylint: disable=import-error
+    from calibre_plugins.romanceio_fields.common_romanceio_fetch_helper import parse_html_from_selenium  # type: ignore[import-not-found]  # pylint: disable=import-error
 
-    root = fromstring(sanitize_html_for_lxml(raw_html))
+    root = parse_html_from_selenium(raw_html)
     return root
 
 
