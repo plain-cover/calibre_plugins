@@ -14,9 +14,9 @@ except ImportError:
     from urllib import quote  # type: ignore
 
 try:
-    from lxml.html import fromstring
+    from .common_romanceio_fetch_helper import parse_html_from_selenium
 except ImportError:
-    fromstring = None  # type: ignore[assignment]  # Will fail if HTML parsing is actually needed
+    parse_html_from_selenium = None  # type: ignore[assignment]  # Will fail if HTML parsing is actually needed
 
 try:
     from calibre.utils.icu import lower  # type: ignore[misc]
@@ -487,7 +487,7 @@ def search_for_romanceio_id(title, authors, fetch_page_func, log_func=print):
         raise RuntimeError(error_msg)
 
     try:
-        root = fromstring(raw_html)  # type: ignore[misc]
+        root = parse_html_from_selenium(raw_html)  # type: ignore[misc]
     except (ValueError, TypeError, OSError) as e:
         error_msg = f"Failed to parse Romance.io search page HTML: {e}"
         log_func(error_msg)

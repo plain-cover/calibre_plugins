@@ -664,4 +664,22 @@ TEST_BOOKS = [
             "tags": lambda x, delimiter: x is not None and len(x.split(delimiter)) > 0,
         },
     ),
+    # A book with illegal special characters in the HTML
+    BookTestData(
+        romanceio_id="661508da7599d7262025d680",
+        title="Bull Moon Rising",
+        authors=["Ruby Dixon"],
+        expected_fields={
+            "romanceio_id": "661508da7599d7262025d680",
+            "title": "Bull Moon Rising",
+            "authors": ["Ruby Dixon"],
+            "series": "Royal Artifactual Guild",
+            "series_index": 1.0,
+            "pubdate": (2024, 10, 15),
+            "steam": 4,
+            "star_rating": lambda x: x is not None and 0 <= x <= 5,
+            "rating_count": lambda x: x is not None and x >= 0,
+            "tags": lambda x, delimiter: x is not None and len(x.split(delimiter)) > 0,
+        },
+    ),
 ]

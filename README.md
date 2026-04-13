@@ -12,6 +12,8 @@ Two Calibre plugins that link your library with [Romance.io](https://romance.io)
 
 > **Two types of plugin:** The **Romance.io** plugin is a *metadata source plugin* - it plugs into Calibre's built-in metadata download system, the same place as other sources like Amazon or Goodreads. The **Romance.io Fields** plugin is an *interface action plugin* - it adds a toolbar button that you click manually to fetch data into custom columns you create. They work well together: running the Romance.io metadata download first stores an ID on the book, and Romance.io Fields uses that stored ID to skip re-searching and go straight to downloading fields.
 
+**[Installation Instructions](#installation)**
+
 ## Romance.io - Metadata Source Plugin for Calibre
 
 Adds [Romance.io](https://romance.io) as an additional source for Calibre's metadata download system. When you run a metadata download on a book, Calibre searches for the book by title and author on sites including [Romance.io](https://romance.io), and if the book is found, connects the book in your library to the book on [Romance.io](https://romance.io) so that you can click a link to go straight to the book's [Romance.io](https://romance.io) page, and see metadata like the cover image, series, date published, and genre tags in your Calibre library.

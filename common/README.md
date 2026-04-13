@@ -14,6 +14,7 @@ This folder contains shared code between the romanceio and romanceio_fields plug
 - **common_widgets.py** - Custom Qt controls (ReadOnlyTableWidgetItem, etc.)
 - **test_json_search_matching.py** - Shared test: JSON search result matching
 - **test_tag_slug_conversion.py** - Shared test: slug-to-display-name conversion
+- **test_html_sanitizer.py** - Shared test: `sanitize_html_for_lxml()` strips XML 1.0 illegal chars from Selenium HTML
 
 ## How it works
 

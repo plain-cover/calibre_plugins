@@ -38,6 +38,7 @@ calibre-debug test_json_parsing.py          # Title, authors, cover, ID from JSO
 calibre-debug test_json_search_matching.py  # Best-match selection from JSON search results
 calibre-debug test_tag_mapping.py           # Genre mapping pipeline: slugs -> display names -> Calibre tags
 calibre-debug test_tag_slug_conversion.py   # Slug-to-display-name conversion (copied from common/)
+calibre-debug test_html_sanitizer.py        # sanitize_html_for_lxml() strips XML 1.0 illegal chars (copied from common/)
 ```
 
 **HTML tests** (offline, uses static HTML files in `common_romanceio_static_test_data/`):
@@ -54,7 +55,7 @@ calibre-debug test_json_html_parse_matches.py -- --live         # 1 live book
 calibre-debug test_json_html_parse_matches.py -- --live=<id>    # Specific book ID
 ```
 
-> `test_json_search_matching.py` and `test_tag_slug_conversion.py` are copied from `common/` during build.
+> `test_json_search_matching.py`, `test_tag_slug_conversion.py`, and `test_html_sanitizer.py` are copied from `common/` during build.
 
 ## Troubleshooting
 
@@ -78,7 +79,8 @@ calibre-debug test_json_html_parse_matches.py -- --live=<id>    # Specific book 
 ## Support
 
 Report issues on [GitHub Issues](https://github.com/plain-cover/calibre_plugins/issues). Include:
-- Exact title and author in Calibre, and the expected Romance.io URL
+- Exact **title and author in Calibre**, and the **expected Romance.io URL**
+- **Which plugin** - if the issue happened during a metadata download (right-click > **Download metadata**), then it is from the **Romance.io** plugin; if the issue happened when clicking the magnifying glass icon, then it is due to the **Romance.io Fields** plugin
 - **Calibre version** - shown in the bottom-left of the Calibre window, or via **Help > About Calibre**
 - **Plugin version** - **Preferences > Plugins**, find the plugin (Romance.io), note the version (e.g. 1.0.0)
 - **Error logs** - if a job fails, a pop-up appears with the error. Otherwise, click the job count in the bottom-right of Calibre, select the failed job, and click **Show job details**. Copy and paste the output.

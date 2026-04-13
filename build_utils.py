@@ -188,6 +188,7 @@ def adjust_common_imports_for_plugin(plugin_specific_files=None):
         "test_data.py",
         "test_json_search_matching.py",
         "test_tag_slug_conversion.py",
+        "test_html_sanitizer.py",
     ]
 
     for filename in common_files:

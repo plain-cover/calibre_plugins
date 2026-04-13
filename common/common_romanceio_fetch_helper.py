@@ -8,6 +8,7 @@ import importlib.abc
 import os
 import platform
 import random
+import re
 import shutil
 import sys
 import tempfile
@@ -87,10 +88,10 @@ class VendoredPackageFinder(importlib.abc.MetaPathFinder):
         # We distinguish real/placeholder by checking for our own VendoredModule marker.
         existing = sys.modules.get(fullname)
         if existing is not None and isinstance(existing, VendoredModule):
-            # Our own re-entrancy placeholder — return to prevent infinite recursion
+            # Our own re-entrancy placeholder - return to prevent infinite recursion
             return existing
         if existing is not None and getattr(existing, "__file__", None) is not None:
-            # Fully-loaded module (has __file__) — safe to reuse
+            # Fully-loaded module (has __file__) - safe to reuse
             return existing
 
         # Ensure parent module is loaded first
@@ -163,6 +164,55 @@ class VendoredPackageFinder(importlib.abc.MetaPathFinder):
 
 class ChromeNotInstalledError(RuntimeError):
     """Raised when Chrome is not installed on the system.  Not retryable."""
+
+
+# XML 1.0 §2.2: legal chars are #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
+# Everything else is illegal and causes lxml to raise XMLSyntaxError: internal error.
+# Selenium's page_source is a DOM serialization - the browser decodes HTML entities before
+# serializing, so characters that were safely entity-encoded in the raw server HTML (e.g. &#x0B;)
+# become literal control characters in the returned string.
+_XML10_ILLEGAL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\ufffe\uffff]")
+
+
+def sanitize_html_for_lxml(html: str) -> str:
+    """Strip XML 1.0 illegal chars and lone surrogates from a Selenium page_source string.
+
+    Returns a clean str with all XML 1.0 illegal characters removed and lone surrogates
+    replaced with U+FFFD via a UTF-8 round-trip.
+
+    NOTE: Do NOT pass the result of this function to bare lxml.html.fromstring() --
+    that can still raise XMLSyntaxError: internal error on Windows due to lxml's internal
+    str-to-bytes conversion path. Use parse_html_from_selenium() instead, which passes
+    bytes with an explicit HTMLParser(encoding="utf-8") to bypass that path entirely.
+
+    This function is retained as a standalone sanitizer for contexts that need a clean
+    str without immediately parsing it.
+    """
+    cleaned = _XML10_ILLEGAL_CHARS_RE.sub("", html)
+    # Round-trip through UTF-8 to replace any lone surrogates with U+FFFD
+    return cleaned.encode("utf-8", errors="replace").decode("utf-8")
+
+
+def parse_html_from_selenium(html: str) -> "lxml.html.HtmlElement":  # type: ignore[name-defined]
+    """Parse Selenium page_source HTML safely with lxml.
+
+    Strips XML 1.0 illegal chars and lone surrogates, then parses using
+    lxml.html.HTMLParser(encoding="utf-8") with bytes. This bypasses the
+    PyUnicode_AsUTF8AndSize str-encoding path that can produce
+    XMLSyntaxError: internal error for certain characters that libxml2
+    rejects even after str sanitization (e.g. C1 control chars like \\x85
+    in specific HTML positions). Passing bytes with an explicit encoding
+    forces libxml2 to use its own UTF-8 decode path which has better recovery.
+
+    Returns:
+        lxml.html.HtmlElement: parsed document root
+    """
+    from lxml.html import HTMLParser, fromstring as _html_fromstring  # local import - lxml may be vendored
+
+    cleaned = _XML10_ILLEGAL_CHARS_RE.sub("", html)
+    html_bytes = cleaned.encode("utf-8", errors="replace")
+    parser = HTMLParser(encoding="utf-8")
+    return _html_fromstring(html_bytes, parser=parser)
 
 
 def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=None):
@@ -240,7 +290,7 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
         #
         # Key insight: vendored packages (seleniumbase/, selenium/, …) sit ALONGSIDE
         # the plugin's __init__.py, so the correct sys.path entry is the plugin's
-        # own package directory — not the zip root:
+        # own package directory - not the zip root:
         #   __file__  = 'Romance.io.zip/romanceio/__init__.py'
         #   dirname   = 'Romance.io.zip/romanceio'   ← add this
         #   zip root  = 'Romance.io.zip'             ← WRONG (seleniumbase not at top level)
@@ -470,7 +520,7 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
                 except Exception as quit_err:  # pylint: disable=broad-except
                     _log(f"Error closing driver: {quit_err}")
     except ChromeNotInstalledError:
-        raise  # propagate immediately — no point retrying
+        raise  # propagate immediately - no point retrying
     except Exception as e:  # pylint: disable=broad-except
         _log(f"Top-level error in fetch_page: {type(e).__name__}: {e}")
         import traceback

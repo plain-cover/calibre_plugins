@@ -10,6 +10,7 @@ import os
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from lxml.html import HtmlElement, fromstring
+from .common_romanceio_fetch_helper import parse_html_from_selenium
 
 
 class MetadataComparison:
@@ -538,7 +539,7 @@ def run_live_parsing_tests(
                 tested_count -= 1
                 continue
 
-            html_root = fromstring(html_content)
+            html_root = parse_html_from_selenium(html_content)
             html_metadata = html_parser(html_root, url)
 
             # If parser returns invalid ID after we validated it, that's a parser bug

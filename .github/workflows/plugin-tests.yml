@@ -15,6 +15,10 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    # Skip pull_request events from the same repo - the push trigger already ran CI
+    # when the commit was pushed to the branch. Only run pull_request for fork PRs
+    # (where the push trigger fires on the fork, not here).
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     steps:
     - uses: actions/checkout@v5
       with:
@@ -50,7 +54,8 @@ jobs:
           CHANGED_FILES="all"
         elif [ "${{ github.event_name }}" == "pull_request" ]; then
           # For PRs, compare against the base branch
-          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+          git fetch origin ${{ github.base_ref }} 2>/dev/null || true
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD 2>/dev/null || echo "all")
         else
           # For pushes, compare against the state before this push (handles multiple commits)
           if [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
@@ -142,6 +147,11 @@ jobs:
       if: steps.changes.outputs.substantive_changes == 'true'
       run: |
         python common/test_tag_slug_conversion.py
+
+    - name: Test HTML sanitizer (common)
+      if: steps.changes.outputs.substantive_changes == 'true'
+      run: |
+        python common/test_html_sanitizer.py
 
     - name: Test JSON API 404 handling (common)
       if: steps.changes.outputs.substantive_changes == 'true'

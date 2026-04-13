@@ -67,7 +67,7 @@ def _retry_with_delay(
 
             # Function completed without exception - return success with result
             # (even if result is None, which means search succeeded but no match found)
-            if result:
+            if result is not None:
                 # Limit log output for large results
                 if isinstance(result, str):
                     log_func(f"✓ {method_name} found match: {result}")
@@ -84,7 +84,7 @@ def _retry_with_delay(
 
             return SearchResult(success=True, result=result)
 
-        except (OSError, ValueError, RuntimeError) as e:
+        except Exception as e:  # pylint: disable=broad-except
             error_type = type(e).__name__
             error_msg = str(e)
             log_func(f"✗ {method_name} attempt {attempt} failed: {error_type}: {error_msg}")
@@ -93,7 +93,7 @@ def _retry_with_delay(
                 return SearchResult(success=False, result=None)
             if isinstance(e, ChromeNotInstalledError):
                 log_func(
-                    "  Chrome is not installed — HTML metadata fallback is unavailable.\n"
+                    "  Chrome is not installed - HTML metadata fallback is unavailable.\n"
                     "  Install Chrome to enable this feature: https://www.google.com/chrome/"
                 )
                 return SearchResult(success=False, result=None)
@@ -216,7 +216,7 @@ def fetch_details_with_fallback(
         log_func=log_func,
     )
 
-    if html_fetch.result:
+    if html_fetch.result is not None:
         return html_fetch.result
 
     if html_fetch.success:

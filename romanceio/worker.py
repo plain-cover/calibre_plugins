@@ -1,6 +1,6 @@
 from threading import Thread
 
-from lxml.html import fromstring, tostring
+from lxml.html import tostring
 
 from calibre.ebooks.metadata.book.base import Metadata
 import calibre_plugins.romanceio.config as cfg  # type: ignore[import-not-found]  # pylint: disable=import-error
@@ -29,7 +29,7 @@ class Worker(Thread):
     def run(self):
         try:
             self.get_details()
-        except (OSError, ValueError, RuntimeError, TypeError):
+        except Exception:  # pylint: disable=broad-except
             self.log.exception(f"get_details failed for url: {self.url!r}")
 
     def get_details(self):
@@ -64,7 +64,7 @@ class Worker(Thread):
             fallback_title = self.search_fallback.get("title", "")
             fallback_authors = self.search_fallback.get("authors", [])
             if fallback_title and fallback_authors:
-                self.log.info(f"Detail fetch failed — using search result as minimal fallback for {romanceio_id}")
+                self.log.info(f"Detail fetch failed - using search result as minimal fallback for {romanceio_id}")
                 self._build_minimal_metadata(romanceio_id, fallback_title, fallback_authors)
             else:
                 self.log.error(f"Failed to fetch details for {romanceio_id} from {self.url!r}")
@@ -90,7 +90,7 @@ class Worker(Thread):
         book_json = get_book_details_json(romanceio_id, log_func=log_func, timeout=30)
         return book_json
 
-    def _fetch_html(self, romanceio_id, log_func):  # pylint: disable=unused-argument
+    def _fetch_html(self, romanceio_id, log_func):
         """Fetch and parse HTML page for book details.
 
         Returns:
@@ -102,28 +102,33 @@ class Worker(Thread):
             fetch_romanceio_book_page,
         )
 
+        log_func(f"HTML fetch: requesting book page for {romanceio_id}")
         page_html, is_valid = fetch_romanceio_book_page(self.url, plugin_name="romanceio", log=self.log)
 
         if not is_valid:
             if not page_html:
-                # Chrome failed to fetch the page entirely - technical failure, should retry
                 raise RuntimeError(f"Chrome failed to fetch page for {romanceio_id}: {self.url}")
-            # Page loaded but content is a 404 - not a technical failure, just not found
+            log_func(f"HTML fetch: page is invalid (404 or wrong content) for {romanceio_id}")
             return None
 
-        root = fromstring(page_html)
+        log_func(f"HTML fetch: parsing {len(page_html)} bytes of HTML for {romanceio_id}")
+        from calibre_plugins.romanceio.common_romanceio_fetch_helper import parse_html_from_selenium  # type: ignore[import-not-found]  # pylint: disable=import-error
+
+        root = parse_html_from_selenium(page_html)
 
         title_node = root.xpath("//title")
         if title_node:
-            page_title = title_node[0].text.strip()
-            if page_title is None or "search results for" in page_title:
-                return None  # Got wrong page type
+            page_title = (title_node[0].text or "").strip()
+            if "search results for" in page_title:
+                log_func(f"HTML fetch: got search results page instead of book page for {romanceio_id}")
+                return None
 
         errmsg = root.xpath('//*[@id="errorMessage"]')
         if errmsg:
             msg = tostring(errmsg, method="text", encoding="unicode").strip()
             raise RuntimeError(f"Page contains error: {msg}")
 
+        log_func(f"HTML fetch: page validated, extracting metadata for {romanceio_id}")
         return root
 
     def _build_minimal_metadata(self, romanceio_id, title, authors):
@@ -268,8 +273,10 @@ class Worker(Thread):
 
         mi.source_relevance = self.relevance
 
-        if self.cover_url is not None:
-            self.plugin.cache_identifier_to_cover_url(self.romanceio_id, self.cover_url)
+        cover_url = f"https://s3.amazonaws.com/romance.io/books/large/{parsed.romanceio_id}.jpg"
+        self.cover_url = cover_url
+        self.plugin.cache_identifier_to_cover_url(self.romanceio_id, cover_url)
+
         self.plugin.clean_downloaded_metadata(mi)
 
         self.log.info(f"_build_metadata_from_html - final mi.pubdate: {mi.pubdate!r}")

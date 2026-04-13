@@ -22,6 +22,8 @@ test_orchestrator_404.py
 !common/test_orchestrator_404.py
 test_tag_slug_conversion.py
 !common/test_tag_slug_conversion.py
+test_html_sanitizer.py
+!common/test_html_sanitizer.py
 update_static_test_data.py
 !common/update_static_test_data.py
 common_romanceio_static_test_data/
