@@ -219,7 +219,7 @@ TEST_BOOKS = [
         title="Fire and Ice",
         authors=["Tymber Dalton"],
         expected_fields={
-            "romanceio_id": "5badeb3901dbc864fb916c8a",
+            "romanceio_id": "5455a32f87eac323ffb2d56e",
             "title": "Fire and Ice",
             "authors": ["Tymber Dalton"],
             "series": None,
