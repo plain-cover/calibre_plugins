@@ -80,8 +80,8 @@ jobs:
           # requirements.txt is always substantive
           echo "substantive_changes=true" >> $GITHUB_OUTPUT
           echo "✅ Substantive changes detected (including requirements.txt)"
-        elif echo "$CHANGED_FILES" | grep -v -E '\.(md)$|^LICENSE$|^\\.gitignore$|\\.txt$' | grep -q .; then
-          # Has files other than markdown, LICENSE, .gitignore, .txt
+        elif echo "$CHANGED_FILES" | grep -v -E '\.(md)$|^LICENSE$|^\\.gitignore$|\\.txt$|^images/' | grep -q .; then
+          # Has files other than markdown, LICENSE, .gitignore, .txt, images/
           echo "substantive_changes=true" >> $GITHUB_OUTPUT
           echo "✅ Substantive changes detected (code, tests, or config files)"
         else
