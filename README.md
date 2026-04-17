@@ -40,9 +40,20 @@ Completing the metadata download will populate fields from [Romance.io](https://
 **Preferences > Metadata download > Romance.io > Configure selected source**
 
 - **Metadata fields to download** - choose which fields you want to populate from [Romance.io](https://romance.io)
-- **Romance.io tag to Calibre tag mappings** - map [Romance.io](https://romance.io) tags to Calibre tags. Tags not in the mapping are not imported into the Calibre Tags field.
+- **Romance.io tag to Calibre tag mappings** - controls how Romance.io tags are imported into Calibre's Tags field. Use the green "+" and red "-" buttons to add or remove mappings. Create one row for each Romance.io tag you want to map to one or more Calibre tags. The text you enter for the Romance.io tag must match how the tag looks on the website exactly. Any Romance.io tags that are not mapped will be ignored.
 
-![Screenshot of the Calibre "Edit metadata" panel after searching Romance.io for metadata](images/Configure%20Metadata%20download.png)
+  ![Screenshot of the Configure Metadata download dialog with the "Filter and map Romance.io tags to calibre tags" checkbox checked](images/Configure%20Metadata%20download.png)
+
+  To get all Romance.io tags as individual Calibre tags, uncheck **"Filter and map Romance.io tags to Calibre tags"**:
+
+  - **Checked (default):** Only tags listed in the mapping table are imported. Each Romance.io tag maps to one or more Calibre tags of your choosing. Tags not in the table are dropped.
+  - **Unchecked:** All Romance.io tags are imported as individual Calibre tags, with no filtering or renaming. Use this if you want to import every Romance.io tag for each book.
+
+  ![Configure Metadata download dialog showing the "Filter and map Romance.io tags to Calibre tags" checkbox unchecked](images/Uncheck%20map%20tags.png)
+
+  With the box unchecked, the metadata download will import all tags from Romance.io as Calibre tags:
+
+  ![Metadata download result showing all Romance.io tags as individual Calibre tags](images/Uncheck%20map%20tags%20result.png)
 
 ## Romance.io Fields - Custom Columns Plugin for Calibre
 

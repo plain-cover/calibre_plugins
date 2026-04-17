@@ -235,15 +235,15 @@ def parse_tags(root: HtmlElement, log_func: Optional[Callable] = None) -> List[s
 def convert_genres_to_calibre_tags(
     genre_tags: List[str], map_genres: bool, calibre_tag_map: Dict[str, List[str]]
 ) -> List[str]:
-    """Convert Romance.io genre tags to calibre tags using configured mapping.
+    """Convert Romance.io genre tags to Calibre tags using configured mapping.
 
     Args:
         genre_tags: List of raw Romance.io tag strings
         map_genres: If False, returns genre_tags unchanged
-        calibre_tag_map: Dictionary mapping lowercase genre tags to list of calibre tags
+        calibre_tag_map: Dictionary mapping lowercase genre tags to list of Calibre tags
 
     Returns:
-        List of calibre tag strings (or original tags if mapping disabled)
+        List of Calibre tag strings (or original tags if mapping disabled)
     """
     if not map_genres:
         # User has disabled Romance.io tag filtering/mapping - all genres become tags
