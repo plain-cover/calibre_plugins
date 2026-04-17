@@ -136,7 +136,7 @@ class GenreTagMappingsTableWidget(QTableWidget):
 
     def create_tags_edit(self, value):
         tags_edit = EditWithComplete(self)
-        tags_edit.set_add_separator(False)
+        tags_edit.set_add_separator(True)
         tags_edit.update_items_cache(self.tags_values)
         tags_edit.setText(value)
         return tags_edit
@@ -152,9 +152,12 @@ class GenreTagMappingsTableWidget(QTableWidget):
             tags_text = unicode(self.cellWidget(row, 1).text()).strip()
             tag_values = tags_text.split(",")
             tags_list = []
+            seen = set()
             for tag in tag_values:
-                if len(tag.strip()) > 0:
-                    tags_list.append(tag.strip())
+                tag = tag.strip()
+                if tag and tag.lower() not in seen:
+                    seen.add(tag.lower())
+                    tags_list.append(tag)
             tag_mappings[genre] = tags_list
         return tag_mappings
 
@@ -184,11 +187,11 @@ class ConfigWidget(DefaultConfigWidget):
         genre_group_box.setLayout(genre_group_box_layout)
 
         self.map_genres_checkbox = QCheckBox(
-            _("Filter and map Romance.io tags to calibre tags"), self  # type: ignore # pylint: disable=undefined-variable
+            _("Filter and map Romance.io tags to Calibre tags"), self  # type: ignore # pylint: disable=undefined-variable
         )
         self.map_genres_checkbox.setToolTip(
             _(  # type: ignore # pylint: disable=undefined-variable
-                "When checked, only specific calibre tags will be used as per below.\n"
+                "When checked, only specific Calibre tags will be used as per below.\n"
                 "When unchecked, all Romance.io tags will be added as Calibre tags."
             )
         )
