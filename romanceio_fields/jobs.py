@@ -61,7 +61,10 @@ def prepare_books_for_download(
         from calibre_plugins.romanceio_fields.common_romanceio_search import search_for_romanceio_id  # type: ignore[import-not-found]  # pylint: disable=import-error
         from calibre_plugins.romanceio_fields.fetch_helper import fetch_page  # type: ignore[import-not-found]  # pylint: disable=import-error
 
-        return search_for_romanceio_id(title, authors, fetch_page, log_func)
+        def fetch_with_log(url, **kwargs):
+            return fetch_page(url, log_func=log_func, **kwargs)
+
+        return search_for_romanceio_id(title, authors, fetch_with_log, log_func)
 
     for i, book_id in enumerate(book_ids):
         notification(float(i) / total, f"Finding book {i + 1} of {total}")
@@ -315,6 +318,9 @@ def get_romanceio_fields_for_book(
 
                 # Result is either JSON dict or HTML root element
                 if isinstance(result, dict):
+                    if result.get("invalid_romanceio_id"):
+                        log(f"Romance.io ID {romanceio_id} was not found on the website (404)")
+                        return _result({})
                     return _result(_build_fields(result, fields_to_run, max_tags, from_json=True))
                 # It's an HTML root element
                 return _result(_build_fields(result, fields_to_run, max_tags, from_json=False))
@@ -323,9 +329,14 @@ def get_romanceio_fields_for_book(
                     iterator.__exit__()
                     iterator = None
     except DRMError:
+        log(f"Book {romanceio_id} is DRM-protected, skipping")
         return _result({})
     except (ValueError, TypeError, AttributeError, KeyError, IndexError) as e:
         log(f"Error parsing Romance.io data: {e}")
+        log(traceback.format_exc())
+        return _result({})
+    except Exception as e:  # pylint: disable=broad-except
+        log(f"Unexpected error fetching {romanceio_id}: {type(e).__name__}: {e}")
         log(traceback.format_exc())
         return _result({})
 
@@ -349,7 +360,7 @@ def _fetch_json(
 
 def _fetch_html(
     romanceio_id: str,
-    log_func: Callable,  # pylint: disable=unused-argument
+    log_func: Callable,
 ) -> Optional[Any]:
     """Fetch and parse HTML page for book.
 
@@ -363,15 +374,15 @@ def _fetch_html(
     )
 
     url = f"https://www.romance.io/books/{romanceio_id}"
-    raw_html, is_valid = fetch_romanceio_book_page(url)
-
-    if not is_valid:
-        # Invalid Romance.io ID (404) - not found, not a technical failure
-        return {"invalid_romanceio_id": True}
+    raw_html, is_valid = fetch_romanceio_book_page(url, log=log_func)
 
     if not raw_html:
-        # Failed to fetch - technical failure
-        raise RuntimeError(f"Failed to fetch HTML page for {romanceio_id}")
+        # Chrome failed to load the page (timeout, crash, or driver error) - technical failure
+        raise RuntimeError(f"Failed to fetch HTML page for {romanceio_id} (Chrome did not return page content)")
+
+    if not is_valid:
+        # Page loaded but shows 404 / "page not found" - invalid book ID
+        return {"invalid_romanceio_id": True}
 
     from calibre_plugins.romanceio_fields.common_romanceio_fetch_helper import parse_html_from_selenium  # type: ignore[import-not-found]  # pylint: disable=import-error
 
