@@ -35,9 +35,7 @@ def _raise_chrome_not_installed(*_args, **_kwargs):
 
 
 def _raise_rosetta_not_installed(*_args, **_kwargs):
-    raise RosettaNotInstalledError(
-        'Your Mac needs Rosetta 2 to use UC Mode. Run: "softwareupdate --install-rosetta"'
-    )
+    raise RosettaNotInstalledError('Your Mac needs Rosetta 2 to use UC Mode. Run: "softwareupdate --install-rosetta"')
 
 
 def _return_none(*_args, **_kwargs):
