@@ -31,7 +31,7 @@ Completing the metadata download will populate fields from [Romance.io](https://
 ### Downloading metadata
 
 1. Once the plugin is loaded, ensure that it is enabled by going to Preferences > Metadata download and checking the box next to "Romance.io".
-2. Select a book, click **Edit metadata** in the main Calibre toolbar, then click **Download metadata**, and wait for results. If there is a match found for the book on Romance.io, Calibre will show "*See at:* Romance.io" on the right panel for the matching search result. Click "OK" to match the book to this Romance.io ID and download metadata from [Romance.io](https://romance.io).
+2. Select a book, click **Edit metadata** in the main Calibre toolbar, then click **Download metadata**, and wait for results. If there is a match found for the book on Romance.io, Calibre will show "**See at:** Romance.io" on the right panel for the matching search result. Click "OK" to match the book to this Romance.io ID and download metadata from [Romance.io](https://romance.io).
 
 ![Calibre "Downloading metadata" menu, first page, showing a book result that is linked to a result from Romance.io (Funny Story by Emily Henry)](images/Metadata%20download%20result1.png)
 
