@@ -1,5 +1,5 @@
-"""Tests that permanent failures (JsonApiEndpointError, ChromeNotInstalledError) are
-handled correctly:
+"""Tests that permanent failures (JsonApiEndpointError, ChromeNotInstalledError,
+RosettaNotInstalledError) are handled correctly:
   - No retries are attempted (returns immediately after the first failure)
   - The error is caught and converted to a graceful None result, not an exception
 """
@@ -12,7 +12,7 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 from common.common_romanceio_json_api import JsonApiEndpointError
-from common.common_romanceio_fetch_helper import ChromeNotInstalledError
+from common.common_romanceio_fetch_helper import ChromeNotInstalledError, RosettaNotInstalledError
 from common.common_romanceio_search_orchestrator import (
     SearchResult,
     _retry_with_delay,
@@ -32,6 +32,10 @@ def _raise_404(*_args, **_kwargs):
 
 def _raise_chrome_not_installed(*_args, **_kwargs):
     raise ChromeNotInstalledError("Chrome not found! Install it first!")
+
+
+def _raise_rosetta_not_installed(*_args, **_kwargs):
+    raise RosettaNotInstalledError('Your Mac needs Rosetta 2 to use UC Mode. Run: "softwareupdate --install-rosetta"')
 
 
 def _return_none(*_args, **_kwargs):
@@ -207,6 +211,43 @@ def test_chrome_not_installed_fetch_details_returns_none():
         romanceio_id="abc123",
         json_fetch_func=_raise_404,
         html_fetch_func=_raise_chrome_not_installed,
+        log_func=log_func,
+        max_retries=3,
+        retry_delay=0,
+    )
+
+    assert result is None
+
+
+# ---------------------------------------------------------------------------
+# RosettaNotInstalledError tests
+# ---------------------------------------------------------------------------
+
+
+def test_rosetta_not_installed_does_not_retry():
+    """RosettaNotInstalledError must exit after exactly 1 attempt, never retrying."""
+    attempts = []
+
+    def func():
+        attempts.append(1)
+        raise RosettaNotInstalledError("Your Mac needs Rosetta 2 to use UC Mode.")
+
+    log_func, logs = _collecting_log()
+    result = _retry_with_delay(func, "HTML scraping", max_retries=3, retry_delay=0, log_func=log_func)
+
+    assert len(attempts) == 1, f"Expected 1 attempt, got {len(attempts)}"
+    assert result == SearchResult(success=False, result=None)
+    assert any("rosetta" in msg.lower() for msg in logs)
+    assert not any("retry attempt" in msg.lower() for msg in logs)
+
+
+def test_rosetta_not_installed_fetch_details_returns_none():
+    """RosettaNotInstalledError during HTML fetch yields None without retrying."""
+    log_func, _ = _collecting_log()
+    result = fetch_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=_raise_404,
+        html_fetch_func=_raise_rosetta_not_installed,
         log_func=log_func,
         max_retries=3,
         retry_delay=0,

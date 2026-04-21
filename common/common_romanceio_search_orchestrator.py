@@ -15,7 +15,10 @@ if parent_dir not in sys.path:
 from typing import Optional, List, Callable, Any, NamedTuple, Dict
 
 from .common_romanceio_json_api import JsonApiEndpointError  # pylint: disable=import-outside-toplevel
-from .common_romanceio_fetch_helper import ChromeNotInstalledError  # pylint: disable=import-outside-toplevel
+from .common_romanceio_fetch_helper import (
+    ChromeNotInstalledError,
+    RosettaNotInstalledError,
+)  # pylint: disable=import-outside-toplevel
 
 
 class SearchResult(NamedTuple):
@@ -95,6 +98,16 @@ def _retry_with_delay(
                 log_func(
                     "  Chrome is not installed - HTML metadata fallback is unavailable.\n"
                     "  Install Chrome to enable this feature: https://www.google.com/chrome/"
+                )
+                return SearchResult(success=False, result=None)
+            if isinstance(e, RosettaNotInstalledError):
+                log_func(
+                    "  Your Mac is missing Rosetta 2, a compatibility layer Apple provides for free.\n"
+                    "  To install it:\n"
+                    "    1. Open Terminal (press Command+Space, type 'Terminal', press Enter)\n"
+                    "    2. Copy and paste this command, then press Enter:\n"
+                    "       softwareupdate --install-rosetta\n"
+                    "    3. Follow any on-screen prompts, then restart Calibre."
                 )
                 return SearchResult(success=False, result=None)
             if attempt < max_retries:
