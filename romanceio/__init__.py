@@ -34,7 +34,7 @@ from calibre.constants import numeric_version as calibre_version
 PLUGIN_NAME = "Romance.io"
 PLUGIN_DESCRIPTION = "Downloads metadata from Romance.io"
 PLUGIN_AUTHOR = "plain-cover"
-PLUGIN_VERSION = (1, 0, 4)
+PLUGIN_VERSION = (1, 0, 5)
 PLUGIN_MINIMUM_CALIBRE_VERSION = (2, 0, 0)
 
 
@@ -43,7 +43,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
     name = "Romance.io"  # Must match PLUGIN_NAME
     description = "Downloads metadata from Romance.io"  # Must match PLUGIN_DESCRIPTION
     author = "plain-cover"  # Must match PLUGIN_AUTHOR
-    version = (1, 0, 4)  # Must match PLUGIN_VERSION
+    version = (1, 0, 5)  # Must match PLUGIN_VERSION
     minimum_calibre_version = (2, 0, 0)  # Must match PLUGIN_MINIMUM_CALIBRE_VERSION
 
     capabilities = frozenset(["identify", "cover"])
@@ -215,7 +215,10 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
                     from calibre_plugins.romanceio.common_romanceio_fetch_helper import fetch_page  # type: ignore[import-not-found]  # pylint: disable=import-error
                     from calibre_plugins.romanceio.common_romanceio_search import search_for_romanceio_id  # type: ignore[import-not-found]  # pylint: disable=import-error
 
-                    return search_for_romanceio_id(title, authors, fetch_page, log_func)
+                    def fetch_with_log(url, **kwargs):
+                        return fetch_page(url, log_func=log_func, **kwargs)
+
+                    return search_for_romanceio_id(title, authors, fetch_with_log, log_func)
 
                 json_id = search_with_fallback(title, authors, json_search, html_search, log.info)
                 if json_id:

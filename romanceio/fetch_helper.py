@@ -9,7 +9,7 @@ from .common_romanceio_fetch_helper import (  # pylint: disable=import-error
 )
 
 
-def fetch_page(url, wait_for_element=None, max_wait=30):
+def fetch_page(url, wait_for_element=None, max_wait=30, log_func=None):
     """
     Fetch a page using SeleniumBase with Cloudflare bypass.
 
@@ -17,11 +17,14 @@ def fetch_page(url, wait_for_element=None, max_wait=30):
         url: URL to fetch
         wait_for_element: Optional element to wait for in page source
         max_wait: Maximum seconds to wait for page load
+        log_func: Optional logging function to route Chrome errors to calibre's job log
 
     Returns:
         Page HTML as string, or None on error
     """
-    return _common_fetch_page(url, plugin_name="romanceio", wait_for_element=wait_for_element, max_wait=max_wait)
+    return _common_fetch_page(
+        url, plugin_name="romanceio", wait_for_element=wait_for_element, max_wait=max_wait, log_func=log_func
+    )
 
 
 def fetch_romanceio_book_page(url, log=None):
