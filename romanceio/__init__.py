@@ -34,7 +34,7 @@ from calibre.constants import numeric_version as calibre_version
 PLUGIN_NAME = "Romance.io"
 PLUGIN_DESCRIPTION = "Downloads metadata from Romance.io"
 PLUGIN_AUTHOR = "plain-cover"
-PLUGIN_VERSION = (1, 0, 5)
+PLUGIN_VERSION = (1, 0, 6)
 PLUGIN_MINIMUM_CALIBRE_VERSION = (2, 0, 0)
 
 
@@ -43,7 +43,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
     name = "Romance.io"  # Must match PLUGIN_NAME
     description = "Downloads metadata from Romance.io"  # Must match PLUGIN_DESCRIPTION
     author = "plain-cover"  # Must match PLUGIN_AUTHOR
-    version = (1, 0, 5)  # Must match PLUGIN_VERSION
+    version = (1, 0, 6)  # Must match PLUGIN_VERSION
     minimum_calibre_version = (2, 0, 0)  # Must match PLUGIN_MINIMUM_CALIBRE_VERSION
 
     capabilities = frozenset(["identify", "cover"])
