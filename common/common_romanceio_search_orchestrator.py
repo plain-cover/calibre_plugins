@@ -18,6 +18,7 @@ from .common_romanceio_json_api import JsonApiEndpointError  # pylint: disable=i
 from .common_romanceio_fetch_helper import (
     ChromeNotInstalledError,
     RosettaNotInstalledError,
+    SeleniumBaseImportError,
 )  # pylint: disable=import-outside-toplevel
 
 
@@ -98,6 +99,12 @@ def _retry_with_delay(
                 log_func(
                     "  Chrome is not installed - HTML metadata fallback is unavailable.\n"
                     "  Install Chrome to enable this feature: https://www.google.com/chrome/"
+                )
+                return SearchResult(success=False, result=None)
+            if isinstance(e, SeleniumBaseImportError):
+                log_func(
+                    "  Browser automation (SeleniumBase) could not be loaded.\n"
+                    "  Try restarting Calibre. If the problem persists, reinstall the plugin."
                 )
                 return SearchResult(success=False, result=None)
             if isinstance(e, RosettaNotInstalledError):
