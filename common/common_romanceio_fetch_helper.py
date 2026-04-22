@@ -170,6 +170,10 @@ class RosettaNotInstalledError(RuntimeError):
     """Raised on Apple Silicon Macs when Rosetta 2 is missing and UC Mode cannot run.  Not retryable."""
 
 
+class SeleniumBaseImportError(RuntimeError):
+    """Raised when seleniumbase cannot be imported in the current process context.  Not retryable."""
+
+
 # XML 1.0 §2.2: legal chars are #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
 # Everything else is illegal and causes lxml to raise XMLSyntaxError: internal error.
 # Selenium's page_source is a DOM serialization - the browser decodes HTML entities before
@@ -293,34 +297,15 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
         # mode where the plugin is loaded from a zip that isn't on sys.path.
         #
         # Key insight: vendored packages (seleniumbase/, selenium/, …) sit ALONGSIDE
-        # the plugin's __init__.py, so the correct sys.path entry is the plugin's
-        # own package directory - not the zip root:
-        #   __file__  = 'Romance.io.zip/romanceio/__init__.py'
-        #   dirname   = 'Romance.io.zip/romanceio'   ← add this
-        #   zip root  = 'Romance.io.zip'             ← WRONG (seleniumbase not at top level)
-        #
-        # Calibre sometimes also sets __path__ to the bare zip root; we detect that
-        # and append plugin_name to reconstruct the correct subpath.
-        plugin_module = sys.modules.get(f"calibre_plugins.{plugin_name}")
-        if plugin_module:
-            plugin_sys_path = None
-            # dirname(__file__) gives the package dir for both real and zip paths
-            plugin_file = getattr(plugin_module, "__file__", None)
-            if plugin_file:
-                plugin_sys_path = os.path.dirname(os.path.normpath(str(plugin_file)))
-            # Fall back to __path__
-            if not plugin_sys_path:
-                for p in getattr(plugin_module, "__path__", None) or []:
-                    p_norm = os.path.normpath(str(p))
-                    if p_norm.lower().endswith(".zip") and os.path.isfile(p_norm):
-                        # Calibre set __path__ to the zip root; plugin dir is one level deeper
-                        plugin_sys_path = os.path.join(p_norm, plugin_name)
-                    elif p_norm:
-                        plugin_sys_path = p_norm
-                    if plugin_sys_path:
-                        break
-            if plugin_sys_path and plugin_sys_path not in sys.path:
-                sys.path.insert(0, plugin_sys_path)
+        # this file (common_romanceio_fetch_helper.py) inside the plugin zip.
+        # Using __file__ of the current module is always correct because it doesn't
+        # depend on how calibre's child IPC process sets plugin module attributes
+        # (__file__ / __path__ on calibre_plugins.X point to the zip root in child
+        # processes, not the plugin subdir inside it, causing ImportError).
+        plugin_dir = os.path.dirname(os.path.abspath(__file__))
+        _log(f"Vendored import path: {plugin_dir!r}")
+        if plugin_dir not in sys.path:
+            sys.path.insert(0, plugin_dir)
 
         # Import and patch constants FIRST to avoid Windows permission errors.
         # Use bare module names (e.g. "seleniumbase.fixtures.constants") rather than
@@ -397,7 +382,18 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
         uc_driver_path = os.path.join(sb_drivers_dir, uc_driver_name)
 
         if not os.path.exists(chromedriver_path):
+            _log(f"chromedriver not found at {chromedriver_path!r}, downloading...")
             sb_install.main("chromedriver latest")
+            if os.path.exists(chromedriver_path):
+                _log(f"chromedriver downloaded successfully")
+            else:
+                _log(
+                    f"chromedriver download failed - file missing after install attempt: {chromedriver_path!r}\n"
+                    "  This is often caused by antivirus software quarantining the file.\n"
+                    "  Check your antivirus exclusions for: " + sb_drivers_dir
+                )
+        else:
+            _log(f"chromedriver found at {chromedriver_path!r}")
 
         # Copy chromedriver to uc_driver if needed
         if os.path.exists(chromedriver_path) and not os.path.exists(uc_driver_path):
@@ -515,6 +511,13 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
                 raise RosettaNotInstalledError(
                     "Your Mac is missing a required compatibility layer (Rosetta 2) needed to run the web browser automation."
                 ) from e
+            if "session not created" in msg.lower() or "this version of chromedriver only supports" in msg.lower():
+                _log(
+                    f"Chrome version mismatch: {e}\n"
+                    "  The downloaded chromedriver doesn't match your installed Chrome version.\n"
+                    f"  Delete the drivers folder and retry: {sb_drivers_dir}"
+                )
+                return None
             _log(f"Chrome error: {type(e).__name__}: {e}")
             import traceback
 
@@ -532,6 +535,12 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
     except RosettaNotInstalledError:
         raise  # propagate immediately - no point retrying
     except Exception as e:  # pylint: disable=broad-except
+        if isinstance(e, ImportError) and "seleniumbase" in str(e).lower():
+            raise SeleniumBaseImportError(
+                f"SeleniumBase (bundled browser automation) could not be loaded: {e}\n"
+                "This usually means the plugin zip's vendored packages aren't accessible\n"
+                "in the current process. Try restarting Calibre."
+            ) from e
         _log(f"Top-level error in fetch_page: {type(e).__name__}: {e}")
         import traceback
 
