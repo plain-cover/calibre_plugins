@@ -249,18 +249,39 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
         if log_func:
             log_func(msg)
 
+    user_data_dir = None
     try:
         # Use a stable driver directory under the user's home dir so chromedriver
         # persists across calibre sessions (calibre rotates its own temp dir each run)
         stable_base = os.path.join(os.path.expanduser("~"), ".calibre_selenium")
         sb_drivers_dir = os.path.abspath(os.path.join(stable_base, "drivers"))
         downloads_dir = os.path.abspath(os.path.join(stable_base, "downloads"))
-        # Use unique user_data_dir for each Chrome instance to prevent locking issues
-        # when multiple instances run simultaneously (e.g., search + worker threads)
-        user_data_dir = os.path.abspath(os.path.join(stable_base, "user_data", f"profile_{os.getpid()}_{time.time()}"))
 
-        # Ensure all directories exist with proper permissions
-        for dir_path in [sb_drivers_dir, downloads_dir, user_data_dir]:
+        # Each Chrome instance gets a fresh throw-away profile in the system TEMP dir.
+        # Using TEMP (not stable_base) keeps paths short (avoids Windows MAX_PATH issues)
+        # and ensures the OS auto-cleans these on reboot even if we crash before cleanup.
+        # The directory is removed in the finally block below after driver.quit().
+        user_data_dir = tempfile.mkdtemp(prefix="calibre_sb_")
+
+        # One-time best-effort cleanup of stale profile dirs left by older plugin versions
+        # that used ~/.calibre_selenium/user_data/profile_<pid>_<ts>/ and never deleted them.
+        _old_user_data_root = os.path.join(stable_base, "user_data")
+        if os.path.isdir(_old_user_data_root):
+            _now = time.time()
+            for _entry in os.listdir(_old_user_data_root):
+                if _entry.startswith("profile_"):
+                    _entry_path = os.path.join(_old_user_data_root, _entry)
+                    try:
+                        _mtime = os.path.getmtime(_entry_path)
+                        # Only remove dirs that haven't been touched in the last 2 hours
+                        # (leaves any dir that might belong to a concurrently running instance)
+                        if _now - _mtime > 7200:
+                            shutil.rmtree(_entry_path, ignore_errors=True)
+                    except OSError:
+                        pass  # ignore – best effort only
+
+        # Ensure persistent directories exist
+        for dir_path in [sb_drivers_dir, downloads_dir]:
             os.makedirs(dir_path, exist_ok=True)
 
         # Clear cached SeleniumBase/fasteners modules to ensure fresh import.
@@ -530,6 +551,12 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
                     time.sleep(0.5)  # Give Chrome time to close
                 except Exception as quit_err:  # pylint: disable=broad-except
                     _log(f"Error closing driver: {quit_err}")
+            # Always remove the throw-away Chrome profile dir created above.
+            if user_data_dir and os.path.isdir(user_data_dir):
+                try:
+                    shutil.rmtree(user_data_dir, ignore_errors=True)
+                except Exception:  # pylint: disable=broad-except
+                    pass  # best effort – temp dir cleanup is non-critical
     except ChromeNotInstalledError:
         raise  # propagate immediately - no point retrying
     except RosettaNotInstalledError:
@@ -546,6 +573,11 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
 
         traceback.print_exc()
         return None
+    finally:
+        # Catch-all cleanup: if setup code threw before reaching the inner try/finally,
+        # user_data_dir would not have been cleaned up there. Clean it up here.
+        if user_data_dir and os.path.isdir(user_data_dir):
+            shutil.rmtree(user_data_dir, ignore_errors=True)
 
 
 def fetch_romanceio_book_page(url, plugin_name, log=None):
