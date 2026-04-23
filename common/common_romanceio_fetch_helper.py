@@ -240,7 +240,15 @@ def parse_html_from_selenium(html: str) -> "lxml.html.HtmlElement":  # type: ign
 _stale_profile_cleanup_done = False
 
 
-def fetch_page(url, plugin_name, wait_for_element=None, not_found_marker=None, max_wait=30, log_func=None):
+def fetch_page(
+    url,
+    plugin_name,
+    wait_for_element=None,
+    not_found_marker=None,
+    secondary_wait_element=None,
+    max_wait=30,
+    log_func=None,
+):
     """
     Fetch a page using SeleniumBase with Cloudflare bypass.
 
@@ -258,6 +266,12 @@ def fetch_page(url, plugin_name, wait_for_element=None, not_found_marker=None, m
             wait_for_element, return the page immediately instead of timing out.
             Useful to avoid waiting the full timeout when a 404 / not-found page
             is returned (which will never contain wait_for_element).
+        secondary_wait_element: Optional string; after wait_for_element is found,
+            continue polling until this element also appears (or time runs out).
+            Unlike wait_for_element, the page is returned whether or not this
+            element appears - it just buys more time for JS rendering. Use this
+            when wait_for_element is an SSR container and secondary_wait_element
+            is the JS-rendered content inside it (e.g. search result items).
         max_wait: Maximum seconds to wait for page load
         log_func: Optional logging function to route errors to calibre's job log
 
@@ -553,8 +567,21 @@ def fetch_page(url, plugin_name, wait_for_element=None, not_found_marker=None, m
                 while time.time() - element_start < remaining_time:
                     page_source = driver.page_source
                     if wait_for_element in page_source:
+                        if secondary_wait_element:
+                            # Container found; now wait for JS-rendered content within
+                            # remaining time. Return the page whether or not it appears
+                            # (genuine 0-result pages will never have it).
+                            secondary_start = time.time()
+                            secondary_remaining = remaining_time - (secondary_start - element_start)
+                            while time.time() - secondary_start < secondary_remaining:
+                                page_source = driver.page_source
+                                if secondary_wait_element in page_source:
+                                    _log(f"Secondary element '{secondary_wait_element}' found")
+                                    return page_source
+                                time.sleep(0.5)
+                            _log(f"Secondary element '{secondary_wait_element}' not found (page may have 0 results)")
+                            return driver.page_source
                         # Give JavaScript a moment to finish rendering before returning.
-                        # 3 seconds is enough for most JS frameworks in CI headless mode.
                         time.sleep(3)
                         page_source = driver.page_source
                         return page_source

@@ -164,12 +164,15 @@ def download_search_html(book: StaticTestBook, output_dir: str) -> bool:
             return False
 
         # Create a wrapper for fetch_page that matches the expected signature
-        def fetch_page_func(url, wait_for_element=None, not_found_marker=None, max_wait=30):
+        def fetch_page_func(
+            url, wait_for_element=None, not_found_marker=None, secondary_wait_element=None, max_wait=30
+        ):
             return fetch_page(
                 url,
                 plugin_name="romanceio",
                 wait_for_element=wait_for_element,
                 not_found_marker=not_found_marker,
+                secondary_wait_element=secondary_wait_element,
                 max_wait=max_wait,
             )
 
@@ -189,7 +192,13 @@ def download_search_html(book: StaticTestBook, output_dir: str) -> bool:
             return False
 
         print(f"    Fetching HTML from: {url}")
-        html_content = fetch_page(url, plugin_name="romanceio", wait_for_element="book-results", max_wait=30)
+        html_content = fetch_page(
+            url,
+            plugin_name="romanceio",
+            wait_for_element="book-results",
+            secondary_wait_element="has-background",
+            max_wait=30,
+        )
 
         if not html_content or len(html_content) == 0:
             print("    ❌ Failed: Empty HTML content returned")
