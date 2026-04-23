@@ -9,13 +9,20 @@ from .common_romanceio_fetch_helper import (  # pylint: disable=import-error
 )
 
 
-def fetch_page(url, wait_for_element=None, max_wait=30, log_func=None):
+def fetch_page(
+    url, wait_for_element=None, not_found_marker=None, secondary_wait_element=None, max_wait=30, log_func=None
+):
     """
     Fetch a page using SeleniumBase with Cloudflare bypass.
 
     Args:
         url: URL to fetch
         wait_for_element: Optional element to wait for in page source
+        not_found_marker: Optional string; if found while waiting for wait_for_element,
+            return the page immediately instead of timing out.
+        secondary_wait_element: Optional string; after wait_for_element is found, keep
+            polling for this element within remaining time before returning. The page
+            is returned regardless of whether it appears.
         max_wait: Maximum seconds to wait for page load
         log_func: Optional logging function to route Chrome errors to calibre's job log
 
@@ -23,7 +30,13 @@ def fetch_page(url, wait_for_element=None, max_wait=30, log_func=None):
         Page HTML as string, or None on error
     """
     return _common_fetch_page(
-        url, plugin_name="romanceio_fields", wait_for_element=wait_for_element, max_wait=max_wait, log_func=log_func
+        url,
+        plugin_name="romanceio_fields",
+        wait_for_element=wait_for_element,
+        not_found_marker=not_found_marker,
+        secondary_wait_element=secondary_wait_element,
+        max_wait=max_wait,
+        log_func=log_func,
     )
 
 

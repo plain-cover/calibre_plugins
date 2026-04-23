@@ -14,12 +14,42 @@ if parent_dir not in sys.path:
 
 from typing import Optional, List, Callable, Any, NamedTuple, Dict
 
-from .common_romanceio_json_api import JsonApiEndpointError  # pylint: disable=import-outside-toplevel
+from .common_romanceio_json_api import (  # pylint: disable=import-outside-toplevel
+    JsonApiEndpointError,
+    JSON_SEARCH_URL_PREFIX,
+    JSON_BOOKS_URL_PREFIX,
+)
 from .common_romanceio_fetch_helper import (
     ChromeNotInstalledError,
     RosettaNotInstalledError,
     SeleniumBaseImportError,
 )  # pylint: disable=import-outside-toplevel
+
+
+# Set of URL prefixes for JSON API endpoints that returned 404 this session.
+# Keyed by the stable endpoint prefix (e.g. "https://www.romance.io/json/books")
+# so that /json/books/abc123 and /json/books/def456 are treated as the same endpoint.
+# This prevents re-trying a known-dead endpoint for every book in a large library run
+# while leaving other endpoints (e.g. search) unaffected.
+_dead_json_endpoints: set = set()
+
+
+def _endpoint_key(url: str) -> str:
+    """Return a stable cache key for a URL's endpoint pattern.
+
+    Extracts the first path segment after /json/ so that:
+      https://www.romance.io/json/books/abc123      -> https://www.romance.io/json/books
+      https://www.romance.io/json/search_books?q=X -> https://www.romance.io/json/search_books
+      https://www.romance.io/json/author/abc123/.. -> https://www.romance.io/json/author
+    """
+    base = url.split("?")[0]  # drop query string
+    marker = "/json/"
+    idx = base.find(marker)
+    if idx == -1:
+        return base  # not a /json/ URL - use whole thing as key
+    prefix = base[: idx + len(marker)]
+    first_segment = base[idx + len(marker) :].split("/")[0]
+    return prefix + first_segment
 
 
 class SearchResult(NamedTuple):
@@ -94,6 +124,7 @@ def _retry_with_delay(
             log_func(f"✗ {method_name} attempt {attempt} failed: {error_type}: {error_msg}")
             if isinstance(e, JsonApiEndpointError):
                 log_func("  Endpoint is down (404), skipping retries.")
+                _dead_json_endpoints.add(_endpoint_key(e.url))
                 return SearchResult(success=False, result=None)
             if isinstance(e, ChromeNotInstalledError):
                 log_func(
@@ -101,10 +132,10 @@ def _retry_with_delay(
                     "  Install Chrome to enable this feature: https://www.google.com/chrome/"
                 )
                 return SearchResult(success=False, result=None)
-            if isinstance(e, SeleniumBaseImportError):
+            if isinstance(e, SeleniumBaseImportError) or type(e).__name__ == "SeleniumBaseImportError":
                 log_func(
                     "  Browser automation (SeleniumBase) could not be loaded.\n"
-                    "  Try restarting Calibre. If the problem persists, reinstall the plugin."
+                    "  Try reinstalling the plugin or restarting Calibre."
                 )
                 return SearchResult(success=False, result=None)
             if isinstance(e, RosettaNotInstalledError):
@@ -151,14 +182,19 @@ def search_with_fallback(
         romanceio_id (str) or None if not found
     """
     # Try JSON API first with retries
-    log_func("Attempting JSON API search first...")
-    json_search = _retry_with_delay(
-        func=lambda: json_search_func(title, authors, log_func),
-        method_name="JSON API search",
-        max_retries=max_retries,
-        retry_delay=retry_delay,
-        log_func=log_func,
-    )
+    _search_key = _endpoint_key(JSON_SEARCH_URL_PREFIX)
+    if _search_key in _dead_json_endpoints:
+        log_func("Skipping JSON API search (endpoint returned 404 earlier this session).")
+        json_search = SearchResult(success=False, result=None)
+    else:
+        log_func("Attempting JSON API search first...")
+        json_search = _retry_with_delay(
+            func=lambda: json_search_func(title, authors, log_func),
+            method_name="JSON API search",
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            log_func=log_func,
+        )
 
     if json_search.result:
         return json_search.result
@@ -211,14 +247,19 @@ def fetch_details_with_fallback(
     Returns:
         Book data (any format) or None if fetch failed
     """
-    log_func(f"Attempting JSON API fetch for {romanceio_id}...")
-    json_fetch = _retry_with_delay(
-        func=lambda: json_fetch_func(romanceio_id, log_func),
-        method_name="JSON API fetch",
-        max_retries=max_retries,
-        retry_delay=retry_delay,
-        log_func=log_func,
-    )
+    _books_key = _endpoint_key(JSON_BOOKS_URL_PREFIX)
+    if _books_key in _dead_json_endpoints:
+        log_func(f"Skipping JSON API fetch for {romanceio_id} (endpoint returned 404 earlier this session).")
+        json_fetch = SearchResult(success=False, result=None)
+    else:
+        log_func(f"Attempting JSON API fetch for {romanceio_id}...")
+        json_fetch = _retry_with_delay(
+            func=lambda: json_fetch_func(romanceio_id, log_func),
+            method_name="JSON API fetch",
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            log_func=log_func,
+        )
 
     if json_fetch.result:
         return json_fetch.result
@@ -265,15 +306,21 @@ def get_details_with_fallback(
     Returns:
         Dict with book fields, or None if not found
     """
-    log_func(f"Attempting JSON API for book {romanceio_id}...")
-
-    try:
-        details = json_fetch_func(romanceio_id, log_func)
-        if details:
-            log_func(f"✓ JSON API book details successful for {romanceio_id}")
-            return details
-    except (OSError, ValueError, RuntimeError) as e:
-        log_func(f"JSON API book details failed: {e}")
+    _books_key = _endpoint_key(JSON_BOOKS_URL_PREFIX)
+    if _books_key in _dead_json_endpoints:
+        log_func(f"Skipping JSON API for book {romanceio_id} (endpoint returned 404 earlier this session).")
+    else:
+        log_func(f"Attempting JSON API for book {romanceio_id}...")
+        try:
+            details = json_fetch_func(romanceio_id, log_func)
+            if details:
+                log_func(f"✓ JSON API book details successful for {romanceio_id}")
+                return details
+        except JsonApiEndpointError as e:
+            log_func(f"JSON API book details failed (404): {e}")
+            _dead_json_endpoints.add(_endpoint_key(e.url))
+        except (OSError, ValueError, RuntimeError) as e:
+            log_func(f"JSON API book details failed: {e}")
 
     log_func(f"Falling back to Chrome/HTML scraping for book {romanceio_id}...")
 

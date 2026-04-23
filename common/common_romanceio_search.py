@@ -480,7 +480,17 @@ def search_for_romanceio_id(title, authors, fetch_page_func, log_func=print):
 
     log_func(f"Searching Romance.io: {query_url}")
 
-    raw_html = fetch_page_func(query_url, wait_for_element="book-results", max_wait=30)
+    # Wait for the search results container to be present. ul#book-results is rendered
+    # by the server-side template so it appears quickly. We then wait for li.has-background
+    # (the JS-rendered result items) within the remaining time before parsing.
+    # If has-background never appears, we return anyway - genuine 0-result pages have
+    # the container but no items, and the parser will correctly find 0 results.
+    raw_html = fetch_page_func(
+        query_url,
+        wait_for_element="book-results",
+        secondary_wait_element="has-background",
+        max_wait=30,
+    )
     if not raw_html:
         error_msg = "Failed to fetch Romance.io search page"
         log_func(error_msg)

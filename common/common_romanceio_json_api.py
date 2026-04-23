@@ -23,7 +23,16 @@ except ImportError:
 class JsonApiEndpointError(RuntimeError):
     """Raised when a Romance.io JSON API endpoint returns HTTP 404 (endpoint is down/retired)."""
 
-    pass
+    def __init__(self, message: str, url: str = "") -> None:
+        super().__init__(message)
+        self.url = url
+
+
+# Stable URL prefixes for each JSON API endpoint (path up to but not including the resource ID).
+# Used by the orchestrator to cache dead endpoints on a per-endpoint basis.
+JSON_SEARCH_URL_PREFIX = "https://www.romance.io/json/search_books"
+JSON_BOOKS_URL_PREFIX = "https://www.romance.io/json/books"
+JSON_AUTHOR_URL_PREFIX = "https://www.romance.io/json/author"
 
 
 def _make_json_request(url: str, timeout: int = 30, log_func: Optional[Callable] = None) -> Optional[Dict[str, Any]]:
@@ -68,7 +77,7 @@ def _make_json_request(url: str, timeout: int = 30, log_func: Optional[Callable]
             msg = f"JSON API endpoint unavailable (404): {url}"
             if log_func:
                 log_func(msg)
-            raise JsonApiEndpointError(msg) from e
+            raise JsonApiEndpointError(msg, url=url) from e
         error_msg = f"JSON API request failed: HTTPError {e.code}: {e}"
         if log_func:
             log_func(error_msg)

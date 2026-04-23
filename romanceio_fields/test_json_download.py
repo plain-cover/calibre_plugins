@@ -33,6 +33,11 @@ from common.test_data import TEST_BOOKS
 
 env = setup_test_environment("romanceio_fields")
 
+# Track whether the /json/books endpoint returned 404 this session so we skip
+# subsequent books immediately rather than hammering a known-dead endpoint.
+# Using a dict (mutable container) avoids needing a global statement in the closure.
+_json_endpoint_state = {"dead": False}
+
 
 def fetch_and_parse_json(romanceio_id: str, is_negative_test: bool) -> tuple:
     """Fetch and parse JSON data for a book.
@@ -60,10 +65,14 @@ def fetch_and_parse_json(romanceio_id: str, is_negative_test: bool) -> tuple:
     json_api_endpoint_error = common_json_api.JsonApiEndpointError
 
     print(f"Fetching JSON API data for {romanceio_id}...")
+    if _json_endpoint_state["dead"]:
+        print("⚠️  SKIPPED: JSON API /books endpoint returned 404 earlier this session")
+        return (None, True)
     try:
         book_json = get_book_details_json(romanceio_id, log_func=print, timeout=30)
     except json_api_endpoint_error as e:
-        print(f"⚠️  SKIPPED: JSON API endpoint unavailable: {e}")
+        print(f"⚠️  SKIPPED: {e}")
+        _json_endpoint_state["dead"] = True
         return (None, True)
 
     if book_json is None:

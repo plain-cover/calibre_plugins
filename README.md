@@ -143,7 +143,7 @@ For the Romance.io Fields plugin, you may have an extra step to ensure the plugi
 
 **You can process one book or many at once.** Select any number of books and click the Romance.io plugin button in the main Calibre toolbar to download in bulk. The download will run in the background and alert you when it's done. You can track the job's progress in the bottom-right corner of the Calibre window.
 
-**A browser window may open during downloads.** The plugin tries the Romance.io JSON API first, which is fast and requires no browser. If the API is unavailable, it falls back to opening a Chrome browser window to scrape the page directly - just ignore it, it will close automatically. JSON API lookups are fast; browser-based lookups can take ~5–30 seconds per book.
+**A browser window may open during downloads.** The plugin tries the Romance.io JSON API first, which is fast and requires no browser. If the API is unavailable, it falls back to opening a Chrome browser window to scrape the page directly - just ignore it, it will close automatically. JSON API lookups are fast; browser-based lookups can take ~5-30 seconds per book.
 
 **Chrome is required for the HTML-based metadata download fallback.** If Chrome is not installed, the plugin can only use the JSON API, so if that isn't available, you won't get any field data. Install Chrome from [google.com/chrome](https://www.google.com/chrome/). Chrome doesn't need to be your default browser, it just needs to be installed. On Apple Silicon Macs (M1/M2/M3/M4), Chrome's browser automation also requires Rosetta 2 - if that's missing, the plugin's job log will tell you how to install it.
 

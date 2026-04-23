@@ -2,7 +2,7 @@ name: Calibre Plugin Tests
 
 on:
   push:
-    branches: [ "*" ]  # Run on all branches
+    branches: [ "main" ]  # Only run on main; feature branches are covered by pull_request
   pull_request:
     branches: [ "main" ]
   schedule:
@@ -15,10 +15,6 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
-    # Skip pull_request events from the same repo - the push trigger already ran CI
-    # when the commit was pushed to the branch. Only run pull_request for fork PRs
-    # (where the push trigger fires on the fork, not here).
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository
     steps:
     - uses: actions/checkout@v5
       with:

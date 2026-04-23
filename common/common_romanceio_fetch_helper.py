@@ -136,9 +136,19 @@ class VendoredPackageFinder(importlib.abc.MetaPathFinder):
                 setattr(sys.modules[parent_name], attr_name, imported)
 
             return imported
-        except Exception:
-            sys.modules.pop(fullname, None)
-            sys.modules.pop(real_name, None)
+        except Exception as _primary_exc:
+            # Clean up ALL partially-loaded submodules, not just the top-level.
+            # When loading a heavy package like seleniumbase, __init__.py may
+            # partially succeed before failing deep in its import chain, leaving
+            # stale half-initialized submodules in sys.modules.  If we only
+            # remove the top-level package, the zipimport fallback below will
+            # re-run __init__.py which then finds these stale submodules and
+            # fails too, producing a confusing 'No module named ...' error that
+            # hides the real cause.
+            for _mod_name in [k for k in list(sys.modules) if k == real_name or k.startswith(real_name + ".")]:
+                sys.modules.pop(_mod_name, None)
+            for _mod_name in [k for k in list(sys.modules) if k == fullname or k.startswith(fullname + ".")]:
+                sys.modules.pop(_mod_name, None)
             # Redirect via calibre_plugins namespace failed (e.g. in calibre GUI mode).
             # Fall back to a direct import via sys.path so zipimport can handle it.
             # Import the full dotted name (not just the top-level package) so submodules
@@ -155,8 +165,10 @@ class VendoredPackageFinder(importlib.abc.MetaPathFinder):
                     if parent_name in sys.modules:
                         setattr(sys.modules[parent_name], attr_name, imported)
                 return imported
-            except Exception:
-                raise ImportError(f"No module named {fullname!r}")
+            except Exception as _fallback_exc:
+                # Preserve the original (primary) exception as __cause__ so it
+                # appears in tracebacks and can be logged in fetch_page.
+                raise ImportError(f"No module named {fullname!r}") from _primary_exc
             finally:
                 if was_in:
                     sys.meta_path.insert(0, self)  # type: ignore[arg-type]
@@ -223,7 +235,20 @@ def parse_html_from_selenium(html: str) -> "lxml.html.HtmlElement":  # type: ign
     return _html_fromstring(html_bytes, parser=parser)
 
 
-def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=None):
+# Guard so the one-time stale profile cleanup only runs once per process,
+# not on every fetch_page call (could block for minutes if 250GB accumulated).
+_stale_profile_cleanup_done = False
+
+
+def fetch_page(
+    url,
+    plugin_name,
+    wait_for_element=None,
+    not_found_marker=None,
+    secondary_wait_element=None,
+    max_wait=30,
+    log_func=None,
+):
     """
     Fetch a page using SeleniumBase with Cloudflare bypass.
 
@@ -237,6 +262,16 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
         url: URL to fetch
         plugin_name: Name of the plugin ('romanceio' or 'romanceio_fields') for imports
         wait_for_element: Optional element to wait for in page source
+        not_found_marker: Optional string; if found in the page while waiting for
+            wait_for_element, return the page immediately instead of timing out.
+            Useful to avoid waiting the full timeout when a 404 / not-found page
+            is returned (which will never contain wait_for_element).
+        secondary_wait_element: Optional string; after wait_for_element is found,
+            continue polling until this element also appears (or time runs out).
+            Unlike wait_for_element, the page is returned whether or not this
+            element appears - it just buys more time for JS rendering. Use this
+            when wait_for_element is an SSR container and secondary_wait_element
+            is the JS-rendered content inside it (e.g. search result items).
         max_wait: Maximum seconds to wait for page load
         log_func: Optional logging function to route errors to calibre's job log
 
@@ -245,9 +280,10 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
     """
 
     def _log(msg):
-        print(msg)
         if log_func:
             log_func(msg)
+        else:
+            print(msg)
 
     user_data_dir = None
     try:
@@ -265,24 +301,38 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
 
         # One-time best-effort cleanup of stale profile dirs left by older plugin versions
         # that used ~/.calibre_selenium/user_data/profile_<pid>_<ts>/ and never deleted them.
-        _old_user_data_root = os.path.join(stable_base, "user_data")
-        if os.path.isdir(_old_user_data_root):
-            _now = time.time()
-            for _entry in os.listdir(_old_user_data_root):
-                if _entry.startswith("profile_"):
-                    _entry_path = os.path.join(_old_user_data_root, _entry)
-                    try:
-                        _mtime = os.path.getmtime(_entry_path)
-                        # Only remove dirs that haven't been touched in the last 2 hours
-                        # (leaves any dir that might belong to a concurrently running instance)
-                        if _now - _mtime > 7200:
-                            shutil.rmtree(_entry_path, ignore_errors=True)
-                    except OSError:
-                        pass  # ignore – best effort only
+        # Only runs once per process to avoid blocking every fetch when 250GB+ is accumulated.
+        global _stale_profile_cleanup_done
+        if not _stale_profile_cleanup_done:
+            _stale_profile_cleanup_done = True
+            _old_user_data_root = os.path.join(stable_base, "user_data")
+            if os.path.isdir(_old_user_data_root):
+                _now = time.time()
+                for _entry in os.listdir(_old_user_data_root):
+                    if _entry.startswith("profile_"):
+                        _entry_path = os.path.join(_old_user_data_root, _entry)
+                        try:
+                            _mtime = os.path.getmtime(_entry_path)
+                            # Only remove dirs that haven't been touched in the last 2 hours
+                            # (leaves any dir that might belong to a concurrently running instance)
+                            if _now - _mtime > 7200:
+                                shutil.rmtree(_entry_path, ignore_errors=True)
+                        except OSError:
+                            pass  # ignore - best effort only
 
         # Ensure persistent directories exist
         for dir_path in [sb_drivers_dir, downloads_dir]:
             os.makedirs(dir_path, exist_ok=True)
+
+        # Add the plugin directory to sys.path NOW (before module clearing and
+        # before VendoredPackageFinder is set up) so the zip is on sys.path from
+        # the start.  VendoredPackageFinder's zipimport fallback needs the zip
+        # on sys.path to find vendored packages when the calibre_plugins.*
+        # redirect fails.  Doing this early prevents a timing window where the
+        # fallback runs before the zip is discoverable.
+        _plugin_dir_early = os.path.dirname(os.path.abspath(__file__))
+        if _plugin_dir_early not in sys.path:
+            sys.path.insert(0, _plugin_dir_early)
 
         # Clear cached SeleniumBase/fasteners modules to ensure fresh import.
         # Clear both the calibre_plugins.{plugin_name}.* namespace AND the bare
@@ -323,8 +373,11 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
         # depend on how calibre's child IPC process sets plugin module attributes
         # (__file__ / __path__ on calibre_plugins.X point to the zip root in child
         # processes, not the plugin subdir inside it, causing ImportError).
+        # NOTE: also inserted early (before module clearing) as _plugin_dir_early above.
         plugin_dir = os.path.dirname(os.path.abspath(__file__))
         _log(f"Vendored import path: {plugin_dir!r}")
+        # Guard evaluates to False here (path already inserted as _plugin_dir_early above),
+        # but kept for safety in case __file__ resolves differently at this point.
         if plugin_dir not in sys.path:
             sys.path.insert(0, plugin_dir)
 
@@ -508,15 +561,35 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
 
             # Now wait for the actual content to load
             if wait_for_element:
-                remaining_time = max_wait - (time.time() - start_time)
+                remaining_time = max(10, max_wait - (time.time() - start_time))
                 element_start = time.time()
 
                 while time.time() - element_start < remaining_time:
                     page_source = driver.page_source
                     if wait_for_element in page_source:
-                        # Give JavaScript a moment to finish rendering
-                        time.sleep(1)
+                        if secondary_wait_element:
+                            # Container found; now wait for JS-rendered content within
+                            # remaining time. Return the page whether or not it appears
+                            # (genuine 0-result pages will never have it).
+                            secondary_start = time.time()
+                            secondary_remaining = remaining_time - (secondary_start - element_start)
+                            while time.time() - secondary_start < secondary_remaining:
+                                page_source = driver.page_source
+                                if secondary_wait_element in page_source:
+                                    _log(f"Secondary element '{secondary_wait_element}' found")
+                                    return page_source
+                                time.sleep(0.5)
+                            _log(f"Secondary element '{secondary_wait_element}' not found (page may have 0 results)")
+                            return driver.page_source
+                        # Give JavaScript a moment to finish rendering before returning.
+                        time.sleep(3)
                         page_source = driver.page_source
+                        return page_source
+                    # Early exit: if the not_found_marker is present and the primary element
+                    # still isn't, the page will never satisfy wait_for_element (e.g. a 404
+                    # error page that will never contain book-stats). Return immediately.
+                    if not_found_marker and not_found_marker.lower() in page_source.lower():
+                        _log("Not-found marker detected, returning page early")
                         return page_source
                     time.sleep(0.5)
 
@@ -526,6 +599,13 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
 
         except Exception as e:  # pylint: disable=broad-except
             msg = str(e)
+            # Check for seleniumbase ImportError first - non-retryable, propagate immediately
+            if "seleniumbase" in msg.lower() and type(e).__name__ in ("ImportError", "ModuleNotFoundError"):
+                raise SeleniumBaseImportError(
+                    f"SeleniumBase (bundled browser automation) could not be loaded: {e}\n"
+                    "This usually means the plugin zip's vendored packages aren't accessible\n"
+                    "in the current process. Try reinstalling the plugin or restarting Calibre."
+                ) from e
             if "chrome not found" in msg.lower() or "install it first" in msg.lower():
                 raise ChromeNotInstalledError(msg) from e
             if "rosetta" in msg.lower():
@@ -556,17 +636,33 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
                 try:
                     shutil.rmtree(user_data_dir, ignore_errors=True)
                 except Exception:  # pylint: disable=broad-except
-                    pass  # best effort – temp dir cleanup is non-critical
+                    pass  # best effort - temp dir cleanup is non-critical
     except ChromeNotInstalledError:
         raise  # propagate immediately - no point retrying
     except RosettaNotInstalledError:
         raise  # propagate immediately - no point retrying
+    except SeleniumBaseImportError:
+        raise  # propagate immediately - no point retrying
     except Exception as e:  # pylint: disable=broad-except
-        if isinstance(e, ImportError) and "seleniumbase" in str(e).lower():
+        # Use type name as fallback in case isinstance fails due to class identity issues
+        # (can happen when the same module is loaded under two different names in sys.modules)
+        is_import_error = isinstance(e, ImportError) or type(e).__name__ in ("ImportError", "ModuleNotFoundError")
+        if is_import_error and "seleniumbase" in str(e).lower():
+            # Log the full chained traceback so the root cause appears in calibre's job log.
+            # The primary exception (_primary_exc inside VendoredPackageFinder.load_module)
+            # is preserved as e.__cause__ - print_exc() will show the full chain.
+            import traceback as _tb
+
+            _tb.print_exc()
+            # Include the real root cause (chained __cause__) in the error message
+            # so it's visible in the job log even when tracebacks aren't shown.
+            root_cause = e.__cause__ or e
+            root_msg = f"{type(root_cause).__name__}: {root_cause}" if root_cause is not e else ""
+            detail = f"\n  Root cause: {root_msg}" if root_msg else ""
             raise SeleniumBaseImportError(
-                f"SeleniumBase (bundled browser automation) could not be loaded: {e}\n"
+                f"SeleniumBase (bundled browser automation) could not be loaded: {e}{detail}\n"
                 "This usually means the plugin zip's vendored packages aren't accessible\n"
-                "in the current process. Try restarting Calibre."
+                "in the current process. Try reinstalling the plugin or restarting Calibre."
             ) from e
         _log(f"Top-level error in fetch_page: {type(e).__name__}: {e}")
         import traceback
@@ -613,31 +709,28 @@ def fetch_romanceio_book_page(url, plugin_name, log=None):
         else:
             print(msg)
 
-    # First fetch without waiting for specific element to check for 404
-    page_html = fetch_page(url, plugin_name, wait_for_element=None, max_wait=60, log_func=log_msg)
+    # Single fetch: wait for book-stats to render, but exit immediately if a
+    # 404/not-found page is detected so we don't burn the full timeout.
+    _not_found_text = "the page you are looking for can't be found"
+    page_html = fetch_page(
+        url,
+        plugin_name,
+        wait_for_element="book-stats",
+        not_found_marker=_not_found_text,
+        max_wait=60,
+        log_func=log_msg,
+    )
 
     if not page_html:
         log_error("Failed to fetch page (Chrome timed out or crashed - check terminal for details)")
         return None, False
 
-    if "the page you are looking for can't be found" in page_html.lower():
+    if _not_found_text in page_html.lower():
         log_error(f"Invalid Romance.io ID (404): {url}")
         return page_html, False
 
-    # Valid page - check if book-stats is present
     if "book-stats" not in page_html:
-        log_msg("book-stats not found on first load, waiting for it to render...")
-        # Retry with explicit wait for book-stats element
-        page_html = fetch_page(url, plugin_name, wait_for_element="book-stats", max_wait=30, log_func=log_msg)
-
-        if not page_html:
-            log_error("Failed to fetch page on retry (Chrome timed out or crashed - check terminal for details)")
-            return None, False
-
-        if "book-stats" not in page_html:
-            log_error(f"Page missing book-stats element after retry: {url}")
-            return page_html, False
-
-        log_msg("book-stats found after waiting")
+        log_error(f"Page missing book-stats element after waiting: {url}")
+        return page_html, False
 
     return page_html, True
