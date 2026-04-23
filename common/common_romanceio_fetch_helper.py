@@ -266,9 +266,10 @@ def fetch_page(url, plugin_name, wait_for_element=None, not_found_marker=None, m
     """
 
     def _log(msg):
-        print(msg)
         if log_func:
             log_func(msg)
+        else:
+            print(msg)
 
     user_data_dir = None
     try:
