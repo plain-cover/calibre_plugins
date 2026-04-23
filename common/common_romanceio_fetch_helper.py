@@ -362,8 +362,8 @@ def fetch_page(url, plugin_name, wait_for_element=None, not_found_marker=None, m
         # NOTE: also inserted early (before module clearing) as _plugin_dir_early above.
         plugin_dir = os.path.dirname(os.path.abspath(__file__))
         _log(f"Vendored import path: {plugin_dir!r}")
-        # Guard is always True here (early insertion already added it), but kept
-        # for clarity and safety in case the early path differs for any reason.
+        # Guard evaluates to False here (path already inserted as _plugin_dir_early above),
+        # but kept for safety in case __file__ resolves differently at this point.
         if plugin_dir not in sys.path:
             sys.path.insert(0, plugin_dir)
 
@@ -553,12 +553,14 @@ def fetch_page(url, plugin_name, wait_for_element=None, not_found_marker=None, m
                 while time.time() - element_start < remaining_time:
                     page_source = driver.page_source
                     if wait_for_element in page_source:
-                        # Give JavaScript a moment to finish rendering
-                        time.sleep(1)
+                        # Give JavaScript a moment to finish rendering before returning.
+                        # 3 seconds is enough for most JS frameworks in CI headless mode.
+                        time.sleep(3)
                         page_source = driver.page_source
                         return page_source
-                    # Early exit: not-found page will never contain wait_for_element,
-                    # so return immediately rather than waiting out the full timeout.
+                    # Early exit: if the not_found_marker is present and the primary element
+                    # still isn't, the page will never satisfy wait_for_element (e.g. a 404
+                    # error page that will never contain book-stats). Return immediately.
                     if not_found_marker and not_found_marker.lower() in page_source.lower():
                         _log("Not-found marker detected, returning page early")
                         return page_source

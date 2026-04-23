@@ -480,18 +480,12 @@ def search_for_romanceio_id(title, authors, fetch_page_func, log_func=print):
 
     log_func(f"Searching Romance.io: {query_url}")
 
-    # Wait for actual result items (li.has-background), not just the empty container.
-    # The ul#book-results container is present in the page template immediately (before
-    # JavaScript populates it), so waiting for "book-results" returns the page too early
-    # when results take a moment to render.  "has-background" is the class on each result
-    # item and only appears once results are actually in the DOM.
-    # If "has-background" never appears (genuine 0 results), we fall back to accepting
-    # the page once "book-results" is present — the parser will find 0 items, which is
-    # the correct outcome.
+    # Wait for the search results container to be present. ul#book-results is rendered
+    # by the server-side template so it appears quickly; after finding it we sleep 3s
+    # (inside fetch_page) to give JS time to populate the result items before we parse.
     raw_html = fetch_page_func(
         query_url,
-        wait_for_element="has-background",
-        not_found_marker="book-results",
+        wait_for_element="book-results",
         max_wait=30,
     )
     if not raw_html:
