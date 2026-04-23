@@ -16,6 +16,7 @@ from typing import Optional, List, Callable, Any, NamedTuple, Dict
 
 from .common_romanceio_json_api import (  # pylint: disable=import-outside-toplevel
     JsonApiEndpointError,
+    JsonApiBookNotFoundError,
     JSON_SEARCH_URL_PREFIX,
     JSON_BOOKS_URL_PREFIX,
 )
@@ -122,6 +123,11 @@ def _retry_with_delay(
             error_type = type(e).__name__
             error_msg = str(e)
             log_func(f"✗ {method_name} attempt {attempt} failed: {error_type}: {error_msg}")
+            if isinstance(e, JsonApiBookNotFoundError):
+                # Per-book/author 404: this item isn't in the JSON API, try HTML.
+                # Do NOT mark the endpoint as dead - other books may be available.
+                log_func("  Book not found in JSON API (404), skipping retries. Will try HTML.")
+                return SearchResult(success=False, result=None)
             if isinstance(e, JsonApiEndpointError):
                 log_func("  Endpoint is down (404), skipping retries.")
                 _dead_json_endpoints.add(_endpoint_key(e.url))
@@ -316,9 +322,6 @@ def get_details_with_fallback(
             if details:
                 log_func(f"✓ JSON API book details successful for {romanceio_id}")
                 return details
-        except JsonApiEndpointError as e:
-            log_func(f"JSON API book details failed (404): {e}")
-            _dead_json_endpoints.add(_endpoint_key(e.url))
         except (OSError, ValueError, RuntimeError) as e:
             log_func(f"JSON API book details failed: {e}")
 

@@ -15,6 +15,7 @@ if parent_dir not in sys.path:
 
 from common.common_romanceio_json_api import (
     JsonApiEndpointError,
+    JsonApiBookNotFoundError,
     JSON_SEARCH_URL_PREFIX,
     JSON_BOOKS_URL_PREFIX,
 )
@@ -48,6 +49,14 @@ def clear_dead_endpoints():
 def _raise_404(*_args, **_kwargs):
     raise JsonApiEndpointError(
         "JSON API endpoint unavailable (404): https://www.romance.io/json/books/abc123",
+        url="https://www.romance.io/json/books/abc123",
+    )
+
+
+def _raise_book_not_found(*_args, **_kwargs):
+    """Simulates get_book_details_json when a specific book isn't in the JSON API."""
+    raise JsonApiBookNotFoundError(
+        "JSON API: book abc123 not available via JSON (404), will try HTML",
         url="https://www.romance.io/json/books/abc123",
     )
 
@@ -122,8 +131,52 @@ def test_transient_error_does_retry():
 # ---------------------------------------------------------------------------
 
 
+def test_book_not_found_does_not_retry():
+    """JsonApiBookNotFoundError must exit after 1 attempt and NOT add to the dead set."""
+    attempts = []
+
+    def func():
+        attempts.append(1)
+        raise JsonApiBookNotFoundError(
+            "JSON API: book abc123 not available via JSON (404), will try HTML",
+            url="https://www.romance.io/json/books/abc123",
+        )
+
+    log_func, logs = _collecting_log()
+    result = _retry_with_delay(func, "JSON API fetch", max_retries=3, retry_delay=0, log_func=log_func)
+
+    assert len(attempts) == 1, f"Expected 1 attempt, got {len(attempts)}"
+    assert result == SearchResult(success=False, result=None)
+    assert not _is_endpoint_dead(JSON_BOOKS_URL_PREFIX), "Books endpoint must NOT be marked dead for a per-book 404"
+    assert not any("retry attempt" in msg.lower() for msg in logs)
+
+
+def test_fetch_details_book_not_found_falls_through_to_html():
+    """On JsonApiBookNotFoundError, fetch_details_with_fallback must try HTML without marking endpoint dead."""
+    html_called = []
+
+    def html_fetch(romanceio_id, _log_func):
+        html_called.append(romanceio_id)
+        return "html_result"
+
+    log_func, logs = _collecting_log()
+    result = fetch_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=_raise_book_not_found,
+        html_fetch_func=html_fetch,
+        log_func=log_func,
+        max_retries=3,
+        retry_delay=0,
+    )
+
+    assert result == "html_result"
+    assert html_called == ["abc123"], "HTML fallback should have been called exactly once"
+    assert any("falling back" in msg.lower() for msg in logs)
+    assert not _is_endpoint_dead(JSON_BOOKS_URL_PREFIX), "Books endpoint must NOT be marked dead for a per-book 404"
+
+
 def test_fetch_details_404_falls_through_to_html():
-    """On JSON 404, fetch_details_with_fallback should try HTML scraping."""
+    """On JSON endpoint 404 (JsonApiEndpointError), fetch_details_with_fallback should try HTML scraping."""
     html_called = []
 
     def html_fetch(romanceio_id, _log_func):
@@ -419,21 +472,23 @@ def test_get_details_skips_json_when_books_endpoint_dead():
     assert not json_called, "JSON fetch must not be called when books endpoint is known-dead"
 
 
-def test_get_details_404_adds_to_dead_set():
-    """get_details_with_fallback must cache a 404 so subsequent calls skip JSON."""
+def test_get_details_book_not_found_falls_through_to_html():
+    """When get_book_details_json raises JsonApiBookNotFoundError (per-book 404),
+    get_details_with_fallback must fall through to HTML without marking the endpoint dead."""
+    html_called = []
 
-    def json_fetch_404(romanceio_id, _log):
-        raise JsonApiEndpointError(
-            f"JSON API endpoint unavailable (404): https://www.romance.io/json/books/{romanceio_id}",
-            url=f"https://www.romance.io/json/books/{romanceio_id}",
-        )
+    def html_fetch(romanceio_id, _log):
+        html_called.append(romanceio_id)
+        return "html_result"
 
     log_func, _ = _collecting_log()
-    get_details_with_fallback(
+    result = get_details_with_fallback(
         romanceio_id="abc123",
-        json_fetch_func=json_fetch_404,
-        html_fetch_func=_return_none,
+        json_fetch_func=_raise_book_not_found,
+        html_fetch_func=html_fetch,
         log_func=log_func,
     )
 
-    assert _is_endpoint_dead(JSON_BOOKS_URL_PREFIX), "Books endpoint must be cached as dead after 404"
+    assert html_called == ["abc123"], "HTML fallback must be called when JSON raises book-not-found"
+    assert result == "html_result"
+    assert not _is_endpoint_dead(JSON_BOOKS_URL_PREFIX), "Books endpoint must NOT be marked dead for a per-book 404"

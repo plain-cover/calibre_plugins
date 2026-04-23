@@ -68,8 +68,9 @@ class VendoredModule(types.ModuleType):
 class VendoredPackageFinder(importlib.abc.MetaPathFinder):
     """Find vendored packages and handle circular imports by creating module aliases"""
 
-    def __init__(self, plugin_name, packages=None):
+    def __init__(self, plugin_name, packages=None, plugin_dir=None):
         self.plugin_name = plugin_name
+        self.plugin_dir = plugin_dir
         self.plugin_prefix = f"calibre_plugins.{plugin_name}"
         # Build map of package names to their prefixes
         self.packages = {pkg: f"{self.plugin_prefix}.{pkg}" for pkg in (packages or VENDORED_PACKAGES)}
@@ -123,6 +124,17 @@ class VendoredPackageFinder(importlib.abc.MetaPathFinder):
 
         # Create placeholder module that Python recognizes as a package
         placeholder = VendoredModule(fullname, self, real_name)
+        # Set __path__ for top-level packages so Python can find submodules via zipimport.
+        # Without this, __path__=[] forces ALL seleniumbase sub-imports back through
+        # VendoredPackageFinder, which redirects to calibre_plugins.romanceio.seleniumbase.*
+        # via calibre's own hook.  On calibre 8.x that redirect fails for deeply nested
+        # names (e.g. seleniumbase.core.browser_launcher), producing the misleading
+        # "No module named 'seleniumbase'" SeleniumBaseImportError even though the top-
+        # level package is present.  A proper __path__ lets Python use zipimport directly
+        # for all intra-package sub-imports, bypassing the problematic redirect entirely.
+        if self.plugin_dir and "." not in fullname:
+            # zipimport expects 'zip_file_path/package_name' with a forward slash
+            placeholder.__path__ = [self.plugin_dir + "/" + fullname]
         sys.modules[fullname] = placeholder
 
         try:
@@ -149,6 +161,11 @@ class VendoredPackageFinder(importlib.abc.MetaPathFinder):
                 sys.modules.pop(_mod_name, None)
             for _mod_name in [k for k in list(sys.modules) if k == fullname or k.startswith(fullname + ".")]:
                 sys.modules.pop(_mod_name, None)
+            # Invalidate importlib caches so zipimport re-scans the zip file.
+            # The primary attempt may have left a stale entry in zipimport's internal
+            # file-listing cache that would cause the fallback to fail with the same
+            # "No module named '...'" error even though the zip contains the module.
+            importlib.invalidate_caches()
             # Redirect via calibre_plugins namespace failed (e.g. in calibre GUI mode).
             # Fall back to a direct import via sys.path so zipimport can handle it.
             # Import the full dotted name (not just the top-level package) so submodules
@@ -360,7 +377,7 @@ def fetch_page(
                 break
 
         if not existing_finder:
-            finder: VendoredPackageFinder = VendoredPackageFinder(plugin_name)  # type: ignore[assignment]
+            finder: VendoredPackageFinder = VendoredPackageFinder(plugin_name, plugin_dir=_plugin_dir_early)  # type: ignore[assignment]
             sys.meta_path.insert(0, finder)  # type: ignore[arg-type]
 
         # Add the plugin's package directory to sys.path so vendored packages

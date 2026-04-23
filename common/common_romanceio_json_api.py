@@ -28,6 +28,15 @@ class JsonApiEndpointError(RuntimeError):
         self.url = url
 
 
+class JsonApiBookNotFoundError(JsonApiEndpointError):
+    """Raised when a specific book/author ID returns 404 from the JSON API.
+
+    This is a normal per-item not-found result, NOT an endpoint failure.
+    The caller should fall back to HTML scraping but must NOT mark the
+    entire endpoint as dead (other books may still be available via JSON).
+    """
+
+
 # Stable URL prefixes for each JSON API endpoint (path up to but not including the resource ID).
 # Used by the orchestrator to cache dead endpoints on a per-endpoint basis.
 JSON_SEARCH_URL_PREFIX = "https://www.romance.io/json/search_books"
@@ -152,7 +161,7 @@ def get_book_details_json(
         log_func: Optional logging function
 
     Returns:
-        First book dict from JSON response if found, None if book not found
+        First book dict from JSON response if found, None if book not found or not in JSON API
 
     Raises:
         RuntimeError: If API returns success=false or unexpected format (technical failure)
@@ -160,7 +169,16 @@ def get_book_details_json(
     """
     url = f"https://www.romance.io/json/books/{romanceio_id}"
 
-    result = _make_json_request(url, timeout, log_func)
+    try:
+        result = _make_json_request(url, timeout, log_func)
+    except JsonApiEndpointError as e:
+        # 404 for a specific book means this book isn't in the JSON API.
+        # Re-raise as JsonApiBookNotFoundError so the orchestrator knows to fall
+        # back to HTML for THIS book without marking the entire endpoint as dead.
+        msg = f"JSON API: book {romanceio_id} not available via JSON (404), will try HTML"
+        if log_func:
+            log_func(msg)
+        raise JsonApiBookNotFoundError(msg, url=e.url) from e
 
     # Check for API success flag
     if result and result.get("success") is False:
@@ -208,7 +226,16 @@ def get_author_details_json(
     """
     url = f"https://www.romance.io/json/author/{author_id}/popular/0/20"
 
-    result = _make_json_request(url, timeout, log_func)
+    try:
+        result = _make_json_request(url, timeout, log_func)
+    except JsonApiEndpointError as e:
+        # 404 for a specific author means this author isn't in the JSON API.
+        # Re-raise as JsonApiBookNotFoundError so the orchestrator falls back
+        # to HTML without marking the entire endpoint as dead.
+        msg = f"JSON API: author {author_id} not available via JSON (404), will try HTML"
+        if log_func:
+            log_func(msg)
+        raise JsonApiBookNotFoundError(msg, url=e.url) from e
 
     # Check for API success flag
     if result and result.get("success") is False:
