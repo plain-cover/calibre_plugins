@@ -164,8 +164,14 @@ def download_search_html(book: StaticTestBook, output_dir: str) -> bool:
             return False
 
         # Create a wrapper for fetch_page that matches the expected signature
-        def fetch_page_func(url, wait_for_element=None, max_wait=30):
-            return fetch_page(url, plugin_name="romanceio", wait_for_element=wait_for_element, max_wait=max_wait)
+        def fetch_page_func(url, wait_for_element=None, not_found_marker=None, max_wait=30):
+            return fetch_page(
+                url,
+                plugin_name="romanceio",
+                wait_for_element=wait_for_element,
+                not_found_marker=not_found_marker,
+                max_wait=max_wait,
+            )
 
         # Use the exact same search function as the plugin to get HTML
         # This ensures we're fetching and parsing exactly as the plugin does

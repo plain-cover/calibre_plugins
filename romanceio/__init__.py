@@ -212,7 +212,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
                     return None
 
                 def html_search(title, authors, log_func):
-                    from calibre_plugins.romanceio.common_romanceio_fetch_helper import fetch_page  # type: ignore[import-not-found]  # pylint: disable=import-error
+                    from calibre_plugins.romanceio.fetch_helper import fetch_page  # type: ignore[import-not-found]  # pylint: disable=import-error
                     from calibre_plugins.romanceio.common_romanceio_search import search_for_romanceio_id  # type: ignore[import-not-found]  # pylint: disable=import-error
 
                     def fetch_with_log(url, **kwargs):
