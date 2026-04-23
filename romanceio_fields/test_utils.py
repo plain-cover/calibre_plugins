@@ -95,9 +95,15 @@ def setup_test_environment(plugin_name: str = "romanceio_fields") -> Dict[str, A
     # Create fetch_page wrapper
     fetch_page_base = fetch_helper_module.fetch_page
 
-    def fetch_page(url, wait_for_element=None, max_wait=30):
+    def fetch_page(url, wait_for_element=None, not_found_marker=None, max_wait=30):
         """Wrapper to add plugin_name for tests"""
-        return fetch_page_base(url, plugin_name, wait_for_element, max_wait)
+        return fetch_page_base(
+            url,
+            plugin_name,
+            wait_for_element=wait_for_element,
+            not_found_marker=not_found_marker,
+            max_wait=max_wait,
+        )
 
     # Create pre-configured get_romanceio_id function
     # This will be bound later once get_romanceio_id is available

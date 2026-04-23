@@ -235,7 +235,12 @@ def parse_html_from_selenium(html: str) -> "lxml.html.HtmlElement":  # type: ign
     return _html_fromstring(html_bytes, parser=parser)
 
 
-def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=None):
+# Guard so the one-time stale profile cleanup only runs once per process,
+# not on every fetch_page call (could block for minutes if 250GB accumulated).
+_stale_profile_cleanup_done = False
+
+
+def fetch_page(url, plugin_name, wait_for_element=None, not_found_marker=None, max_wait=30, log_func=None):
     """
     Fetch a page using SeleniumBase with Cloudflare bypass.
 
@@ -249,6 +254,10 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
         url: URL to fetch
         plugin_name: Name of the plugin ('romanceio' or 'romanceio_fields') for imports
         wait_for_element: Optional element to wait for in page source
+        not_found_marker: Optional string; if found in the page while waiting for
+            wait_for_element, return the page immediately instead of timing out.
+            Useful to avoid waiting the full timeout when a 404 / not-found page
+            is returned (which will never contain wait_for_element).
         max_wait: Maximum seconds to wait for page load
         log_func: Optional logging function to route errors to calibre's job log
 
@@ -277,20 +286,24 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
 
         # One-time best-effort cleanup of stale profile dirs left by older plugin versions
         # that used ~/.calibre_selenium/user_data/profile_<pid>_<ts>/ and never deleted them.
-        _old_user_data_root = os.path.join(stable_base, "user_data")
-        if os.path.isdir(_old_user_data_root):
-            _now = time.time()
-            for _entry in os.listdir(_old_user_data_root):
-                if _entry.startswith("profile_"):
-                    _entry_path = os.path.join(_old_user_data_root, _entry)
-                    try:
-                        _mtime = os.path.getmtime(_entry_path)
-                        # Only remove dirs that haven't been touched in the last 2 hours
-                        # (leaves any dir that might belong to a concurrently running instance)
-                        if _now - _mtime > 7200:
-                            shutil.rmtree(_entry_path, ignore_errors=True)
-                    except OSError:
-                        pass  # ignore – best effort only
+        # Only runs once per process to avoid blocking every fetch when 250GB+ is accumulated.
+        global _stale_profile_cleanup_done
+        if not _stale_profile_cleanup_done:
+            _stale_profile_cleanup_done = True
+            _old_user_data_root = os.path.join(stable_base, "user_data")
+            if os.path.isdir(_old_user_data_root):
+                _now = time.time()
+                for _entry in os.listdir(_old_user_data_root):
+                    if _entry.startswith("profile_"):
+                        _entry_path = os.path.join(_old_user_data_root, _entry)
+                        try:
+                            _mtime = os.path.getmtime(_entry_path)
+                            # Only remove dirs that haven't been touched in the last 2 hours
+                            # (leaves any dir that might belong to a concurrently running instance)
+                            if _now - _mtime > 7200:
+                                shutil.rmtree(_entry_path, ignore_errors=True)
+                        except OSError:
+                            pass  # ignore – best effort only
 
         # Ensure persistent directories exist
         for dir_path in [sb_drivers_dir, downloads_dir]:
@@ -533,7 +546,7 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
 
             # Now wait for the actual content to load
             if wait_for_element:
-                remaining_time = max_wait - (time.time() - start_time)
+                remaining_time = max(10, max_wait - (time.time() - start_time))
                 element_start = time.time()
 
                 while time.time() - element_start < remaining_time:
@@ -542,6 +555,11 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
                         # Give JavaScript a moment to finish rendering
                         time.sleep(1)
                         page_source = driver.page_source
+                        return page_source
+                    # Early exit: not-found page will never contain wait_for_element,
+                    # so return immediately rather than waiting out the full timeout.
+                    if not_found_marker and not_found_marker.lower() in page_source.lower():
+                        _log("Not-found marker detected, returning page early")
                         return page_source
                     time.sleep(0.5)
 
@@ -592,6 +610,8 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
     except ChromeNotInstalledError:
         raise  # propagate immediately - no point retrying
     except RosettaNotInstalledError:
+        raise  # propagate immediately - no point retrying
+    except SeleniumBaseImportError:
         raise  # propagate immediately - no point retrying
     except Exception as e:  # pylint: disable=broad-except
         # Use type name as fallback in case isinstance fails due to class identity issues
@@ -659,31 +679,28 @@ def fetch_romanceio_book_page(url, plugin_name, log=None):
         else:
             print(msg)
 
-    # First fetch without waiting for specific element to check for 404
-    page_html = fetch_page(url, plugin_name, wait_for_element=None, max_wait=60, log_func=log_msg)
+    # Single fetch: wait for book-stats to render, but exit immediately if a
+    # 404/not-found page is detected so we don't burn the full timeout.
+    _not_found_text = "the page you are looking for can't be found"
+    page_html = fetch_page(
+        url,
+        plugin_name,
+        wait_for_element="book-stats",
+        not_found_marker=_not_found_text,
+        max_wait=60,
+        log_func=log_msg,
+    )
 
     if not page_html:
         log_error("Failed to fetch page (Chrome timed out or crashed - check terminal for details)")
         return None, False
 
-    if "the page you are looking for can't be found" in page_html.lower():
+    if _not_found_text in page_html.lower():
         log_error(f"Invalid Romance.io ID (404): {url}")
         return page_html, False
 
-    # Valid page - check if book-stats is present
     if "book-stats" not in page_html:
-        log_msg("book-stats not found on first load, waiting for it to render...")
-        # Retry with explicit wait for book-stats element
-        page_html = fetch_page(url, plugin_name, wait_for_element="book-stats", max_wait=30, log_func=log_msg)
-
-        if not page_html:
-            log_error("Failed to fetch page on retry (Chrome timed out or crashed - check terminal for details)")
-            return None, False
-
-        if "book-stats" not in page_html:
-            log_error(f"Page missing book-stats element after retry: {url}")
-            return page_html, False
-
-        log_msg("book-stats found after waiting")
+        log_error(f"Page missing book-stats element after waiting: {url}")
+        return page_html, False
 
     return page_html, True
