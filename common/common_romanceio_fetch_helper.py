@@ -303,7 +303,7 @@ def fetch_page(url, plugin_name, wait_for_element=None, not_found_marker=None, m
                             if _now - _mtime > 7200:
                                 shutil.rmtree(_entry_path, ignore_errors=True)
                         except OSError:
-                            pass  # ignore – best effort only
+                            pass  # ignore - best effort only
 
         # Ensure persistent directories exist
         for dir_path in [sb_drivers_dir, downloads_dir]:
@@ -606,7 +606,7 @@ def fetch_page(url, plugin_name, wait_for_element=None, not_found_marker=None, m
                 try:
                     shutil.rmtree(user_data_dir, ignore_errors=True)
                 except Exception:  # pylint: disable=broad-except
-                    pass  # best effort – temp dir cleanup is non-critical
+                    pass  # best effort - temp dir cleanup is non-critical
     except ChromeNotInstalledError:
         raise  # propagate immediately - no point retrying
     except RosettaNotInstalledError:

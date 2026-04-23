@@ -178,7 +178,7 @@ This means popular/agreed-upon tags are preferred when capping.
 - Without Chrome, the plugin cannot fetch data
 
 **Slow performance:**
-- Expected: 10–30 seconds per book - browser automation is required to bypass Cloudflare
+- Expected: 10-30 seconds per book - browser automation is required to bypass Cloudflare
 
 ## Support
 
