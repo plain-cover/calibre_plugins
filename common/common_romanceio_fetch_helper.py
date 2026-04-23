@@ -136,9 +136,19 @@ class VendoredPackageFinder(importlib.abc.MetaPathFinder):
                 setattr(sys.modules[parent_name], attr_name, imported)
 
             return imported
-        except Exception:
-            sys.modules.pop(fullname, None)
-            sys.modules.pop(real_name, None)
+        except Exception as _primary_exc:
+            # Clean up ALL partially-loaded submodules, not just the top-level.
+            # When loading a heavy package like seleniumbase, __init__.py may
+            # partially succeed before failing deep in its import chain, leaving
+            # stale half-initialized submodules in sys.modules.  If we only
+            # remove the top-level package, the zipimport fallback below will
+            # re-run __init__.py which then finds these stale submodules and
+            # fails too, producing a confusing 'No module named ...' error that
+            # hides the real cause.
+            for _mod_name in [k for k in list(sys.modules) if k == real_name or k.startswith(real_name + ".")]:
+                sys.modules.pop(_mod_name, None)
+            for _mod_name in [k for k in list(sys.modules) if k == fullname or k.startswith(fullname + ".")]:
+                sys.modules.pop(_mod_name, None)
             # Redirect via calibre_plugins namespace failed (e.g. in calibre GUI mode).
             # Fall back to a direct import via sys.path so zipimport can handle it.
             # Import the full dotted name (not just the top-level package) so submodules
@@ -155,8 +165,10 @@ class VendoredPackageFinder(importlib.abc.MetaPathFinder):
                     if parent_name in sys.modules:
                         setattr(sys.modules[parent_name], attr_name, imported)
                 return imported
-            except Exception:
-                raise ImportError(f"No module named {fullname!r}")
+            except Exception as _fallback_exc:
+                # Preserve the original (primary) exception as __cause__ so it
+                # appears in tracebacks and can be logged in fetch_page.
+                raise ImportError(f"No module named {fullname!r}") from _primary_exc
             finally:
                 if was_in:
                     sys.meta_path.insert(0, self)  # type: ignore[arg-type]
@@ -284,6 +296,16 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
         for dir_path in [sb_drivers_dir, downloads_dir]:
             os.makedirs(dir_path, exist_ok=True)
 
+        # Add the plugin directory to sys.path NOW (before module clearing and
+        # before VendoredPackageFinder is set up) so the zip is on sys.path from
+        # the start.  VendoredPackageFinder's zipimport fallback needs the zip
+        # on sys.path to find vendored packages when the calibre_plugins.*
+        # redirect fails.  Doing this early prevents a timing window where the
+        # fallback runs before the zip is discoverable.
+        _plugin_dir_early = os.path.dirname(os.path.abspath(__file__))
+        if _plugin_dir_early not in sys.path:
+            sys.path.insert(0, _plugin_dir_early)
+
         # Clear cached SeleniumBase/fasteners modules to ensure fresh import.
         # Clear both the calibre_plugins.{plugin_name}.* namespace AND the bare
         # selenium/seleniumbase namespace - the latter is used when the zip is on sys.path.
@@ -323,8 +345,11 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
         # depend on how calibre's child IPC process sets plugin module attributes
         # (__file__ / __path__ on calibre_plugins.X point to the zip root in child
         # processes, not the plugin subdir inside it, causing ImportError).
+        # NOTE: also inserted early (before module clearing) as _plugin_dir_early above.
         plugin_dir = os.path.dirname(os.path.abspath(__file__))
         _log(f"Vendored import path: {plugin_dir!r}")
+        # Guard is always True here (early insertion already added it), but kept
+        # for clarity and safety in case the early path differs for any reason.
         if plugin_dir not in sys.path:
             sys.path.insert(0, plugin_dir)
 
@@ -526,6 +551,13 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
 
         except Exception as e:  # pylint: disable=broad-except
             msg = str(e)
+            # Check for seleniumbase ImportError first - non-retryable, propagate immediately
+            if "seleniumbase" in msg.lower() and type(e).__name__ in ("ImportError", "ModuleNotFoundError"):
+                raise SeleniumBaseImportError(
+                    f"SeleniumBase (bundled browser automation) could not be loaded: {e}\n"
+                    "This usually means the plugin zip's vendored packages aren't accessible\n"
+                    "in the current process. Try reinstalling the plugin or restarting Calibre."
+                ) from e
             if "chrome not found" in msg.lower() or "install it first" in msg.lower():
                 raise ChromeNotInstalledError(msg) from e
             if "rosetta" in msg.lower():
@@ -562,11 +594,25 @@ def fetch_page(url, plugin_name, wait_for_element=None, max_wait=30, log_func=No
     except RosettaNotInstalledError:
         raise  # propagate immediately - no point retrying
     except Exception as e:  # pylint: disable=broad-except
-        if isinstance(e, ImportError) and "seleniumbase" in str(e).lower():
+        # Use type name as fallback in case isinstance fails due to class identity issues
+        # (can happen when the same module is loaded under two different names in sys.modules)
+        is_import_error = isinstance(e, ImportError) or type(e).__name__ in ("ImportError", "ModuleNotFoundError")
+        if is_import_error and "seleniumbase" in str(e).lower():
+            # Log the full chained traceback so the root cause appears in calibre's job log.
+            # The primary exception (_primary_exc inside VendoredPackageFinder.load_module)
+            # is preserved as e.__cause__ - print_exc() will show the full chain.
+            import traceback as _tb
+
+            _tb.print_exc()
+            # Include the real root cause (chained __cause__) in the error message
+            # so it's visible in the job log even when tracebacks aren't shown.
+            root_cause = e.__cause__ or e
+            root_msg = f"{type(root_cause).__name__}: {root_cause}" if root_cause is not e else ""
+            detail = f"\n  Root cause: {root_msg}" if root_msg else ""
             raise SeleniumBaseImportError(
-                f"SeleniumBase (bundled browser automation) could not be loaded: {e}\n"
+                f"SeleniumBase (bundled browser automation) could not be loaded: {e}{detail}\n"
                 "This usually means the plugin zip's vendored packages aren't accessible\n"
-                "in the current process. Try restarting Calibre."
+                "in the current process. Try reinstalling the plugin or restarting Calibre."
             ) from e
         _log(f"Top-level error in fetch_page: {type(e).__name__}: {e}")
         import traceback

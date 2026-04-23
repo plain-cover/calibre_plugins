@@ -101,10 +101,10 @@ def _retry_with_delay(
                     "  Install Chrome to enable this feature: https://www.google.com/chrome/"
                 )
                 return SearchResult(success=False, result=None)
-            if isinstance(e, SeleniumBaseImportError):
+            if isinstance(e, SeleniumBaseImportError) or type(e).__name__ == "SeleniumBaseImportError":
                 log_func(
                     "  Browser automation (SeleniumBase) could not be loaded.\n"
-                    "  Try restarting Calibre. If the problem persists, reinstall the plugin."
+                    "  Try reinstalling the plugin or restarting Calibre."
                 )
                 return SearchResult(success=False, result=None)
             if isinstance(e, RosettaNotInstalledError):
