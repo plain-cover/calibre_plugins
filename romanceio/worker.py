@@ -3,6 +3,7 @@ from threading import Thread
 from lxml.html import tostring
 
 from calibre.ebooks.metadata.book.base import Metadata
+from calibre.library.comments import sanitize_comments_html  # type: ignore[import-not-found]  # pylint: disable=import-error
 import calibre_plugins.romanceio.config as cfg  # type: ignore[import-not-found]  # pylint: disable=import-error
 from calibre_plugins.romanceio.parse_html import (  # type: ignore[import-not-found]  # pylint: disable=import-error
     parse_romanceio_id,
@@ -175,39 +176,7 @@ class Worker(Thread):
         if parsed.cover_url:
             self.cover_url = parsed.cover_url
 
-        if "series" in self.plugin.touched_fields:
-            if parsed.series is not None:
-                self.log.info(f"Series: {parsed.series!r} (index: {parsed.series_index!r})")
-                mi.series = parsed.series
-            if parsed.series_index is not None:
-                mi.series_index = parsed.series_index  # type: ignore[assignment]
-
-        if "tags" in self.plugin.touched_fields:
-            if parsed.tags:
-                self.log.info(f"Tags from Romance.io ({len(parsed.tags)}): {parsed.tags}")
-                map_genres = cfg.plugin_prefs[cfg.STORE_NAME].get(
-                    cfg.KEY_MAP_GENRES, cfg.DEFAULT_STORE_VALUES[cfg.KEY_MAP_GENRES]
-                )
-                calibre_tag_map = {}
-                if map_genres:
-                    calibre_tag_map = cfg.plugin_prefs[cfg.STORE_NAME].get(
-                        cfg.KEY_GENRE_MAPPINGS, cfg.DEFAULT_STORE_VALUES[cfg.KEY_GENRE_MAPPINGS]
-                    )
-                tags = convert_genres_to_calibre_tags(parsed.tags, map_genres, calibre_tag_map)
-                if tags:
-                    self.log.info(f"Final tags ({len(tags)}): {tags}")
-                    mi.tags = tags
-                else:
-                    self.log.info("Tags after mapping: none (all filtered out)")
-            else:
-                self.log.info("Tags from Romance.io: none")
-
-        if "pubdate" in self.plugin.touched_fields:
-            if parsed.pubdate:
-                self.log.info(f"_build_metadata_from_json - setting pubdate: {parsed.pubdate}")
-                mi.pubdate = parsed.pubdate
-            else:
-                self.log.info("_build_metadata_from_json - pubdate not found in JSON")
+        self._apply_parsed_fields(mi, parsed)
 
         mi.source_relevance = self.relevance
 
@@ -236,6 +205,21 @@ class Worker(Thread):
         mi.set_identifier("romanceio", parsed.romanceio_id)
         self.romanceio_id = parsed.romanceio_id
 
+        self._apply_parsed_fields(mi, parsed)
+
+        mi.source_relevance = self.relevance
+
+        cover_url = f"https://s3.amazonaws.com/romance.io/books/large/{parsed.romanceio_id}.jpg"
+        self.cover_url = cover_url
+        self.plugin.cache_identifier_to_cover_url(self.romanceio_id, cover_url)
+
+        self.plugin.clean_downloaded_metadata(mi)
+
+        self.log.info(f"_build_metadata_from_html - final mi.pubdate: {mi.pubdate!r}")
+        self.result_queue.put(mi)
+
+    def _apply_parsed_fields(self, mi, parsed):
+        """Apply series, tags, pubdate, rating, and comments from parsed data to a Metadata object."""
         if "series" in self.plugin.touched_fields:
             if parsed.series is not None:
                 self.log.info(f"Series: {parsed.series!r} (index: {parsed.series_index!r})")
@@ -246,7 +230,6 @@ class Worker(Thread):
         if "tags" in self.plugin.touched_fields:
             if parsed.tags:
                 self.log.info(f"Tags from Romance.io ({len(parsed.tags)}): {parsed.tags}")
-                # Apply tag mapping if configured
                 map_genres = cfg.plugin_prefs[cfg.STORE_NAME].get(
                     cfg.KEY_MAP_GENRES, cfg.DEFAULT_STORE_VALUES[cfg.KEY_MAP_GENRES]
                 )
@@ -266,18 +249,17 @@ class Worker(Thread):
 
         if "pubdate" in self.plugin.touched_fields:
             if parsed.pubdate:
-                self.log.info(f"_build_metadata_from_html - setting pubdate: {parsed.pubdate}")
+                self.log.info(f"setting pubdate: {parsed.pubdate}")
                 mi.pubdate = parsed.pubdate
             else:
-                self.log.info("_build_metadata_from_html - pubdate not found in HTML")
+                self.log.info("pubdate not found")
 
-        mi.source_relevance = self.relevance
+        if "rating" in self.plugin.touched_fields:
+            if parsed.rating is not None:
+                mi.rating = int(float(parsed.rating) + 0.5)
+                self.log.info(f"setting rating: {mi.rating} (source: {parsed.rating})")
 
-        cover_url = f"https://s3.amazonaws.com/romance.io/books/large/{parsed.romanceio_id}.jpg"
-        self.cover_url = cover_url
-        self.plugin.cache_identifier_to_cover_url(self.romanceio_id, cover_url)
-
-        self.plugin.clean_downloaded_metadata(mi)
-
-        self.log.info(f"_build_metadata_from_html - final mi.pubdate: {mi.pubdate!r}")
-        self.result_queue.put(mi)
+        if "comments" in self.plugin.touched_fields:
+            if parsed.description:
+                mi.comments = sanitize_comments_html(parsed.description)
+                self.log.info(f"setting comments ({len(mi.comments)} chars)")

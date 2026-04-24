@@ -68,23 +68,42 @@ common_validation = load_plugin_module(
 is_valid_romanceio_id = common_validation.is_valid_romanceio_id
 
 # Fields that romanceio plugin is responsible for
-ROMANCEIO_PLUGIN_FIELDS = {"romanceio_id", "title", "authors", "tags", "series", "pubdate"}
+ROMANCEIO_PLUGIN_FIELDS = {"romanceio_id", "title", "authors", "tags", "series", "pubdate", "rating", "description"}
 
 
 def _parse_json_tag_fields(book_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Extract tags from raw JSON book dict (slugs converted to display names)."""
-    return {"tags": convert_json_tags_to_display_names(book_data.get("tropes", []))}
+    """Extract tags, rating, and description from raw JSON book dict."""
+    info = book_data.get("info", {})
+    rating = None
+    raw_rating = info.get("avgRating")
+    if raw_rating is not None:
+        try:
+            rating = float(raw_rating)
+        except (ValueError, TypeError):
+            pass
+    return {
+        "tags": convert_json_tags_to_display_names(book_data.get("tropes", [])),
+        "rating": rating,
+        "description": info.get("description") or None,
+    }
 
 
 def _parse_html_extra_fields(root: Any) -> Dict[str, Any]:
-    """Extract tags, series, and pubdate from HTML root element."""
+    """Extract tags, series, pubdate, rating, and description from HTML root element."""
     series, series_index = parse_html_module.parse_series_from_title(root)
     pubdate = parse_html_module.parse_publish_date(root)
+    rating = None
+    try:
+        rating = parse_html_module.parse_star_rating(root)
+    except (ValueError, TypeError, IndexError, AttributeError):
+        pass
     return {
         "tags": parse_html_module.parse_tags(root),
         "series": series,
         "series_index": series_index,
         "pubdate": pubdate,
+        "rating": rating,
+        "description": parse_html_module.parse_description(root),
     }
 
 
@@ -130,6 +149,23 @@ def _verify_sample_tags(book_data: StaticTestBook) -> None:
 
     print(f"  ✓ All {len(book_data.sample_tags)} sample tags present in both JSON and HTML")
 
+    # Verify description snippet
+    if book_data.description_snippet:
+        snippet = book_data.description_snippet
+        book_json = load_test_json_file(book_data.json_filename)
+        parsed_json = parse_details_from_json(book_json, get_author_details_json)
+        assert parsed_json.description and snippet in parsed_json.description, (
+            f"Expected JSON description to contain {snippet!r} for {book_data.name}. "
+            f"Got: {(parsed_json.description or '')[:200]!r}"
+        )
+        html_root = load_test_html_file(book_data.html_filename)
+        html_desc = parse_html_module.parse_description(html_root)
+        assert html_desc and snippet in html_desc, (
+            f"Expected HTML description to contain {snippet!r} for {book_data.name}. "
+            f"Got: {(html_desc or '')[:200]!r}"
+        )
+        print("  ✓ description_snippet found in both JSON and HTML")
+
 
 def test_static_book(book_data: StaticTestBook) -> None:
     """Test a static book's fields across JSON and HTML parsing."""
@@ -174,7 +210,7 @@ def main() -> None:
 
     print("=" * 80)
     print("ROMANCEIO PLUGIN: JSON vs HTML Parsing Tests")
-    print("Testing romanceio plugin fields: romanceio_id, title, authors, tags, series, pubdate")
+    print("Testing romanceio plugin fields: romanceio_id, title, authors, tags, series, pubdate, rating, description")
     print("=" * 80)
 
     # Run static tests (these use saved files)

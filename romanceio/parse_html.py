@@ -260,6 +260,107 @@ def convert_genres_to_calibre_tags(
     return list(tags_to_add)
 
 
+def _extract_description_parts(container: HtmlElement) -> List[str]:
+    """Extract description text parts from a Romance.io description container element.
+
+    Two markup variants are handled:
+    - Inline text variant: description text appears as ``tail`` on child elements
+      (first on .book-cover-container, then on a series of <br> paragraph separators)
+    - Wrapped text variant: description text is the ``text_content()`` of a child
+      element (e.g. a bare <span>) — no <br> separators are used in this case
+
+    The steam-rating note (.desc-steam-rating) and .book-cover-container subtrees
+    are always excluded.
+    """
+    parts: List[str] = []
+
+    # Text before the first child element (rare but handle it)
+    if container.text and container.text.strip():
+        parts.append(container.text.strip())
+
+    for child in container:
+        child_class = child.get("class") or ""
+        tag = child.tag if isinstance(child.tag, str) else ""
+
+        if "book-cover-container" in child_class:
+            # Description text starts as the tail of the cover thumbnail
+            if child.tail and child.tail.strip():
+                parts.append(child.tail.strip())
+        elif "desc-steam-rating" in child_class:
+            # Skip the steam-rating note and its tail entirely
+            pass
+        elif tag == "br":
+            # Emit one <br/> per <br> element — two consecutive <br>s in the
+            # source (Romance.io's paragraph separator) become <br/><br/>.
+            parts.append("<br/>")
+            if child.tail and child.tail.strip():
+                parts.append(child.tail.strip())
+        else:
+            # Some books wrap the description in a <span> or similar element.
+            # Extract the full text content of the element, then its tail.
+            inner = child.text_content()
+            if inner and inner.strip():
+                parts.append(inner.strip())
+            if child.tail and child.tail.strip():
+                parts.append(child.tail.strip())
+
+    return parts
+
+
+def parse_description(root: HtmlElement, log_func: Optional[Callable] = None) -> Optional[str]:
+    """Extract book description/synopsis from book-description div.
+
+    Romance.io wraps the description in a structure like:
+        #book-description > .is-clearfix > [0+ anonymous divs] > div
+
+    The innermost div directly contains a mobile cover thumbnail
+    (.book-cover-container) whose tail holds the first description segment,
+    followed by <br> elements whose tails hold subsequent segments, and a
+    steam-rating note (.desc-steam-rating) which is always excluded.
+
+    Rather than assuming a fixed nesting depth, we locate the container by
+    finding whichever div inside .is-clearfix directly parents .book-cover-container.
+
+    Returns:
+        HTML string suitable for mi.comments, or None if not found.
+    """
+    # Find the div that directly parents .book-cover-container, regardless of depth.
+    containers = root.xpath(
+        '//div[@id="book-description"]'
+        '//div[contains(@class,"is-clearfix")]'
+        '//div[div[contains(@class,"book-cover-container")]]'
+    )
+    if not containers:
+        if log_func:
+            book_desc = root.xpath('//div[@id="book-description"]')
+            if not book_desc:
+                log_func("parse_description: #book-description not found")
+            else:
+                clearfix = root.xpath('//div[@id="book-description"]//div[contains(@class,"is-clearfix")]')
+                if not clearfix:
+                    log_func("parse_description: .is-clearfix not found inside #book-description")
+                else:
+                    log_func(
+                        "parse_description: .book-cover-container not found inside .is-clearfix "
+                        f"(clearfix children: {[c.get('class') or c.tag for c in clearfix[0]]})"
+                    )
+        return None
+
+    parts = _extract_description_parts(containers[0])
+    if not parts:
+        if log_func:
+            log_func(
+                "parse_description: found container but no description text "
+                f"(children: {[c.get('class') or c.tag for c in containers[0]]})"
+            )
+        return None
+
+    description = "".join(parts).strip()
+    if log_func:
+        log_func(f"parse_description: extracted {len(description)} characters")
+    return description
+
+
 def parse_details_from_html(url: str, root: HtmlElement, log_func: Optional[Callable] = None) -> ParsedBookData:
     """Parse all book details from HTML page.
 
@@ -310,5 +411,17 @@ def parse_details_from_html(url: str, root: HtmlElement, log_func: Optional[Call
     except (ValueError, TypeError, IndexError, AttributeError):
         if log_func:
             log_func(f"Error parsing publish date for url: {url!r}")
+
+    try:
+        result.rating = parse_star_rating(root)
+    except (ValueError, TypeError, IndexError, AttributeError):
+        if log_func:
+            log_func(f"Error parsing star rating for url: {url!r}")
+
+    try:
+        result.description = parse_description(root, log_func)
+    except (ValueError, TypeError, IndexError, AttributeError):
+        if log_func:
+            log_func(f"Error parsing description for url: {url!r}")
 
     return result
