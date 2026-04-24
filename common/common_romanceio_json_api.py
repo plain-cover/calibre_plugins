@@ -37,6 +37,14 @@ class JsonApiBookNotFoundError(JsonApiEndpointError):
     """
 
 
+class JsonApiRateLimitError(RuntimeError):
+    """Raised when the Romance.io JSON API returns HTTP 429 Too Many Requests.
+
+    The endpoint is alive but is rate-limiting this client. The caller should
+    wait significantly longer before retrying (not just the normal retry_delay).
+    """
+
+
 # Stable URL prefixes for each JSON API endpoint (path up to but not including the resource ID).
 # Used by the orchestrator to cache dead endpoints on a per-endpoint basis.
 JSON_SEARCH_URL_PREFIX = "https://www.romance.io/json/search_books"
@@ -87,6 +95,11 @@ def _make_json_request(url: str, timeout: int = 30, log_func: Optional[Callable]
             if log_func:
                 log_func(msg)
             raise JsonApiEndpointError(msg, url=url) from e
+        if e.code == 429:
+            error_msg = f"JSON API request failed: HTTPError 429: {e}"
+            if log_func:
+                log_func(error_msg)
+            raise JsonApiRateLimitError("HTTP Error 429: Too Many Requests") from e
         error_msg = f"JSON API request failed: HTTPError {e.code}: {e}"
         if log_func:
             log_func(error_msg)

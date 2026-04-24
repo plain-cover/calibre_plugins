@@ -17,6 +17,7 @@ from typing import Optional, List, Callable, Any, NamedTuple, Dict
 from .common_romanceio_json_api import (  # pylint: disable=import-outside-toplevel
     JsonApiEndpointError,
     JsonApiBookNotFoundError,
+    JsonApiRateLimitError,
     JSON_SEARCH_URL_PREFIX,
     JSON_BOOKS_URL_PREFIX,
 )
@@ -33,6 +34,14 @@ from .common_romanceio_fetch_helper import (
 # This prevents re-trying a known-dead endpoint for every book in a large library run
 # while leaving other endpoints (e.g. search) unaffected.
 _dead_json_endpoints: set = set()
+
+# Rate limit back-pressure: timestamp of the last 429 response from the JSON API.
+# Used to insert a cooldown delay before the next JSON API call when rate-limited.
+_last_rate_limit_time: float = 0.0
+
+# How long (seconds) to wait before retrying after a 429 Too Many Requests response.
+# Also used as a cooldown gate: if a 429 was seen within this window, delay the next call.
+_RATE_LIMIT_COOLDOWN_SECS: float = 15.0
 
 
 def _endpoint_key(url: str) -> str:
@@ -65,6 +74,15 @@ class SearchResult(NamedTuple):
     result: Optional[Any]
 
 
+def _maybe_wait_for_rate_limit(log_func: Callable) -> None:
+    """Sleep if the JSON API was rate-limited recently, to avoid immediate re-triggering."""
+    elapsed = time.time() - _last_rate_limit_time
+    if elapsed < _RATE_LIMIT_COOLDOWN_SECS:
+        wait = _RATE_LIMIT_COOLDOWN_SECS - elapsed
+        log_func(f"Rate limit cooldown: waiting {wait:.1f}s before JSON API call...")
+        time.sleep(wait)
+
+
 def _retry_with_delay(
     func: Callable,
     method_name: str,
@@ -92,11 +110,14 @@ def _retry_with_delay(
         - success=True, result=None: Function completed successfully but no match found
         - success=False, result=None: All retry attempts raised exceptions (technical failure)
     """
+    global _last_rate_limit_time  # pylint: disable=global-statement
+    next_attempt_delay = retry_delay
     for attempt in range(1, max_retries + 1):
         try:
             if attempt > 1:
                 log_func(f"{method_name} retry attempt {attempt}/{max_retries}...")
-                time.sleep(retry_delay)
+                time.sleep(next_attempt_delay)
+                next_attempt_delay = retry_delay  # reset; may be overridden below on next failure
 
             result = func()
 
@@ -154,7 +175,12 @@ def _retry_with_delay(
                     "    3. Follow any on-screen prompts, then restart Calibre."
                 )
                 return SearchResult(success=False, result=None)
-            if attempt < max_retries:
+            if isinstance(e, JsonApiRateLimitError):
+                _last_rate_limit_time = time.time()
+                next_attempt_delay = _RATE_LIMIT_COOLDOWN_SECS
+                if attempt < max_retries:
+                    log_func(f"  Rate limited (429). Will retry in {_RATE_LIMIT_COOLDOWN_SECS}s...")
+            elif attempt < max_retries:
                 log_func(f"  Will retry in {retry_delay}s...")
 
     log_func(f"✗ {method_name} failed after {max_retries} attempts")
@@ -193,6 +219,7 @@ def search_with_fallback(
         log_func("Skipping JSON API search (endpoint returned 404 earlier this session).")
         json_search = SearchResult(success=False, result=None)
     else:
+        _maybe_wait_for_rate_limit(log_func)
         log_func("Attempting JSON API search first...")
         json_search = _retry_with_delay(
             func=lambda: json_search_func(title, authors, log_func),
@@ -258,6 +285,7 @@ def fetch_details_with_fallback(
         log_func(f"Skipping JSON API fetch for {romanceio_id} (endpoint returned 404 earlier this session).")
         json_fetch = SearchResult(success=False, result=None)
     else:
+        _maybe_wait_for_rate_limit(log_func)
         log_func(f"Attempting JSON API fetch for {romanceio_id}...")
         json_fetch = _retry_with_delay(
             func=lambda: json_fetch_func(romanceio_id, log_func),

@@ -16,6 +16,7 @@ if parent_dir not in sys.path:
 from common.common_romanceio_json_api import (
     JsonApiEndpointError,
     JsonApiBookNotFoundError,
+    JsonApiRateLimitError,
     JSON_SEARCH_URL_PREFIX,
     JSON_BOOKS_URL_PREFIX,
 )
@@ -31,14 +32,18 @@ from common.common_romanceio_search_orchestrator import (
 import common.common_romanceio_search_orchestrator as _orchestrator_mod
 
 _DEAD_SET = "_dead_json_endpoints"
+_RATE_LIMIT_TIME = "_last_rate_limit_time"
+_RATE_LIMIT_COOLDOWN = "_RATE_LIMIT_COOLDOWN_SECS"
 
 
 @pytest.fixture(autouse=True)
-def clear_dead_endpoints():
-    """Reset the module-level dead-endpoints set before and after every test."""
+def clear_orchestrator_state():
+    """Reset all module-level state before and after every test."""
     getattr(_orchestrator_mod, _DEAD_SET).clear()
+    setattr(_orchestrator_mod, _RATE_LIMIT_TIME, 0.0)
     yield
     getattr(_orchestrator_mod, _DEAD_SET).clear()
+    setattr(_orchestrator_mod, _RATE_LIMIT_TIME, 0.0)
 
 
 # ---------------------------------------------------------------------------
@@ -492,3 +497,134 @@ def test_get_details_book_not_found_falls_through_to_html():
     assert html_called == ["abc123"], "HTML fallback must be called when JSON raises book-not-found"
     assert result == "html_result"
     assert not _is_endpoint_dead(JSON_BOOKS_URL_PREFIX), "Books endpoint must NOT be marked dead for a per-book 404"
+
+
+# ---------------------------------------------------------------------------
+# JsonApiRateLimitError (429) tests
+# ---------------------------------------------------------------------------
+
+# String constant so the linter cannot resolve it to the protected symbol.
+_MAYBE_WAIT = "_maybe_wait_for_rate_limit"
+
+
+def _zero_cooldown():
+    """Context manager: set _RATE_LIMIT_COOLDOWN_SECS to 0 so 429 tests don't actually sleep."""
+    import contextlib
+
+    @contextlib.contextmanager
+    def _cm():
+        setattr(_orchestrator_mod, _RATE_LIMIT_COOLDOWN, 0.0)
+        try:
+            yield
+        finally:
+            setattr(_orchestrator_mod, _RATE_LIMIT_COOLDOWN, 15.0)
+
+    return _cm()
+
+
+def test_429_does_retry():
+    """JsonApiRateLimitError must be retried (unlike 404 which exits immediately)."""
+    with _zero_cooldown():
+        attempts = []
+
+        def func():
+            attempts.append(1)
+            raise JsonApiRateLimitError("HTTP Error 429: Too Many Requests")
+
+        log_func, logs = _collecting_log()
+        result = _retry_with_delay(func, "JSON API search", max_retries=3, retry_delay=0, log_func=log_func)
+
+        assert len(attempts) == 3, f"Expected 3 attempts for 429, got {len(attempts)}"
+        assert result == SearchResult(success=False, result=None)
+        assert any("rate limited" in msg.lower() for msg in logs)
+        assert any("retry attempt" in msg.lower() for msg in logs)
+
+
+def test_429_does_not_mark_endpoint_dead():
+    """A 429 must NOT add the endpoint to the dead set — the API is alive, just rate-limiting."""
+    with _zero_cooldown():
+
+        def func():
+            raise JsonApiRateLimitError("HTTP Error 429: Too Many Requests")
+
+        _retry_with_delay(func, "JSON API search", max_retries=3, retry_delay=0, log_func=lambda _: None)
+
+        assert not _is_endpoint_dead(JSON_SEARCH_URL_PREFIX), "Search endpoint must NOT be marked dead after 429"
+        assert not _is_endpoint_dead(JSON_BOOKS_URL_PREFIX), "Books endpoint must NOT be marked dead after 429"
+
+
+def test_429_updates_rate_limit_timestamp():
+    """After a 429, _last_rate_limit_time must be updated to a recent timestamp."""
+    import time
+
+    with _zero_cooldown():
+        before = time.time()
+
+        def func():
+            raise JsonApiRateLimitError("HTTP Error 429: Too Many Requests")
+
+        _retry_with_delay(func, "JSON API search", max_retries=1, retry_delay=0, log_func=lambda _: None)
+
+        recorded = getattr(_orchestrator_mod, _RATE_LIMIT_TIME)
+        assert recorded >= before, "_last_rate_limit_time must be set to a timestamp after the 429"
+
+
+def test_429_retry_succeeds_on_second_attempt():
+    """If the second attempt after a 429 succeeds, the result is returned correctly."""
+    with _zero_cooldown():
+        attempts = []
+
+        def func():
+            attempts.append(1)
+            if len(attempts) == 1:
+                raise JsonApiRateLimitError("HTTP Error 429: Too Many Requests")
+            return "abc123"
+
+        log_func, logs = _collecting_log()
+        result = _retry_with_delay(func, "JSON API search", max_retries=3, retry_delay=0, log_func=log_func)
+
+        assert len(attempts) == 2
+        assert result == SearchResult(success=True, result="abc123")
+        assert any("succeeded on retry" in msg.lower() for msg in logs)
+
+
+def test_maybe_wait_no_sleep_without_prior_429():
+    """_maybe_wait_for_rate_limit must not sleep when _last_rate_limit_time is 0 (no prior 429)."""
+    with _zero_cooldown():
+        slept: list[float] = []
+        original_sleep = _orchestrator_mod.time.sleep
+
+        def mock_sleep(secs: float) -> None:
+            slept.append(secs)
+
+        _orchestrator_mod.time.sleep = mock_sleep
+        try:
+            getattr(_orchestrator_mod, _MAYBE_WAIT)(lambda _: None)
+            assert not slept, "Should not sleep when no prior 429 has occurred"
+        finally:
+            _orchestrator_mod.time.sleep = original_sleep
+
+
+def test_maybe_wait_sleeps_after_recent_429():
+    """_maybe_wait_for_rate_limit must sleep when a 429 occurred recently."""
+    import time
+
+    setattr(_orchestrator_mod, _RATE_LIMIT_TIME, time.time())
+    setattr(_orchestrator_mod, _RATE_LIMIT_COOLDOWN, 10.0)
+
+    slept: list[float] = []
+    logged: list[str] = []
+    original_sleep = _orchestrator_mod.time.sleep
+
+    def mock_sleep(secs: float) -> None:
+        slept.append(secs)
+
+    _orchestrator_mod.time.sleep = mock_sleep
+    try:
+        getattr(_orchestrator_mod, _MAYBE_WAIT)(logged.append)
+        assert len(slept) == 1, "Should sleep exactly once"
+        assert 9.0 < slept[0] <= 10.0, f"Should sleep close to 10s, got {slept[0]}"
+        assert any("cooldown" in msg.lower() for msg in logged)
+    finally:
+        _orchestrator_mod.time.sleep = original_sleep
+        setattr(_orchestrator_mod, _RATE_LIMIT_COOLDOWN, 15.0)
