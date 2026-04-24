@@ -3,7 +3,7 @@
 Two Calibre plugins that link your library with [Romance.io](https://romance.io), a website for romance novels that provides steam ratings, user star ratings, and detailed tagging (tropes, themes, settings, etc.) that you can't get from Goodreads or Amazon.
 
 - Adds a clickable link to the book's Romance.io page in Calibre's book details panel (both plugins)
-- Adds cover art, series, and publication date from Romance.io (Romance.io metadata plugin)
+- Adds cover art, series, star rating, description, and publication date from Romance.io (Romance.io metadata plugin)
 - Adds Romance.io tags to Calibre's Tags field based on a customizable mapping (Romance.io metadata plugin)
 - Adds steam rating, star rating, and vote count to custom columns (Romance.io Fields plugin)
 - Adds Romance.io tags to a custom column so you can sort and filter your library by tropes, themes, settings, and more (Romance.io Fields plugin)
@@ -16,7 +16,7 @@ Two Calibre plugins that link your library with [Romance.io](https://romance.io)
 
 ## Romance.io - Metadata Source Plugin for Calibre
 
-Adds [Romance.io](https://romance.io) as an additional source for Calibre's metadata download system. When you run a metadata download on a book, Calibre searches for the book by title and author on sites including [Romance.io](https://romance.io), and if the book is found, connects the book in your library to the book on [Romance.io](https://romance.io) so that you can click a link to go straight to the book's [Romance.io](https://romance.io) page, and see metadata like the cover image, series, date published, and genre tags in your Calibre library.
+Adds [Romance.io](https://romance.io) as an additional source for Calibre's metadata download system. When you run a metadata download on a book, Calibre searches for the book by title and author on sites including [Romance.io](https://romance.io), and if the book is found, connects the book in your library to the book on [Romance.io](https://romance.io) so that you can click a link to go straight to the book's [Romance.io](https://romance.io) page, and see metadata like the cover image, series, star rating, description, date published, and genre tags in your Calibre library.
 
 ![Calibre "Downloading metadata" menu, first page, showing a book result that is linked to a result from Romance.io (Funny Story by Emily Henry)](images/Metadata%20download%20result1.png)
 
@@ -24,7 +24,7 @@ Adds [Romance.io](https://romance.io) as an additional source for Calibre's meta
 
 ![Screenshot of the Calibre book details panel with an arrow pointing to the link to Romance.io](images/Link%20to%20Romanceio.png)
 
-Completing the metadata download will populate fields from [Romance.io](https://romance.io): series, series number, tags, date published, and ID used in the [Romance.io](https://romance.io) URL.
+Completing the metadata download will populate fields from [Romance.io](https://romance.io): series, series number, tags, star rating, description (stored as Comments in Calibre), date published, and ID used in the [Romance.io](https://romance.io) URL.
 
 ![Screenshot of the Calibre "Edit metadata" panel before searching Romance.io for metadata](images/Scythe%20before.png) ![Screenshot of the Calibre "Edit metadata" panel after searching Romance.io for metadata](images/Scythe%20after.png)
 
@@ -33,23 +33,35 @@ Completing the metadata download will populate fields from [Romance.io](https://
 1. Once the plugin is loaded, ensure that it is enabled by going to Preferences > Metadata download and checking the box next to "Romance.io".
 2. Select a book, click **Edit metadata** in the main Calibre toolbar, then click **Download metadata**, and wait for results. If there is a match found for the book on Romance.io, Calibre will show "**See at:** Romance.io" on the right panel for the matching search result. Click "OK" to match the book to this Romance.io ID and download metadata from [Romance.io](https://romance.io).
 
-![Calibre "Downloading metadata" menu, first page, showing a book result that is linked to a result from Romance.io (Funny Story by Emily Henry)](images/Metadata%20download%20result1.png)
+    ![Calibre "Downloading metadata" menu, first page, showing a book result that is linked to a result from Romance.io (Funny Story by Emily Henry)](images/Metadata%20download%20result1.png)
 
 ### Configuration
 
+#### Metadata fields to download
+You can choose which fields you want to populate from [Romance.io](https://romance.io). There are two places in Calibre where fields can be turned on or off — if a field isn't downloading, check both:
+
+1. **Global field list** (**Preferences > Metadata download**, main page): Calibre has a global list of fields it will accept from any source. If a field is unchecked here, it won't be downloaded even if the source provides it.
+
+    ![Screenshot of the Preferences > Metadata download page showing the global field checkboxes](images/Metadata%20download%20-%20global%20fields.png)
+
+2. **Per-source field list**: from the global Configure Metadata menu pictured above, if you select the Romance.io plugin from the list on the left, then click **Configure selected source**, here you can check or uncheck individual fields to control which fields the plugin downloads.
+
+     ![Screenshot of the Configure selected source dialog showing the Metadata fields to download checkboxes](images/Configure%20Metadata%20download%20-%20fields.png)
+
+#### Tag Mappings
+
 **Preferences > Metadata download > Romance.io > Configure selected source**
 
-- **Metadata fields to download** - choose which fields you want to populate from [Romance.io](https://romance.io)
-- **Romance.io tag to Calibre tag mappings** - controls how Romance.io tags are imported into Calibre's Tags field. Use the green "+" and red "-" buttons to add or remove mappings. Create one row for each Romance.io tag you want to map to one or more Calibre tags. The text you enter for the Romance.io tag must match how the tag looks on the website exactly. Any Romance.io tags that are not mapped will be ignored.
+**Romance.io tag to Calibre tag mappings** - controls how Romance.io tags are imported into Calibre's Tags field. Use the green "+" and red "-" buttons to add or remove mappings. Create one row for each Romance.io tag you want to map to one or more Calibre tags. The text you enter for the Romance.io tag must match how the tag looks on the website exactly. Any Romance.io tags that are not mapped will be ignored.
 
   ![Screenshot of the Configure Metadata download dialog with the "Filter and map Romance.io tags to calibre tags" checkbox checked](images/Configure%20Metadata%20download.png)
 
   To get all Romance.io tags as individual Calibre tags, uncheck **"Filter and map Romance.io tags to Calibre tags"**:
 
+  ![Configure Metadata download dialog showing the "Filter and map Romance.io tags to Calibre tags" checkbox unchecked](images/Uncheck%20map%20tags.png)
+
   - **Checked (default):** Only tags listed in the mapping table are imported. Each Romance.io tag maps to one or more Calibre tags of your choosing. Tags not in the table are dropped.
   - **Unchecked:** All Romance.io tags are imported as individual Calibre tags, with no filtering or renaming. Use this if you want to import every Romance.io tag for each book.
-
-  ![Configure Metadata download dialog showing the "Filter and map Romance.io tags to Calibre tags" checkbox unchecked](images/Uncheck%20map%20tags.png)
 
   With the box unchecked, the metadata download will import all tags from Romance.io as Calibre tags:
 
@@ -136,7 +148,7 @@ In Calibre, go to **Preferences > Plugins > Get new plugins**, search for "Roman
 For the Romance.io Fields plugin, you may have an extra step to ensure the plugin icon appears on the main toolbar. If you see a window asking you to "Select the toolbars and/or menus" to add the plugin to, select "The main toolbar" and "The main toolbar when a device is connected." If you don't see this prompt, you may need to add the plugin to the main toolbar manually in **Preferences > Toolbars & menus** and select "The main toolbar" from the dropdown, then find "Romance.io" in the available actions and click the ">" button to add it to the toolbar.
 
 **To get the latest version** before it's published to the plugin store, download the zip from the [GitHub releases page](https://github.com/plain-cover/calibre_plugins/releases) and install via **Preferences > Plugins > Load plugin from file**.
-- `Romance.io.zip` - metadata source plugin (ID, cover, series, tags)
+- `Romance.io.zip` - metadata source plugin (ID, cover, series, rating, description, tags, date published)
 - `Romance.io Fields.zip` - custom columns plugin (steam, stars, vote count, tags)
 
 ## Notes

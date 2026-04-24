@@ -2,14 +2,14 @@
 
 > **For user-facing install and usage instructions, see the [main README](../README.md).**
 
-A Calibre metadata source plugin that searches Romance.io by title and author, stores the Romance.io book ID as a Calibre identifier, and optionally downloads fields like cover image, series, tags, and date published.
+A Calibre metadata source plugin that searches Romance.io by title and author, stores the Romance.io book ID as a Calibre identifier, and optionally downloads fields like cover image, series, tags, star rating, description, and date published.
 
 ## What This Plugin Does
 
 1. Searches [Romance.io](https://www.romance.io/) for books matching the title and author
 2. Parses search results to find the best match
 3. Stores the Romance.io ID in the book's `romanceio` identifier field
-4. Returns the cover URL so Calibre can offer it in cover selection, and additional fields like series and date published
+4. Returns the cover URL so Calibre can offer it in cover selection, and additional fields like series, description, star rating, tags, and date published
 5. Optionally maps Romance.io genre tags to Calibre tags via a configurable mapping table
 
 The stored `romanceio` identifier is the key that the companion [Romance.io Fields](../romanceio_fields/README.md) plugin can use to fetch ratings and tags.
