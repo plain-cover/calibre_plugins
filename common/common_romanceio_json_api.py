@@ -96,10 +96,9 @@ def _make_json_request(url: str, timeout: int = 30, log_func: Optional[Callable]
                 log_func(msg)
             raise JsonApiEndpointError(msg, url=url) from e
         if e.code == 429:
-            error_msg = f"JSON API request failed: HTTPError 429: {e}"
             if log_func:
-                log_func(error_msg)
-            raise JsonApiRateLimitError("HTTP Error 429: Too Many Requests") from e
+                log_func(f"JSON API request failed: HTTPError 429: {e}")
+            raise JsonApiRateLimitError(f"HTTP Error 429: {e}") from e
         error_msg = f"JSON API request failed: HTTPError {e.code}: {e}"
         if log_func:
             log_func(error_msg)

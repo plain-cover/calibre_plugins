@@ -260,38 +260,26 @@ def convert_genres_to_calibre_tags(
     return list(tags_to_add)
 
 
-def parse_description(root: HtmlElement, log_func: Optional[Callable] = None) -> Optional[str]:
-    """Extract book description/synopsis from book-description div.
+def _extract_description_parts(container: HtmlElement) -> List[str]:
+    """Extract description text parts from a Romance.io description container element.
 
-    The description lives inside:
-        #book-description > .is-clearfix > div
-    That inner div contains a mobile cover thumbnail (book-cover-container),
-    the description text nodes interspersed with <br> elements, and a
-    desc-steam-rating span.  We collect only the description text.
-
-    Each <br> element in the source is emitted as <br/> in the output, so a
-    double-paragraph-break (<br/><br/> as on Romance.io) is faithfully preserved.
-
-    Returns:
-        HTML string suitable for mi.comments, or None if not found.
+    The description text appears as ``tail`` on child elements: first on the
+    mobile cover thumbnail (.book-cover-container), then on a series of <br>
+    elements that act as paragraph separators.  The steam-rating note
+    (.desc-steam-rating) is excluded.
     """
-    inner_divs = root.xpath('//div[@id="book-description"]//div[contains(@class,"is-clearfix")]/div')
-    if not inner_divs:
-        return None
-    inner_div = inner_divs[0]
-
     parts: List[str] = []
 
-    # inner_div.text holds text before the first child element (rare but handle it)
-    if inner_div.text and inner_div.text.strip():
-        parts.append(inner_div.text.strip())
+    # Text before the first child element (rare but handle it)
+    if container.text and container.text.strip():
+        parts.append(container.text.strip())
 
-    for child in inner_div:
+    for child in container:
         child_class = child.get("class") or ""
         tag = child.tag if isinstance(child.tag, str) else ""
 
         if "book-cover-container" in child_class:
-            # Description text starts as the tail of this element
+            # Description text starts as the tail of the cover thumbnail
             if child.tail and child.tail.strip():
                 parts.append(child.tail.strip())
         elif "desc-steam-rating" in child_class:
@@ -307,13 +295,58 @@ def parse_description(root: HtmlElement, log_func: Optional[Callable] = None) ->
             if child.tail and child.tail.strip():
                 parts.append(child.tail.strip())
 
-    if not parts:
-        return None
+    return parts
 
-    description = "".join(parts).strip()
+
+def parse_description(root: HtmlElement, log_func: Optional[Callable] = None) -> Optional[str]:
+    """Extract book description/synopsis from book-description div.
+
+    Tries two structures in order:
+    1. ``#book-description > .is-clearfix > div``  (standard, anonymous inner div)
+    2. ``#book-description > .is-clearfix``        (fallback when there is no inner div)
+
+    The container holds a mobile cover thumbnail (.book-cover-container), the
+    description text as ``tail`` on <br> elements, and a steam-rating note
+    (.desc-steam-rating) which is always excluded.
+
+    Each <br> element is emitted as <br/> so double paragraph breaks
+    (<br/><br/> as used by Romance.io) are faithfully preserved.
+
+    Returns:
+        HTML string suitable for mi.comments, or None if not found.
+    """
+    # Standard structure: description text is in an anonymous div inside .is-clearfix
+    inner_divs = root.xpath('//div[@id="book-description"]//div[contains(@class,"is-clearfix")]/div')
+    if inner_divs:
+        parts = _extract_description_parts(inner_divs[0])
+        if parts:
+            description = "".join(parts).strip()
+            if log_func:
+                log_func(f"parse_description: extracted {len(description)} characters")
+            return description
+
+    # Fallback: description text may be directly inside .is-clearfix (no anonymous inner div)
+    clearfix_divs = root.xpath('//div[@id="book-description"]//div[contains(@class,"is-clearfix")]')
+    if clearfix_divs:
+        parts = _extract_description_parts(clearfix_divs[0])
+        if parts:
+            description = "".join(parts).strip()
+            if log_func:
+                log_func(f"parse_description (fallback): extracted {len(description)} characters")
+            return description
+
     if log_func:
-        log_func(f"parse_description: extracted {len(description)} characters")
-    return description
+        book_desc = root.xpath('//div[@id="book-description"]')
+        if not book_desc:
+            log_func("parse_description: #book-description div not found in page")
+        elif not clearfix_divs:
+            log_func("parse_description: .is-clearfix div not found inside #book-description")
+        else:
+            log_func(
+                "parse_description: found .is-clearfix but could not extract description text "
+                f"(children: {[c.tag for c in clearfix_divs[0]]})"
+            )
+    return None
 
 
 def parse_details_from_html(url: str, root: HtmlElement, log_func: Optional[Callable] = None) -> ParsedBookData:

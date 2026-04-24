@@ -4,6 +4,7 @@ RosettaNotInstalledError) are handled correctly:
   - The error is caught and converted to a graceful None result, not an exception
 """
 
+import contextlib
 import sys
 import os
 
@@ -41,9 +42,11 @@ def clear_orchestrator_state():
     """Reset all module-level state before and after every test."""
     getattr(_orchestrator_mod, _DEAD_SET).clear()
     setattr(_orchestrator_mod, _RATE_LIMIT_TIME, 0.0)
+    setattr(_orchestrator_mod, _RATE_LIMIT_COOLDOWN, 15.0)
     yield
     getattr(_orchestrator_mod, _DEAD_SET).clear()
     setattr(_orchestrator_mod, _RATE_LIMIT_TIME, 0.0)
+    setattr(_orchestrator_mod, _RATE_LIMIT_COOLDOWN, 15.0)
 
 
 # ---------------------------------------------------------------------------
@@ -507,19 +510,14 @@ def test_get_details_book_not_found_falls_through_to_html():
 _MAYBE_WAIT = "_maybe_wait_for_rate_limit"
 
 
+@contextlib.contextmanager
 def _zero_cooldown():
     """Context manager: set _RATE_LIMIT_COOLDOWN_SECS to 0 so 429 tests don't actually sleep."""
-    import contextlib
-
-    @contextlib.contextmanager
-    def _cm():
-        setattr(_orchestrator_mod, _RATE_LIMIT_COOLDOWN, 0.0)
-        try:
-            yield
-        finally:
-            setattr(_orchestrator_mod, _RATE_LIMIT_COOLDOWN, 15.0)
-
-    return _cm()
+    setattr(_orchestrator_mod, _RATE_LIMIT_COOLDOWN, 0.0)
+    try:
+        yield
+    finally:
+        setattr(_orchestrator_mod, _RATE_LIMIT_COOLDOWN, 15.0)
 
 
 def test_429_does_retry():
@@ -627,4 +625,3 @@ def test_maybe_wait_sleeps_after_recent_429():
         assert any("cooldown" in msg.lower() for msg in logged)
     finally:
         _orchestrator_mod.time.sleep = original_sleep
-        setattr(_orchestrator_mod, _RATE_LIMIT_COOLDOWN, 15.0)
