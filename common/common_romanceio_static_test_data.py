@@ -57,6 +57,7 @@ class StaticTestBook:
         sample_tags: Optional[List[str]] = None,
         pubdate_year: Optional[int] = None,
         series_info: Optional[tuple] = None,
+        description_snippet: Optional[str] = None,
     ):
         self.name = name
         self.romanceio_id = romanceio_id
@@ -70,6 +71,7 @@ class StaticTestBook:
         self.sample_tags = sample_tags or []
         self.pubdate_year = pubdate_year
         self.series_info: Optional[tuple] = series_info
+        self.description_snippet = description_snippet
 
     @property
     def json_filename(self) -> str:
@@ -112,6 +114,7 @@ STATIC_TEST_BOOKS = [
         ],
         pubdate_year=1813,
         series_info=None,
+        description_snippet="When Elizabeth Bennet first meets eligible bachelor Fitzwilliam Darcy",
     ),
     StaticTestBook(
         name="Funny Story",
@@ -130,6 +133,7 @@ STATIC_TEST_BOOKS = [
         ],
         pubdate_year=2024,
         series_info=None,
+        description_snippet="A shimmering, joyful new novel about a pair of opposites",
     ),
 ]
 

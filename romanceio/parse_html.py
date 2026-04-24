@@ -260,6 +260,62 @@ def convert_genres_to_calibre_tags(
     return list(tags_to_add)
 
 
+def parse_description(root: HtmlElement, log_func: Optional[Callable] = None) -> Optional[str]:
+    """Extract book description/synopsis from book-description div.
+
+    The description lives inside:
+        #book-description > .is-clearfix > div
+    That inner div contains a mobile cover thumbnail (book-cover-container),
+    the description text nodes interspersed with <br> elements, and a
+    desc-steam-rating span.  We collect only the description text.
+
+    Each <br> element in the source is emitted as <br/> in the output, so a
+    double-paragraph-break (<br/><br/> as on Romance.io) is faithfully preserved.
+
+    Returns:
+        HTML string suitable for mi.comments, or None if not found.
+    """
+    inner_divs = root.xpath('//div[@id="book-description"]//div[contains(@class,"is-clearfix")]/div')
+    if not inner_divs:
+        return None
+    inner_div = inner_divs[0]
+
+    parts: List[str] = []
+
+    # inner_div.text holds text before the first child element (rare but handle it)
+    if inner_div.text and inner_div.text.strip():
+        parts.append(inner_div.text.strip())
+
+    for child in inner_div:
+        child_class = child.get("class") or ""
+        tag = child.tag if isinstance(child.tag, str) else ""
+
+        if "book-cover-container" in child_class:
+            # Description text starts as the tail of this element
+            if child.tail and child.tail.strip():
+                parts.append(child.tail.strip())
+        elif "desc-steam-rating" in child_class:
+            # Skip the steam-rating note and its tail entirely
+            pass
+        elif tag == "br":
+            # Emit one <br/> per <br> element — two consecutive <br>s in the
+            # source (Romance.io's paragraph separator) become <br/><br/>.
+            parts.append("<br/>")
+            if child.tail and child.tail.strip():
+                parts.append(child.tail.strip())
+        else:
+            if child.tail and child.tail.strip():
+                parts.append(child.tail.strip())
+
+    if not parts:
+        return None
+
+    description = "".join(parts).strip()
+    if log_func:
+        log_func(f"parse_description: extracted {len(description)} characters")
+    return description
+
+
 def parse_details_from_html(url: str, root: HtmlElement, log_func: Optional[Callable] = None) -> ParsedBookData:
     """Parse all book details from HTML page.
 
@@ -310,5 +366,17 @@ def parse_details_from_html(url: str, root: HtmlElement, log_func: Optional[Call
     except (ValueError, TypeError, IndexError, AttributeError):
         if log_func:
             log_func(f"Error parsing publish date for url: {url!r}")
+
+    try:
+        result.rating = parse_star_rating(root)
+    except (ValueError, TypeError, IndexError, AttributeError):
+        if log_func:
+            log_func(f"Error parsing star rating for url: {url!r}")
+
+    try:
+        result.description = parse_description(root, log_func)
+    except (ValueError, TypeError, IndexError, AttributeError):
+        if log_func:
+            log_func(f"Error parsing description for url: {url!r}")
 
     return result

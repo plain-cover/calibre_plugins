@@ -93,6 +93,47 @@ def test_json_details_pubdate(book_data):
     print(f"\n✓ {book_data.name} pubdate assertions passed\n")
 
 
+def test_json_details_rating(book_data):
+    """Test that parse_details_from_json populates rating."""
+    print("=" * 60)
+    print(f"Testing JSON details rating: {book_data.name}")
+    print("=" * 60)
+
+    book_json = load_static_json_file(book_data.json_filename)
+    parsed = parse_details_from_json(book_json, load_author_json_from_file)
+
+    assert parsed.rating is not None, f"Expected rating to be set for {book_data.name}"
+    assert isinstance(parsed.rating, float), f"Expected rating to be a float, got {type(parsed.rating)}"
+    assert 0.0 <= parsed.rating <= 5.0, f"Expected rating in [0, 5], got {parsed.rating}"
+    if book_data.star_rating is not None:
+        assert (
+            abs(parsed.rating - book_data.star_rating) < 0.2
+        ), f"Expected rating ~{book_data.star_rating}, got {parsed.rating}"
+    print(f"✓ rating: {parsed.rating}")
+
+    print(f"\n✓ {book_data.name} rating assertions passed\n")
+
+
+def test_json_details_description(book_data):
+    """Test that parse_details_from_json populates description."""
+    print("=" * 60)
+    print(f"Testing JSON details description: {book_data.name}")
+    print("=" * 60)
+
+    book_json = load_static_json_file(book_data.json_filename)
+    parsed = parse_details_from_json(book_json, load_author_json_from_file)
+
+    assert parsed.description is not None, f"Expected description to be set for {book_data.name}"
+    assert len(parsed.description) > 50, f"Expected substantial description, got {len(parsed.description)} chars"
+    if book_data.description_snippet is not None:
+        assert (
+            book_data.description_snippet in parsed.description
+        ), f"Expected description to contain {book_data.description_snippet!r}, got: {parsed.description[:200]!r}"
+    print(f"✓ description: {parsed.description[:80]!r}...")
+
+    print(f"\n✓ {book_data.name} description assertions passed\n")
+
+
 def test_json_details_series(book_data):
     """Test that parse_details_from_json populates series from the detail JSON."""
     print("=" * 60)
@@ -163,6 +204,8 @@ if __name__ == "__main__":
     for static_book in STATIC_TEST_BOOKS:
         test_json_book(static_book)
         test_json_details_pubdate(static_book)
+        test_json_details_rating(static_book)
+        test_json_details_description(static_book)
         test_json_details_series(static_book)
 
     test_json_details_series_inline()

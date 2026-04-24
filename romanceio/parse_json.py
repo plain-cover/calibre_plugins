@@ -29,6 +29,8 @@ class ParsedBookData:
     series_index: Optional[float] = None
     tags: Optional[List[str]] = None
     pubdate: Optional[datetime.datetime] = None
+    rating: Optional[float] = None
+    description: Optional[str] = None
 
     # Error handling
     is_valid: bool = True
@@ -267,6 +269,16 @@ def parse_details_from_json(
     series, series_index = _parse_series_from_json(book_json)
     pubdate = _parse_pubdate_from_json(book_json)
 
+    rating = None
+    raw_rating = book_json.get("info", {}).get("avgRating")
+    if raw_rating is not None:
+        try:
+            rating = float(raw_rating)
+        except (ValueError, TypeError):
+            pass
+
+    description = book_json.get("info", {}).get("description") or None
+
     return ParsedBookData(
         romanceio_id=parsed_id,
         title=title,
@@ -276,6 +288,8 @@ def parse_details_from_json(
         series_index=series_index,
         tags=tags if tags else None,
         pubdate=pubdate,
+        rating=rating,
+        description=description,
         is_valid=is_valid,
         error_reason=error_reason,
     )

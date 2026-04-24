@@ -34,7 +34,7 @@ from calibre.constants import numeric_version as calibre_version
 PLUGIN_NAME = "Romance.io"
 PLUGIN_DESCRIPTION = "Downloads metadata from Romance.io"
 PLUGIN_AUTHOR = "plain-cover"
-PLUGIN_VERSION = (1, 0, 7)
+PLUGIN_VERSION = (1, 1, 0)
 PLUGIN_MINIMUM_CALIBRE_VERSION = (2, 0, 0)
 
 
@@ -43,11 +43,13 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
     name = "Romance.io"  # Must match PLUGIN_NAME
     description = "Downloads metadata from Romance.io"  # Must match PLUGIN_DESCRIPTION
     author = "plain-cover"  # Must match PLUGIN_AUTHOR
-    version = (1, 0, 7)  # Must match PLUGIN_VERSION
+    version = (1, 1, 0)  # Must match PLUGIN_VERSION
     minimum_calibre_version = (2, 0, 0)  # Must match PLUGIN_MINIMUM_CALIBRE_VERSION
 
     capabilities = frozenset(["identify", "cover"])
-    touched_fields = frozenset(["title", "authors", "identifier:romanceio", "tags", "series", "pubdate"])
+    touched_fields = frozenset(
+        ["title", "authors", "identifier:romanceio", "tags", "series", "pubdate", "rating", "comments"]
+    )
     has_html_comments = True
     supports_gzip_transfer_encoding = True
 
@@ -492,6 +494,19 @@ if __name__ == "__main__":
                     expected.append(_make_pubdate_checker(expected_pubdate))
                 else:
                     expected.append(pubdate_test(*cast(Tuple[int, int, int], expected_pubdate)))
+
+        if "comments" in book.expected_fields:
+            expected_comments = book.expected_fields["comments"]
+            if expected_comments is not None:
+
+                def _make_comments_checker(fn: Callable) -> Callable:
+                    def checker(mi: Any) -> bool:
+                        return bool(fn(mi.comments))
+
+                    checker.__doc__ = f"comments check: {fn}"
+                    return checker
+
+                expected.append(_make_comments_checker(expected_comments))
 
         test_cases.append((query, expected))
 

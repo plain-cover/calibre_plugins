@@ -7,6 +7,7 @@ Provides common test infrastructure for comparing JSON and HTML parsing results.
 import inspect
 import json
 import os
+import re as _re
 from typing import Any, Callable, Dict, List, Optional, Set
 
 from lxml.html import HtmlElement, fromstring
@@ -225,6 +226,41 @@ class MetadataComparison:
                 mismatches.append("  ❌ PUBDATE MISMATCH:")
                 mismatches.append(f"     JSON:  {json_year!r}")
                 mismatches.append(f"     HTML:  {html_year!r}")
+                all_match = False
+
+        # Compare rating (allow small float differences; JSON avgRating and HTML display value
+        # come from the same source but may differ by ±0.05 due to rounding)
+        if self._should_compare_field("rating"):
+            json_rating = self.json_data.get("rating")
+            html_rating = self.html_data.get("rating")
+            if json_rating is not None and html_rating is not None:
+                if abs(json_rating - html_rating) > 0.1:
+                    mismatches.append("  ❌ RATING MISMATCH:")
+                    mismatches.append(f"     JSON:  {json_rating}")
+                    mismatches.append(f"     HTML:  {html_rating}")
+                    all_match = False
+            elif json_rating != html_rating:
+                mismatches.append("  ❌ RATING MISMATCH (one is None):")
+                mismatches.append(f"     JSON:  {json_rating}")
+                mismatches.append(f"     HTML:  {html_rating}")
+                all_match = False
+
+        # Compare description: strip HTML tags and compare first 100 characters
+        if self._should_compare_field("description"):
+
+            def _plain(html_str: Optional[str]) -> str:
+                if not html_str:
+                    return ""
+                return _re.sub(r"\s+", " ", _re.sub(r"<[^>]+>", "", html_str)).strip()
+
+            json_desc_plain = _plain(self.json_data.get("description"))
+            html_desc_plain = _plain(self.html_data.get("description"))
+            if not json_desc_plain and not html_desc_plain:
+                mismatches.append("  ⚠️  DESCRIPTION: both JSON and HTML returned empty (missing from page?)")
+            elif json_desc_plain[:100] != html_desc_plain[:100]:
+                mismatches.append("  ❌ DESCRIPTION MISMATCH (first 100 chars of plain text):")
+                mismatches.append(f"     JSON:  {json_desc_plain[:120]!r}")
+                mismatches.append(f"     HTML:  {html_desc_plain[:120]!r}")
                 all_match = False
 
         if not all_match:
@@ -643,6 +679,8 @@ def create_json_parser_with_validation(
             "series": getattr(basic_data, "series", None),
             "series_index": getattr(basic_data, "series_index", None),
             "pubdate": getattr(basic_data, "pubdate", None),
+            "rating": getattr(basic_data, "rating", None),
+            "description": getattr(basic_data, "description", None),
         }
 
         if parse_fields_func:
