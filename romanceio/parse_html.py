@@ -301,52 +301,55 @@ def _extract_description_parts(container: HtmlElement) -> List[str]:
 def parse_description(root: HtmlElement, log_func: Optional[Callable] = None) -> Optional[str]:
     """Extract book description/synopsis from book-description div.
 
-    Tries two structures in order:
-    1. ``#book-description > .is-clearfix > div``  (standard, anonymous inner div)
-    2. ``#book-description > .is-clearfix``        (fallback when there is no inner div)
+    Romance.io wraps the description in a structure like:
+        #book-description > .is-clearfix > [0+ anonymous divs] > div
 
-    The container holds a mobile cover thumbnail (.book-cover-container), the
-    description text as ``tail`` on <br> elements, and a steam-rating note
-    (.desc-steam-rating) which is always excluded.
+    The innermost div directly contains a mobile cover thumbnail
+    (.book-cover-container) whose tail holds the first description segment,
+    followed by <br> elements whose tails hold subsequent segments, and a
+    steam-rating note (.desc-steam-rating) which is always excluded.
 
-    Each <br> element is emitted as <br/> so double paragraph breaks
-    (<br/><br/> as used by Romance.io) are faithfully preserved.
+    Rather than assuming a fixed nesting depth, we locate the container by
+    finding whichever div inside .is-clearfix directly parents .book-cover-container.
 
     Returns:
         HTML string suitable for mi.comments, or None if not found.
     """
-    # Standard structure: description text is in an anonymous div inside .is-clearfix
-    inner_divs = root.xpath('//div[@id="book-description"]//div[contains(@class,"is-clearfix")]/div')
-    if inner_divs:
-        parts = _extract_description_parts(inner_divs[0])
-        if parts:
-            description = "".join(parts).strip()
-            if log_func:
-                log_func(f"parse_description: extracted {len(description)} characters")
-            return description
+    # Find the div that directly parents .book-cover-container, regardless of depth.
+    containers = root.xpath(
+        '//div[@id="book-description"]'
+        '//div[contains(@class,"is-clearfix")]'
+        '//div[div[contains(@class,"book-cover-container")]]'
+    )
+    if not containers:
+        if log_func:
+            book_desc = root.xpath('//div[@id="book-description"]')
+            if not book_desc:
+                log_func("parse_description: #book-description not found")
+            else:
+                clearfix = root.xpath('//div[@id="book-description"]//div[contains(@class,"is-clearfix")]')
+                if not clearfix:
+                    log_func("parse_description: .is-clearfix not found inside #book-description")
+                else:
+                    log_func(
+                        "parse_description: .book-cover-container not found inside .is-clearfix "
+                        f"(clearfix children: {[c.get('class') or c.tag for c in clearfix[0]]})"
+                    )
+        return None
 
-    # Fallback: description text may be directly inside .is-clearfix (no anonymous inner div)
-    clearfix_divs = root.xpath('//div[@id="book-description"]//div[contains(@class,"is-clearfix")]')
-    if clearfix_divs:
-        parts = _extract_description_parts(clearfix_divs[0])
-        if parts:
-            description = "".join(parts).strip()
-            if log_func:
-                log_func(f"parse_description (fallback): extracted {len(description)} characters")
-            return description
-
-    if log_func:
-        book_desc = root.xpath('//div[@id="book-description"]')
-        if not book_desc:
-            log_func("parse_description: #book-description div not found in page")
-        elif not clearfix_divs:
-            log_func("parse_description: .is-clearfix div not found inside #book-description")
-        else:
+    parts = _extract_description_parts(containers[0])
+    if not parts:
+        if log_func:
             log_func(
-                "parse_description: found .is-clearfix but could not extract description text "
-                f"(children: {[c.tag for c in clearfix_divs[0]]})"
+                "parse_description: found container but no description text "
+                f"(children: {[c.get('class') or c.tag for c in containers[0]]})"
             )
-    return None
+        return None
+
+    description = "".join(parts).strip()
+    if log_func:
+        log_func(f"parse_description: extracted {len(description)} characters")
+    return description
 
 
 def parse_details_from_html(url: str, root: HtmlElement, log_func: Optional[Callable] = None) -> ParsedBookData:
