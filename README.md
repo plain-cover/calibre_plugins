@@ -38,7 +38,7 @@ Completing the metadata download will populate fields from [Romance.io](https://
 ### Configuration
 
 #### Metadata fields to download
-You can choose which fields you want to populate from [Romance.io](https://romance.io). There are two places in Calibre where fields can be turned on or off — if a field isn't downloading, check both:
+You can choose which fields you want to populate from [Romance.io](https://romance.io). There are two places in Calibre where fields can be turned on or off - if a field isn't downloading, check both:
 
 1. **Global field list** (**Preferences > Metadata download**, main page): Calibre has a global list of fields it will accept from any source. If a field is unchecked here, it won't be downloaded even if the source provides it.
 

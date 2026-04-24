@@ -161,11 +161,11 @@ class VendoredPackageFinder(importlib.abc.MetaPathFinder):
                 sys.modules.pop(_mod_name, None)
             for _mod_name in [k for k in list(sys.modules) if k == fullname or k.startswith(fullname + ".")]:
                 sys.modules.pop(_mod_name, None)
-            # Invalidate importlib caches so zipimport re-scans the zip file.
-            # The primary attempt may have left a stale entry in zipimport's internal
-            # file-listing cache that would cause the fallback to fail with the same
-            # "No module named '...'" error even though the zip contains the module.
-            importlib.invalidate_caches()
+            # NOTE: intentionally NOT calling importlib.invalidate_caches() here.
+            # On Windows, Calibre may hold the plugin zip open; invalidate_caches()
+            # forces zipimport to close and re-open the zip, which can raise a
+            # PermissionError and cause the fallback to fail with a misleading
+            # "No module named '...'" even though the zip content is fine.
             # Redirect via calibre_plugins namespace failed (e.g. in calibre GUI mode).
             # Fall back to a direct import via sys.path so zipimport can handle it.
             # Import the full dotted name (not just the top-level package) so submodules
@@ -399,13 +399,42 @@ def fetch_page(
             sys.path.insert(0, plugin_dir)
 
         # Import and patch constants FIRST to avoid Windows permission errors.
-        # Use bare module names (e.g. "seleniumbase.fixtures.constants") rather than
-        # "calibre_plugins.{plugin_name}.seleniumbase.fixtures.constants".  In calibre
-        # GUI mode the plugin is loaded from a zip and Python's FileFinder tries to
-        # open 'Romance.io.zip\seleniumbase' as a real directory, causing
-        # FileNotFoundError.  Bare-name imports go through VendoredPackageFinder which
-        # redirects to the plugin namespace and falls back to zipimport on failure.
-        constants = importlib.import_module("seleniumbase.fixtures.constants")
+        #
+        # Strategy: try a direct zipimport (no VendoredPackageFinder) first.
+        # On Calibre 8.x the calibre_plugins.* redirect in VendoredPackageFinder can
+        # fail for deeply-nested modules such as seleniumbase.core.browser_launcher
+        # because every sub-dependency (fasteners, selenium, mycdp, …) is also
+        # intercepted and the cascade of redirects breaks when any one of them
+        # cannot be resolved via the calibre_plugins namespace.  Pure zipimport from
+        # the zip on sys.path is simpler and more reliable for pure-Python packages.
+        #
+        # VendoredPackageFinders are removed temporarily for the direct attempt, then
+        # re-inserted at LOW priority (append) so C-extension packages like lxml.etree
+        # (which cannot be loaded directly from a zip) still reach VendoredPackageFinder
+        # after path-based finders fail.
+        _vpf_saved = [f for f in list(sys.meta_path) if isinstance(f, VendoredPackageFinder)]
+        for _f in _vpf_saved:
+            sys.meta_path.remove(_f)  # type: ignore[arg-type]
+        try:
+            constants = importlib.import_module("seleniumbase.fixtures.constants")
+            _log("seleniumbase: loaded via direct zipimport")
+        except Exception as _direct_exc:
+            _log(
+                f"seleniumbase: direct zipimport failed ({type(_direct_exc).__name__}: {_direct_exc}), retrying with VendoredPackageFinder..."
+            )
+            # Restore VendoredPackageFinders at high priority and try via calibre_plugins.* redirect
+            for _f in _vpf_saved:
+                sys.meta_path.insert(0, _f)  # type: ignore[arg-type]
+            # Clear all stale partial state from the failed direct attempt
+            for _k in [k for k in list(sys.modules) if k.startswith(_sb_prefixes)]:
+                sys.modules.pop(_k, None)
+            constants = importlib.import_module("seleniumbase.fixtures.constants")
+        else:
+            # Direct import succeeded.  Re-add VendoredPackageFinders at LOW priority
+            # so they are only invoked when path-based finders (including zipimport)
+            # fail - i.e. for C extensions like lxml.etree that cannot be zipimported.
+            for _f in _vpf_saved:
+                sys.meta_path.append(_f)  # type: ignore[arg-type]
 
         # Patch Files constants immediately
         constants.Files.DOWNLOADS_FOLDER = downloads_dir
@@ -639,7 +668,7 @@ def fetch_page(
             _log(f"Chrome error: {type(e).__name__}: {e}")
             import traceback
 
-            traceback.print_exc()
+            _log(traceback.format_exc())
             return None
         finally:
             if driver:
@@ -664,14 +693,30 @@ def fetch_page(
         # (can happen when the same module is loaded under two different names in sys.modules)
         is_import_error = isinstance(e, ImportError) or type(e).__name__ in ("ImportError", "ModuleNotFoundError")
         if is_import_error and "seleniumbase" in str(e).lower():
-            # Log the full chained traceback so the root cause appears in calibre's job log.
-            # The primary exception (_primary_exc inside VendoredPackageFinder.load_module)
-            # is preserved as e.__cause__ - print_exc() will show the full chain.
             import traceback as _tb
+            import zipfile as _zf
 
-            _tb.print_exc()
-            # Include the real root cause (chained __cause__) in the error message
-            # so it's visible in the job log even when tracebacks aren't shown.
+            # Log the full chained traceback through calibre's job log (not just stderr).
+            _log(_tb.format_exc())
+            # Log sys.path so we can see whether the plugin zip is on it.
+            _plugin_entries = [p for p in sys.path if "calibre" in p.lower() or p.endswith(".zip")]
+            _log(f"sys.path (calibre/zip entries): {_plugin_entries}")
+            # Verify the zip contains the seleniumbase files we need.
+            _zip_path = os.path.dirname(os.path.abspath(__file__))
+            if os.path.isfile(_zip_path) and _zf.is_zipfile(_zip_path):
+                with _zf.ZipFile(_zip_path) as _zf_obj:
+                    _sb_files = [n for n in _zf_obj.namelist() if n.startswith("seleniumbase/")]
+                    _log(f"Zip contains {len(_sb_files)} seleniumbase/* files")
+                    _missing = [
+                        f
+                        for f in ["seleniumbase/__init__.py", "seleniumbase/core/browser_launcher.py"]
+                        if f not in _sb_files
+                    ]
+                    if _missing:
+                        _log(f"WARNING: missing from zip: {_missing}")
+            else:
+                _log(f"Vendored path is a directory (not a zip): {_zip_path!r}")
+            # Include the root cause in the error message.
             root_cause = e.__cause__ or e
             root_msg = f"{type(root_cause).__name__}: {root_cause}" if root_cause is not e else ""
             detail = f"\n  Root cause: {root_msg}" if root_msg else ""
