@@ -252,6 +252,40 @@ def parse_html_from_selenium(html: str) -> "lxml.html.HtmlElement":  # type: ign
     return _html_fromstring(html_bytes, parser=parser)
 
 
+def _find_flatpak_chrome() -> Optional[str]:
+    """Return the Chrome/Chromium binary visible from inside a flatpak sandbox, or None.
+
+    When Calibre is a flatpak (FLATPAK_ID is set) and the user has run
+    'flatpak override --user com.calibre_ebook.calibre --filesystem=host',
+    the app directories under /var/lib/flatpak/app/ and
+    ~/.local/share/flatpak/app/ become accessible.  We search for the actual
+    Chrome binary there and return a direct path to it.
+
+    Note: the flatpak export wrappers (exports/bin/com.google.Chrome) cannot
+    be used here because they are shell scripts that call 'flatpak run', and
+    the 'flatpak' command is not available inside another flatpak's sandbox.
+    """
+    if platform.system() != "Linux" or not os.environ.get("FLATPAK_ID"):
+        return None
+
+    app_bases = [
+        os.path.join(os.path.expanduser("~"), ".local", "share", "flatpak", "app"),
+        "/var/lib/flatpak/app",
+    ]
+    # (flatpak app id, path to binary relative to the active install root)
+    candidates = [
+        ("com.google.Chrome", "files/extra/google-chrome"),
+        ("com.google.ChromeDev", "files/extra/google-chrome"),
+        ("org.chromium.Chromium", "files/bin/chromium"),
+    ]
+    for base in app_bases:
+        for app_id, rel_path in candidates:
+            binary = os.path.join(base, app_id, "current", "active", rel_path)
+            if os.path.isfile(binary) and os.access(binary, os.X_OK):
+                return binary
+    return None
+
+
 # Guard so the one-time stale profile cleanup only runs once per process,
 # not on every fetch_page call (could block for minutes if 250GB accumulated).
 _stale_profile_cleanup_done = False
@@ -532,6 +566,10 @@ def fetch_page(
 
         Driver = importlib.import_module("seleniumbase.plugins.driver_manager").Driver  # pylint: disable=invalid-name
 
+        flatpak_chrome = _find_flatpak_chrome()
+        if flatpak_chrome:
+            _log(f"Flatpak Chrome detected: {flatpak_chrome!r}")
+
         driver = None
         try:
             chrome_args = [
@@ -542,6 +580,12 @@ def fetch_page(
                 "--disable-gpu",
                 "--window-size=1920,1080",
             ]
+
+            # Chrome cannot create its own kernel sandbox inside an existing
+            # sandbox (e.g. a flatpak bubblewrap container), so --no-sandbox
+            # is required.  Only add it when we know we're in a flatpak.
+            if os.environ.get("FLATPAK_ID"):
+                chrome_args.append("--no-sandbox")
 
             # In CI, keep window maximized and visible
             # On local machines, move window far off-screen to hide it
@@ -554,6 +598,7 @@ def fetch_page(
                 uc=True,
                 headless=False,
                 chromium_arg=chrome_args,
+                binary_location=flatpak_chrome,
             )
 
             time.sleep(random.uniform(0.2, 0.5))
