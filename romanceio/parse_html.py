@@ -263,10 +263,14 @@ def convert_genres_to_calibre_tags(
 def _extract_description_parts(container: HtmlElement) -> List[str]:
     """Extract description text parts from a Romance.io description container element.
 
-    The description text appears as ``tail`` on child elements: first on the
-    mobile cover thumbnail (.book-cover-container), then on a series of <br>
-    elements that act as paragraph separators.  The steam-rating note
-    (.desc-steam-rating) is excluded.
+    Two markup variants are handled:
+    - Inline text variant: description text appears as ``tail`` on child elements
+      (first on .book-cover-container, then on a series of <br> paragraph separators)
+    - Wrapped text variant: description text is the ``text_content()`` of a child
+      element (e.g. a bare <span>) — no <br> separators are used in this case
+
+    The steam-rating note (.desc-steam-rating) and .book-cover-container subtrees
+    are always excluded.
     """
     parts: List[str] = []
 
@@ -292,6 +296,11 @@ def _extract_description_parts(container: HtmlElement) -> List[str]:
             if child.tail and child.tail.strip():
                 parts.append(child.tail.strip())
         else:
+            # Some books wrap the description in a <span> or similar element.
+            # Extract the full text content of the element, then its tail.
+            inner = child.text_content()
+            if inner and inner.strip():
+                parts.append(inner.strip())
             if child.tail and child.tail.strip():
                 parts.append(child.tail.strip())
 
