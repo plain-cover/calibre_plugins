@@ -527,12 +527,12 @@ def fetch_page(
                 chromium_arg=chrome_args,
             )
 
-            time.sleep(random.uniform(0.5, 1.5))
+            time.sleep(random.uniform(0.2, 0.5))
 
             # Navigate to URL
             driver.get(url)
 
-            time.sleep(random.uniform(1, 2))
+            time.sleep(random.uniform(0.5, 1.0))
 
             start_time = time.time()
             cleared = False
@@ -598,8 +598,8 @@ def fetch_page(
                                 time.sleep(0.5)
                             _log(f"Secondary element '{secondary_wait_element}' not found (page may have 0 results)")
                             return driver.page_source
-                        # Give JavaScript a moment to finish rendering before returning.
-                        time.sleep(3)
+                        # Element found - give JS a brief moment to finish any remaining rendering.
+                        time.sleep(1.0)
                         page_source = driver.page_source
                         return page_source
                     # Early exit: if the not_found_marker is present and the primary element
@@ -645,7 +645,6 @@ def fetch_page(
             if driver:
                 try:
                     driver.quit()
-                    time.sleep(0.5)  # Give Chrome time to close
                 except Exception as quit_err:  # pylint: disable=broad-except
                     _log(f"Error closing driver: {quit_err}")
             # Always remove the throw-away Chrome profile dir created above.
