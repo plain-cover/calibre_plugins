@@ -159,6 +159,11 @@ For the Romance.io Fields plugin, you may have an extra step to ensure the plugi
 
 **Chrome is required for the HTML-based metadata download fallback.** If Chrome is not installed, the plugin can only use the JSON API, so if that isn't available, you won't get any field data. Install Chrome from [google.com/chrome](https://www.google.com/chrome/). Chrome doesn't need to be your default browser, it just needs to be installed. On Apple Silicon Macs (M1/M2/M3/M4), Chrome's browser automation also requires Rosetta 2 - if that's missing, the plugin's job log will tell you how to install it.
 
+**Linux with Chrome installed as a flatpak:** the plugin can find and use a flatpak-installed Chrome automatically. If Calibre is also a flatpak, you need to run this once in a terminal and restart Calibre:
+```
+flatpak override --user com.calibre_ebook.calibre --filesystem=host
+```
+
 **Wrong book matched, or your title/author in Calibre intentionally differs from Romance.io?** The automatic search matches by title and author - if your library uses a different edition name, spelling, or you've renamed the book, the search may fail or pick the wrong result. That's fine: you can still manually link any book to its Romance.io page. Find the book on [Romance.io](https://romance.io) and open its **book detail page** (not the series page - the URL should contain `/books/`), then copy the ID from the URL (e.g. `5484ecd47a5936fb0405756c` from `romance.io/books/5484ecd47a5936fb0405756c/...`). In Calibre, open **Edit metadata** for the book, go to the **Ids** field, and add `romanceio:5484ecd47a5936fb0405756c`. After saving, the link to Romance.io will work in the book details panel, and Romance.io Fields will be able to download data for the book.
 
 **Tags are not downloaded in any particular order.** Calibre automatically alphabetizes tags in the tag browser, so the download order doesn't matter.

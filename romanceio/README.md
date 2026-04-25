@@ -83,6 +83,10 @@ calibre-debug test_json_html_parse_matches.py -- --live=<id>    # Specific book 
 - The plugin uses Chrome to scrape Romance.io as a fallback when the JSON API is unavailable
 - Install Chrome from [google.com/chrome](https://www.google.com/chrome/) to enable this fallback
 - Without Chrome, metadata download will still work when the JSON API is available
+- **Linux with Chrome installed as a flatpak:** the plugin can find Chrome automatically, but if Calibre is also a flatpak you need to run this once in a terminal and restart Calibre:
+  ```
+  flatpak override --user com.calibre_ebook.calibre --filesystem=host
+  ```
 
 **Browser/chromedriver errors:**
 - Ensure Chrome is installed ([google.com/chrome](https://www.google.com/chrome/))

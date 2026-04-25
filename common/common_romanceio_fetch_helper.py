@@ -3,6 +3,7 @@ Shared helper for fetching pages with SeleniumBase.
 Used by both romanceio and romanceio_fields plugins.
 """
 
+import glob
 import importlib
 import importlib.abc
 import os
@@ -253,19 +254,18 @@ def parse_html_from_selenium(html: str) -> "lxml.html.HtmlElement":  # type: ign
 
 
 def _find_flatpak_chrome() -> Optional[str]:
-    """Return the Chrome/Chromium binary visible from inside a flatpak sandbox, or None.
+    """Return the Chrome/Chromium binary installed as a flatpak, or None.
 
-    When Calibre is a flatpak (FLATPAK_ID is set) and the user has run
-    'flatpak override --user com.calibre_ebook.calibre --filesystem=host',
-    the app directories under /var/lib/flatpak/app/ and
-    ~/.local/share/flatpak/app/ become accessible.  We search for the actual
-    Chrome binary there and return a direct path to it.
+    Works whether Calibre itself is a flatpak or not.  The flatpak directory
+    structure includes architecture and branch levels that vary by system
+    (e.g. /var/lib/flatpak/app/com.google.Chrome/x86_64/stable/active/...),
+    so glob wildcards are used to handle those levels automatically.
 
-    Note: the flatpak export wrappers (exports/bin/com.google.Chrome) cannot
-    be used here because they are shell scripts that call 'flatpak run', and
-    the 'flatpak' command is not available inside another flatpak's sandbox.
+    Requires the flatpak app directories to be visible on the filesystem.
+    If Calibre is also a flatpak, the user must first run:
+        flatpak override --user com.calibre_ebook.calibre --filesystem=host
     """
-    if platform.system() != "Linux" or not os.environ.get("FLATPAK_ID"):
+    if platform.system() != "Linux":
         return None
 
     app_bases = [
@@ -280,9 +280,11 @@ def _find_flatpak_chrome() -> Optional[str]:
     ]
     for base in app_bases:
         for app_id, rel_path in candidates:
-            binary = os.path.join(base, app_id, "current", "active", rel_path)
-            if os.path.isfile(binary) and os.access(binary, os.X_OK):
-                return binary
+            # Use * for arch (e.g. x86_64) and branch (e.g. stable) levels
+            pattern = os.path.join(base, app_id, "*", "*", "active", rel_path)
+            for match in glob.glob(pattern):
+                if os.access(match, os.X_OK):
+                    return match
     return None
 
 
@@ -594,7 +596,7 @@ def fetch_page(
             _log(f"Flatpak Chrome detected: {flatpak_chrome!r}")
         elif os.environ.get("FLATPAK_ID"):
             _log(
-                "Running inside a flatpak but no Chrome/Chromium binary found in flatpak app dirs. "
+                "Running inside a flatpak but no Chrome/Chromium flatpak binary found. "
                 "If Chrome is installed as a flatpak, run: "
                 "flatpak override --user com.calibre_ebook.calibre --filesystem=host"
             )
