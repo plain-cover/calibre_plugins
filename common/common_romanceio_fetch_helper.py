@@ -14,7 +14,7 @@ import sys
 import tempfile
 import time
 import types
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 # List of vendored packages that need import redirection
 VENDORED_PACKAGES = [
@@ -286,7 +286,7 @@ def _find_flatpak_chrome() -> Optional[str]:
     return None
 
 
-def log_system_info(log_func=None) -> None:
+def log_system_info(log_func: Optional[Callable[[str], None]] = None) -> None:
     """Log OS, Python, and Calibre version. Call once at the start of each job."""
 
     def _log(msg):
@@ -592,6 +592,12 @@ def fetch_page(
         flatpak_chrome = _find_flatpak_chrome()
         if flatpak_chrome:
             _log(f"Flatpak Chrome detected: {flatpak_chrome!r}")
+        elif os.environ.get("FLATPAK_ID"):
+            _log(
+                "Running inside a flatpak but no Chrome/Chromium binary found in flatpak app dirs. "
+                "If Chrome is installed as a flatpak, run: "
+                "flatpak override --user com.calibre_ebook.calibre --filesystem=host"
+            )
 
         driver = None
         try:
