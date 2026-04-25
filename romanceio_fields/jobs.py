@@ -277,6 +277,10 @@ def get_romanceio_fields_for_book(
             fields["__log__"] = logs
         return fields
 
+    from calibre_plugins.romanceio_fields.common_romanceio_fetch_helper import log_system_info  # type: ignore[import-not-found]  # pylint: disable=import-error
+
+    log_system_info(log)
+
     try:
         iterator = None
 

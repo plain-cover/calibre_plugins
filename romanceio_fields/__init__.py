@@ -11,7 +11,7 @@ from calibre.customize import InterfaceActionBase
 PLUGIN_NAME = "Romance.io Fields"
 PLUGIN_DESCRIPTION = "Download custom metadata from Romance.io like steam rating and tags"
 PLUGIN_AUTHOR = "plain-cover"
-PLUGIN_VERSION = (1, 1, 0)
+PLUGIN_VERSION = (1, 1, 1)
 PLUGIN_MINIMUM_CALIBRE_VERSION = (5, 0, 0)
 PLUGIN_ACTUAL_PLUGIN = "calibre_plugins.romanceio_fields.action:RomanceIOFieldsAction"
 
@@ -31,7 +31,7 @@ class ActionRomanceIOFields(InterfaceActionBase):  # type: ignore[misc]  # pylin
     description = "Download custom metadata from Romance.io like steam rating and tags"  # Must match PLUGIN_DESCRIPTION
     supported_platforms = ["windows", "osx", "linux"]
     author = "plain-cover"  # Must match PLUGIN_AUTHOR
-    version = (1, 1, 0)  # Must match PLUGIN_VERSION
+    version = (1, 1, 1)  # Must match PLUGIN_VERSION
     minimum_calibre_version = (5, 0, 0)  # Must match PLUGIN_MINIMUM_CALIBRE_VERSION
 
     #: This field defines the GUI plugin class that contains all the code

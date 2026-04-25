@@ -539,7 +539,7 @@ def test_429_does_retry():
 
 
 def test_429_does_not_mark_endpoint_dead():
-    """A 429 must NOT add the endpoint to the dead set — the API is alive, just rate-limiting."""
+    """A 429 must NOT add the endpoint to the dead set - the API is alive, just rate-limiting."""
     with _zero_cooldown():
 
         def func():

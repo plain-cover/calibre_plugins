@@ -14,7 +14,7 @@ import sys
 import tempfile
 import time
 import types
-from typing import Optional, Sequence
+from typing import Callable, Optional, Sequence
 
 # List of vendored packages that need import redirection
 VENDORED_PACKAGES = [
@@ -161,11 +161,11 @@ class VendoredPackageFinder(importlib.abc.MetaPathFinder):
                 sys.modules.pop(_mod_name, None)
             for _mod_name in [k for k in list(sys.modules) if k == fullname or k.startswith(fullname + ".")]:
                 sys.modules.pop(_mod_name, None)
-            # Invalidate importlib caches so zipimport re-scans the zip file.
-            # The primary attempt may have left a stale entry in zipimport's internal
-            # file-listing cache that would cause the fallback to fail with the same
-            # "No module named '...'" error even though the zip contains the module.
-            importlib.invalidate_caches()
+            # NOTE: intentionally NOT calling importlib.invalidate_caches() here.
+            # On Windows, Calibre may hold the plugin zip open; invalidate_caches()
+            # forces zipimport to close and re-open the zip, which can raise a
+            # PermissionError and cause the fallback to fail with a misleading
+            # "No module named '...'" even though the zip content is fine.
             # Redirect via calibre_plugins namespace failed (e.g. in calibre GUI mode).
             # Fall back to a direct import via sys.path so zipimport can handle it.
             # Import the full dotted name (not just the top-level package) so submodules
@@ -250,6 +250,63 @@ def parse_html_from_selenium(html: str) -> "lxml.html.HtmlElement":  # type: ign
     html_bytes = cleaned.encode("utf-8", errors="replace")
     parser = HTMLParser(encoding="utf-8")
     return _html_fromstring(html_bytes, parser=parser)
+
+
+def _find_flatpak_chrome() -> Optional[str]:
+    """Return the Chrome/Chromium binary visible from inside a flatpak sandbox, or None.
+
+    When Calibre is a flatpak (FLATPAK_ID is set) and the user has run
+    'flatpak override --user com.calibre_ebook.calibre --filesystem=host',
+    the app directories under /var/lib/flatpak/app/ and
+    ~/.local/share/flatpak/app/ become accessible.  We search for the actual
+    Chrome binary there and return a direct path to it.
+
+    Note: the flatpak export wrappers (exports/bin/com.google.Chrome) cannot
+    be used here because they are shell scripts that call 'flatpak run', and
+    the 'flatpak' command is not available inside another flatpak's sandbox.
+    """
+    if platform.system() != "Linux" or not os.environ.get("FLATPAK_ID"):
+        return None
+
+    app_bases = [
+        os.path.join(os.path.expanduser("~"), ".local", "share", "flatpak", "app"),
+        "/var/lib/flatpak/app",
+    ]
+    # (flatpak app id, path to binary relative to the active install root)
+    candidates = [
+        ("com.google.Chrome", "files/extra/google-chrome"),
+        ("com.google.ChromeDev", "files/extra/google-chrome"),
+        ("org.chromium.Chromium", "files/bin/chromium"),
+    ]
+    for base in app_bases:
+        for app_id, rel_path in candidates:
+            binary = os.path.join(base, app_id, "current", "active", rel_path)
+            if os.path.isfile(binary) and os.access(binary, os.X_OK):
+                return binary
+    return None
+
+
+def log_system_info(log_func: Optional[Callable[[str], None]] = None) -> None:
+    """Log OS, Python, and Calibre version. Call once at the start of each job."""
+
+    def _log(msg):
+        if log_func:
+            log_func(msg)
+        else:
+            print(msg)
+
+    try:
+        from calibre.constants import numeric_version as _calibre_version
+
+        _calibre_version_str = ".".join(str(x) for x in _calibre_version)
+    except Exception:  # pylint: disable=broad-except
+        _calibre_version_str = "unknown"
+    _log(
+        f"System info: OS={platform.system()} {platform.release()} "
+        f"({platform.version()}), Python={platform.python_version()}, "
+        f"Calibre={_calibre_version_str}"
+        + (f", FLATPAK_ID={os.environ['FLATPAK_ID']}" if os.environ.get("FLATPAK_ID") else "")
+    )
 
 
 # Guard so the one-time stale profile cleanup only runs once per process,
@@ -399,13 +456,42 @@ def fetch_page(
             sys.path.insert(0, plugin_dir)
 
         # Import and patch constants FIRST to avoid Windows permission errors.
-        # Use bare module names (e.g. "seleniumbase.fixtures.constants") rather than
-        # "calibre_plugins.{plugin_name}.seleniumbase.fixtures.constants".  In calibre
-        # GUI mode the plugin is loaded from a zip and Python's FileFinder tries to
-        # open 'Romance.io.zip\seleniumbase' as a real directory, causing
-        # FileNotFoundError.  Bare-name imports go through VendoredPackageFinder which
-        # redirects to the plugin namespace and falls back to zipimport on failure.
-        constants = importlib.import_module("seleniumbase.fixtures.constants")
+        #
+        # Strategy: try a direct zipimport (no VendoredPackageFinder) first.
+        # On Calibre 8.x the calibre_plugins.* redirect in VendoredPackageFinder can
+        # fail for deeply-nested modules such as seleniumbase.core.browser_launcher
+        # because every sub-dependency (fasteners, selenium, mycdp, …) is also
+        # intercepted and the cascade of redirects breaks when any one of them
+        # cannot be resolved via the calibre_plugins namespace.  Pure zipimport from
+        # the zip on sys.path is simpler and more reliable for pure-Python packages.
+        #
+        # VendoredPackageFinders are removed temporarily for the direct attempt, then
+        # re-inserted at LOW priority (append) so C-extension packages like lxml.etree
+        # (which cannot be loaded directly from a zip) still reach VendoredPackageFinder
+        # after path-based finders fail.
+        _vpf_saved = [f for f in list(sys.meta_path) if isinstance(f, VendoredPackageFinder)]
+        for _f in _vpf_saved:
+            sys.meta_path.remove(_f)  # type: ignore[arg-type]
+        try:
+            constants = importlib.import_module("seleniumbase.fixtures.constants")
+            _log("seleniumbase: loaded via direct zipimport")
+        except Exception as _direct_exc:
+            _log(
+                f"seleniumbase: direct zipimport failed ({type(_direct_exc).__name__}: {_direct_exc}), retrying with VendoredPackageFinder..."
+            )
+            # Restore VendoredPackageFinders at high priority and try via calibre_plugins.* redirect
+            for _f in _vpf_saved:
+                sys.meta_path.insert(0, _f)  # type: ignore[arg-type]
+            # Clear all stale partial state from the failed direct attempt
+            for _k in [k for k in list(sys.modules) if k.startswith(_sb_prefixes)]:
+                sys.modules.pop(_k, None)
+            constants = importlib.import_module("seleniumbase.fixtures.constants")
+        else:
+            # Direct import succeeded.  Re-add VendoredPackageFinders at LOW priority
+            # so they are only invoked when path-based finders (including zipimport)
+            # fail - i.e. for C extensions like lxml.etree that cannot be zipimported.
+            for _f in _vpf_saved:
+                sys.meta_path.append(_f)  # type: ignore[arg-type]
 
         # Patch Files constants immediately
         constants.Files.DOWNLOADS_FOLDER = downloads_dir
@@ -503,6 +589,16 @@ def fetch_page(
 
         Driver = importlib.import_module("seleniumbase.plugins.driver_manager").Driver  # pylint: disable=invalid-name
 
+        flatpak_chrome = _find_flatpak_chrome()
+        if flatpak_chrome:
+            _log(f"Flatpak Chrome detected: {flatpak_chrome!r}")
+        elif os.environ.get("FLATPAK_ID"):
+            _log(
+                "Running inside a flatpak but no Chrome/Chromium binary found in flatpak app dirs. "
+                "If Chrome is installed as a flatpak, run: "
+                "flatpak override --user com.calibre_ebook.calibre --filesystem=host"
+            )
+
         driver = None
         try:
             chrome_args = [
@@ -513,6 +609,12 @@ def fetch_page(
                 "--disable-gpu",
                 "--window-size=1920,1080",
             ]
+
+            # Chrome cannot create its own kernel sandbox inside an existing
+            # sandbox (e.g. a flatpak bubblewrap container), so --no-sandbox
+            # is required.  Only add it when we know we're in a flatpak.
+            if os.environ.get("FLATPAK_ID"):
+                chrome_args.append("--no-sandbox")
 
             # In CI, keep window maximized and visible
             # On local machines, move window far off-screen to hide it
@@ -525,7 +627,17 @@ def fetch_page(
                 uc=True,
                 headless=False,
                 chromium_arg=chrome_args,
+                binary_location=flatpak_chrome,
             )
+
+            try:
+                _chrome_ver = driver.capabilities.get("browserVersion") or driver.capabilities.get("version", "unknown")
+                _driver_ver = (driver.capabilities.get("chrome", {}) or {}).get("chromedriverVersion", "unknown")
+                if isinstance(_driver_ver, str):
+                    _driver_ver = _driver_ver.split(" ")[0]  # strip trailing platform info
+                _log(f"Chrome version: {_chrome_ver}, chromedriver version: {_driver_ver}")
+            except Exception:  # pylint: disable=broad-except
+                pass
 
             time.sleep(random.uniform(0.2, 0.5))
 
@@ -639,7 +751,7 @@ def fetch_page(
             _log(f"Chrome error: {type(e).__name__}: {e}")
             import traceback
 
-            traceback.print_exc()
+            _log(traceback.format_exc())
             return None
         finally:
             if driver:
@@ -664,14 +776,30 @@ def fetch_page(
         # (can happen when the same module is loaded under two different names in sys.modules)
         is_import_error = isinstance(e, ImportError) or type(e).__name__ in ("ImportError", "ModuleNotFoundError")
         if is_import_error and "seleniumbase" in str(e).lower():
-            # Log the full chained traceback so the root cause appears in calibre's job log.
-            # The primary exception (_primary_exc inside VendoredPackageFinder.load_module)
-            # is preserved as e.__cause__ - print_exc() will show the full chain.
             import traceback as _tb
+            import zipfile as _zf
 
-            _tb.print_exc()
-            # Include the real root cause (chained __cause__) in the error message
-            # so it's visible in the job log even when tracebacks aren't shown.
+            # Log the full chained traceback through calibre's job log (not just stderr).
+            _log(_tb.format_exc())
+            # Log sys.path so we can see whether the plugin zip is on it.
+            _plugin_entries = [p for p in sys.path if "calibre" in p.lower() or p.endswith(".zip")]
+            _log(f"sys.path (calibre/zip entries): {_plugin_entries}")
+            # Verify the zip contains the seleniumbase files we need.
+            _zip_path = os.path.dirname(os.path.abspath(__file__))
+            if os.path.isfile(_zip_path) and _zf.is_zipfile(_zip_path):
+                with _zf.ZipFile(_zip_path) as _zf_obj:
+                    _sb_files = [n for n in _zf_obj.namelist() if n.startswith("seleniumbase/")]
+                    _log(f"Zip contains {len(_sb_files)} seleniumbase/* files")
+                    _missing = [
+                        f
+                        for f in ["seleniumbase/__init__.py", "seleniumbase/core/browser_launcher.py"]
+                        if f not in _sb_files
+                    ]
+                    if _missing:
+                        _log(f"WARNING: missing from zip: {_missing}")
+            else:
+                _log(f"Vendored path is a directory (not a zip): {_zip_path!r}")
+            # Include the root cause in the error message.
             root_cause = e.__cause__ or e
             root_msg = f"{type(root_cause).__name__}: {root_cause}" if root_cause is not e else ""
             detail = f"\n  Root cause: {root_msg}" if root_msg else ""

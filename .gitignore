@@ -24,6 +24,8 @@ test_tag_slug_conversion.py
 !common/test_tag_slug_conversion.py
 test_html_sanitizer.py
 !common/test_html_sanitizer.py
+test_vendored_import.py
+!common/test_vendored_import.py
 update_static_test_data.py
 !common/update_static_test_data.py
 common_romanceio_static_test_data/

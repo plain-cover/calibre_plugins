@@ -34,7 +34,7 @@ from calibre.constants import numeric_version as calibre_version
 PLUGIN_NAME = "Romance.io"
 PLUGIN_DESCRIPTION = "Downloads metadata from Romance.io"
 PLUGIN_AUTHOR = "plain-cover"
-PLUGIN_VERSION = (1, 1, 0)
+PLUGIN_VERSION = (1, 1, 1)
 PLUGIN_MINIMUM_CALIBRE_VERSION = (2, 0, 0)
 
 
@@ -43,7 +43,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
     name = "Romance.io"  # Must match PLUGIN_NAME
     description = "Downloads metadata from Romance.io"  # Must match PLUGIN_DESCRIPTION
     author = "plain-cover"  # Must match PLUGIN_AUTHOR
-    version = (1, 1, 0)  # Must match PLUGIN_VERSION
+    version = (1, 1, 1)  # Must match PLUGIN_VERSION
     minimum_calibre_version = (2, 0, 0)  # Must match PLUGIN_MINIMUM_CALIBRE_VERSION
 
     capabilities = frozenset(["identify", "cover"])
@@ -172,6 +172,9 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
         search_fallback: dict = {}  # populated during search if a JSON match is found
         romanceio_id = identifiers.get(self.ID_NAME, None)
         log.debug(f"identify - start. title={title}, authors={authors}, identifiers={identifiers}")
+        from calibre_plugins.romanceio.common_romanceio_fetch_helper import log_system_info  # type: ignore[import-not-found]  # pylint: disable=import-error
+
+        log_system_info(log.info)
         # Unlike the other metadata sources, if we have a Romance.io ID then we
         # do not need to fire a "search" at Romance.io. Instead we will be
         # able to go straight to the URL for that book.
