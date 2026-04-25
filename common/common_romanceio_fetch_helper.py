@@ -286,6 +286,29 @@ def _find_flatpak_chrome() -> Optional[str]:
     return None
 
 
+def log_system_info(log_func=None) -> None:
+    """Log OS, Python, and Calibre version. Call once at the start of each job."""
+
+    def _log(msg):
+        if log_func:
+            log_func(msg)
+        else:
+            print(msg)
+
+    try:
+        from calibre.constants import numeric_version as _calibre_version
+
+        _calibre_version_str = ".".join(str(x) for x in _calibre_version)
+    except Exception:  # pylint: disable=broad-except
+        _calibre_version_str = "unknown"
+    _log(
+        f"System info: OS={platform.system()} {platform.release()} "
+        f"({platform.version()}), Python={platform.python_version()}, "
+        f"Calibre={_calibre_version_str}"
+        + (f", FLATPAK_ID={os.environ['FLATPAK_ID']}" if os.environ.get("FLATPAK_ID") else "")
+    )
+
+
 # Guard so the one-time stale profile cleanup only runs once per process,
 # not on every fetch_page call (could block for minutes if 250GB accumulated).
 _stale_profile_cleanup_done = False
@@ -600,6 +623,15 @@ def fetch_page(
                 chromium_arg=chrome_args,
                 binary_location=flatpak_chrome,
             )
+
+            try:
+                _chrome_ver = driver.capabilities.get("browserVersion") or driver.capabilities.get("version", "unknown")
+                _driver_ver = (driver.capabilities.get("chrome", {}) or {}).get("chromedriverVersion", "unknown")
+                if isinstance(_driver_ver, str):
+                    _driver_ver = _driver_ver.split(" ")[0]  # strip trailing platform info
+                _log(f"Chrome version: {_chrome_ver}, chromedriver version: {_driver_ver}")
+            except Exception:  # pylint: disable=broad-except
+                pass
 
             time.sleep(random.uniform(0.2, 0.5))
 

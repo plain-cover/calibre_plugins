@@ -172,6 +172,9 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
         search_fallback: dict = {}  # populated during search if a JSON match is found
         romanceio_id = identifiers.get(self.ID_NAME, None)
         log.debug(f"identify - start. title={title}, authors={authors}, identifiers={identifiers}")
+        from calibre_plugins.romanceio.common_romanceio_fetch_helper import log_system_info  # type: ignore[import-not-found]  # pylint: disable=import-error
+
+        log_system_info(log.info)
         # Unlike the other metadata sources, if we have a Romance.io ID then we
         # do not need to fire a "search" at Romance.io. Instead we will be
         # able to go straight to the URL for that book.
