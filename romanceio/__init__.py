@@ -34,7 +34,7 @@ from calibre.constants import numeric_version as calibre_version
 PLUGIN_NAME = "Romance.io"
 PLUGIN_DESCRIPTION = "Downloads metadata from Romance.io"
 PLUGIN_AUTHOR = "plain-cover"
-PLUGIN_VERSION = (1, 1, 1)
+PLUGIN_VERSION = (1, 1, 2)
 PLUGIN_MINIMUM_CALIBRE_VERSION = (2, 0, 0)
 
 
@@ -43,7 +43,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
     name = "Romance.io"  # Must match PLUGIN_NAME
     description = "Downloads metadata from Romance.io"  # Must match PLUGIN_DESCRIPTION
     author = "plain-cover"  # Must match PLUGIN_AUTHOR
-    version = (1, 1, 1)  # Must match PLUGIN_VERSION
+    version = (1, 1, 2)  # Must match PLUGIN_VERSION
     minimum_calibre_version = (2, 0, 0)  # Must match PLUGIN_MINIMUM_CALIBRE_VERSION
 
     capabilities = frozenset(["identify", "cover"])
@@ -218,12 +218,22 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
 
                 def html_search(title, authors, log_func):
                     from calibre_plugins.romanceio.fetch_helper import fetch_page  # type: ignore[import-not-found]  # pylint: disable=import-error
-                    from calibre_plugins.romanceio.common_romanceio_search import search_for_romanceio_id  # type: ignore[import-not-found]  # pylint: disable=import-error
+                    from calibre_plugins.romanceio.common_romanceio_search import search_for_romanceio_id_with_details  # type: ignore[import-not-found]  # pylint: disable=import-error
 
                     def fetch_with_log(url, **kwargs):
                         return fetch_page(url, log_func=log_func, **kwargs)
 
-                    return search_for_romanceio_id(title, authors, fetch_with_log, log_func)
+                    match_id, match_title, match_authors = search_for_romanceio_id_with_details(
+                        title, authors, fetch_with_log, log_func
+                    )
+                    if match_id and match_title and match_authors:
+                        # Populate search_fallback so the Worker can emit minimal metadata
+                        # if the detail-page fetch later fails or times out.
+                        if not search_fallback.get("title"):
+                            search_fallback["title"] = match_title
+                        if not search_fallback.get("authors"):
+                            search_fallback["authors"] = match_authors
+                    return match_id
 
                 json_id = search_with_fallback(title, authors, json_search, html_search, log.info)
                 if json_id:

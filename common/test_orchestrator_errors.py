@@ -18,6 +18,7 @@ from common.common_romanceio_json_api import (
     JsonApiEndpointError,
     JsonApiBookNotFoundError,
     JsonApiRateLimitError,
+    JsonApiAccessDeniedError,
     JSON_SEARCH_URL_PREFIX,
     JSON_BOOKS_URL_PREFIX,
 )
@@ -34,7 +35,10 @@ import common.common_romanceio_search_orchestrator as _orchestrator_mod
 
 _DEAD_SET = "_dead_json_endpoints"
 _RATE_LIMIT_TIME = "_last_rate_limit_time"
-_RATE_LIMIT_COOLDOWN = "_RATE_LIMIT_COOLDOWN_SECS"
+_LAST_JSON_REQUEST_TIME = "_last_json_request_time"
+_RATE_LIMIT_BASE_RETRY = "_RATE_LIMIT_RETRY_SECS"
+_RATE_LIMIT_INTER_BOOK_COOLDOWN = "_RATE_LIMIT_INTER_BOOK_COOLDOWN_SECS"
+_MIN_JSON_INTERVAL = "_MIN_JSON_INTERVAL_SECS"
 
 
 @pytest.fixture(autouse=True)
@@ -42,11 +46,17 @@ def clear_orchestrator_state():
     """Reset all module-level state before and after every test."""
     getattr(_orchestrator_mod, _DEAD_SET).clear()
     setattr(_orchestrator_mod, _RATE_LIMIT_TIME, 0.0)
-    setattr(_orchestrator_mod, _RATE_LIMIT_COOLDOWN, 15.0)
+    setattr(_orchestrator_mod, _LAST_JSON_REQUEST_TIME, 0.0)
+    setattr(_orchestrator_mod, _RATE_LIMIT_BASE_RETRY, 15.0)
+    setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 60.0)
+    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 1.0)
     yield
     getattr(_orchestrator_mod, _DEAD_SET).clear()
     setattr(_orchestrator_mod, _RATE_LIMIT_TIME, 0.0)
-    setattr(_orchestrator_mod, _RATE_LIMIT_COOLDOWN, 15.0)
+    setattr(_orchestrator_mod, _LAST_JSON_REQUEST_TIME, 0.0)
+    setattr(_orchestrator_mod, _RATE_LIMIT_BASE_RETRY, 15.0)
+    setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 60.0)
+    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -507,17 +517,21 @@ def test_get_details_book_not_found_falls_through_to_html():
 # ---------------------------------------------------------------------------
 
 # String constant so the linter cannot resolve it to the protected symbol.
-_MAYBE_WAIT = "_maybe_wait_for_rate_limit"
+_THROTTLE = "_throttle_json_call"
 
 
 @contextlib.contextmanager
 def _zero_cooldown():
-    """Context manager: set _RATE_LIMIT_COOLDOWN_SECS to 0 so 429 tests don't actually sleep."""
-    setattr(_orchestrator_mod, _RATE_LIMIT_COOLDOWN, 0.0)
+    """Context manager: zero all rate-limit and interval constants so tests don't actually sleep."""
+    setattr(_orchestrator_mod, _RATE_LIMIT_BASE_RETRY, 0.0)
+    setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 0.0)
+    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 0.0)
     try:
         yield
     finally:
-        setattr(_orchestrator_mod, _RATE_LIMIT_COOLDOWN, 15.0)
+        setattr(_orchestrator_mod, _RATE_LIMIT_BASE_RETRY, 15.0)
+        setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 60.0)
+        setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 1.0)
 
 
 def test_429_does_retry():
@@ -587,7 +601,7 @@ def test_429_retry_succeeds_on_second_attempt():
 
 
 def test_maybe_wait_no_sleep_without_prior_429():
-    """_maybe_wait_for_rate_limit must not sleep when _last_rate_limit_time is 0 (no prior 429)."""
+    """_throttle_json_call must not sleep for 429 cooldown when no prior 429 (min interval also zeroed)."""
     with _zero_cooldown():
         slept: list[float] = []
         original_sleep = _orchestrator_mod.time.sleep
@@ -597,18 +611,19 @@ def test_maybe_wait_no_sleep_without_prior_429():
 
         _orchestrator_mod.time.sleep = mock_sleep
         try:
-            getattr(_orchestrator_mod, _MAYBE_WAIT)(lambda _: None)
-            assert not slept, "Should not sleep when no prior 429 has occurred"
+            getattr(_orchestrator_mod, _THROTTLE)(lambda _: None)
+            assert not slept, "Should not sleep when no prior 429 and min interval is zeroed"
         finally:
             _orchestrator_mod.time.sleep = original_sleep
 
 
 def test_maybe_wait_sleeps_after_recent_429():
-    """_maybe_wait_for_rate_limit must sleep when a 429 occurred recently."""
+    """_throttle_json_call must sleep for the 429 cooldown window when a 429 occurred recently."""
     import time
 
     setattr(_orchestrator_mod, _RATE_LIMIT_TIME, time.time())
-    setattr(_orchestrator_mod, _RATE_LIMIT_COOLDOWN, 10.0)
+    setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 10.0)
+    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 0.0)
 
     slept: list[float] = []
     logged: list[str] = []
@@ -619,9 +634,160 @@ def test_maybe_wait_sleeps_after_recent_429():
 
     _orchestrator_mod.time.sleep = mock_sleep
     try:
-        getattr(_orchestrator_mod, _MAYBE_WAIT)(logged.append)
+        getattr(_orchestrator_mod, _THROTTLE)(logged.append)
         assert len(slept) == 1, "Should sleep exactly once"
         assert 9.0 < slept[0] <= 10.0, f"Should sleep close to 10s, got {slept[0]}"
         assert any("cooldown" in msg.lower() for msg in logged)
     finally:
         _orchestrator_mod.time.sleep = original_sleep
+
+
+def test_throttle_sleeps_for_min_interval():
+    """_throttle_json_call must enforce the minimum inter-request interval when no 429 is active."""
+    import time
+
+    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 5.0)
+    setattr(_orchestrator_mod, _LAST_JSON_REQUEST_TIME, time.time())  # just fired a request
+
+    slept: list[float] = []
+    logged: list[str] = []
+    original_sleep = _orchestrator_mod.time.sleep
+
+    def mock_sleep(secs: float) -> None:
+        slept.append(secs)
+
+    _orchestrator_mod.time.sleep = mock_sleep
+    try:
+        getattr(_orchestrator_mod, _THROTTLE)(logged.append)
+        assert len(slept) == 1, "Should sleep once for the minimum interval"
+        assert 4.0 < slept[0] <= 5.0, f"Should sleep close to 5s, got {slept[0]}"
+        # Minimum interval sleep is silent - no log message expected
+        assert not any("cooldown" in msg.lower() for msg in logged)
+    finally:
+        _orchestrator_mod.time.sleep = original_sleep
+
+
+# ---------------------------------------------------------------------------
+# JsonApiAccessDeniedError (403) tests
+# ---------------------------------------------------------------------------
+
+
+def _raise_403(*_args, **_kwargs):
+    raise JsonApiAccessDeniedError("HTTP Error 403: Forbidden")
+
+
+def test_403_does_not_retry():
+    """JsonApiAccessDeniedError must NOT be retried - it's a persistent Cloudflare block."""
+    attempts = []
+
+    def func():
+        attempts.append(1)
+        raise JsonApiAccessDeniedError("HTTP Error 403: Forbidden")
+
+    log_func, _ = _collecting_log()
+    result = _retry_with_delay(func, "JSON API search", max_retries=3, retry_delay=0, log_func=log_func)
+
+    assert len(attempts) == 1, f"Expected exactly 1 attempt for 403, got {len(attempts)}"
+    assert result == SearchResult(success=False, result=None)
+
+
+def test_403_marks_all_endpoints_dead():
+    """A 403 must mark BOTH search and books endpoints dead for this session."""
+
+    def func():
+        raise JsonApiAccessDeniedError("HTTP Error 403: Forbidden")
+
+    _retry_with_delay(func, "JSON API search", max_retries=3, retry_delay=0, log_func=lambda _: None)
+
+    assert _is_endpoint_dead(JSON_SEARCH_URL_PREFIX), "Search endpoint must be marked dead after 403"
+    assert _is_endpoint_dead(JSON_BOOKS_URL_PREFIX), "Books endpoint must be marked dead after 403"
+
+
+def test_403_logs_cloudflare_message():
+    """A 403 must log a message mentioning Cloudflare or blocked access."""
+    log_func, logs = _collecting_log()
+
+    _retry_with_delay(_raise_403, "JSON API search", max_retries=3, retry_delay=0, log_func=log_func)
+
+    combined = " ".join(logs).lower()
+    assert (
+        "403" in combined or "blocked" in combined or "cloudflare" in combined
+    ), f"Expected a 403/blocked/cloudflare mention in logs, got: {logs}"
+
+
+def test_403_search_with_fallback_falls_through_to_html():
+    """search_with_fallback must fall back to HTML and call html_search when JSON returns 403."""
+    html_called = []
+
+    def html_search(title, authors, _log_func):
+        html_called.append((title, authors))
+        return "abc123"
+
+    log_func, _ = _collecting_log()
+    result = search_with_fallback(
+        title="Test Book",
+        authors=["Test Author"],
+        json_search_func=_raise_403,
+        html_search_func=html_search,
+        log_func=log_func,
+        max_retries=1,
+        retry_delay=0,
+    )
+
+    assert result == "abc123", "HTML fallback result must be returned after 403"
+    assert html_called, "HTML search must be called after JSON returns 403"
+
+
+def test_403_fetch_details_falls_through_to_html():
+    """fetch_details_with_fallback must fall through to HTML when JSON returns 403."""
+    html_called = []
+
+    def html_fetch(romanceio_id, _log_func):
+        html_called.append(romanceio_id)
+        return {"title": "some book"}
+
+    log_func, _ = _collecting_log()
+    result = fetch_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=_raise_403,
+        html_fetch_func=html_fetch,
+        log_func=log_func,
+        max_retries=1,
+        retry_delay=0,
+    )
+
+    assert result == {"title": "some book"}, "HTML fallback result must be returned after 403"
+    assert html_called == ["abc123"], "HTML fetch must be called after JSON returns 403"
+
+
+def test_403_subsequent_books_skip_json():
+    """After a 403, both search and detail JSON calls must be skipped for all subsequent books."""
+    # Simulate: first book triggers 403 during search
+    search_count = []
+    fetch_count = []
+
+    def json_search(_title, _authors, _log_func):
+        search_count.append(1)
+        raise JsonApiAccessDeniedError("HTTP Error 403: Forbidden")
+
+    def html_search(_title, _authors, _log_func):
+        return "abc123"
+
+    def json_fetch(_romanceio_id, _log_func):
+        fetch_count.append(1)
+        return {"title": "some book"}
+
+    def html_fetch(_romanceio_id, _log_func):
+        return {"title": "some book"}
+
+    log_func, _ = _collecting_log()
+
+    # First book - triggers 403, falls back to HTML
+    search_with_fallback("Book 1", ["Author"], json_search, html_search, log_func, max_retries=1, retry_delay=0)
+
+    # After 403, both endpoints are dead, so entire JSON is skipped for subsequent books
+    search_with_fallback("Book 2", ["Author"], json_search, html_search, log_func, max_retries=1, retry_delay=0)
+    fetch_details_with_fallback("abc456", json_fetch, html_fetch, log_func, max_retries=1, retry_delay=0)
+
+    assert search_count == [1], f"JSON search called {len(search_count)} times, expected exactly 1 (on first book)"
+    assert not fetch_count, "JSON fetch must not be called after 403 marked endpoints dead"

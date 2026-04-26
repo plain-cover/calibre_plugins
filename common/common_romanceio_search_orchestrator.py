@@ -18,6 +18,7 @@ from .common_romanceio_json_api import (  # pylint: disable=import-outside-tople
     JsonApiEndpointError,
     JsonApiBookNotFoundError,
     JsonApiRateLimitError,
+    JsonApiAccessDeniedError,
     JSON_SEARCH_URL_PREFIX,
     JSON_BOOKS_URL_PREFIX,
 )
@@ -39,9 +40,22 @@ _dead_json_endpoints: set = set()
 # Used to insert a cooldown delay before the next JSON API call when rate-limited.
 _last_rate_limit_time: float = 0.0
 
-# How long (seconds) to wait before retrying after a 429 Too Many Requests response.
-# Also used as a cooldown gate: if a 429 was seen within this window, delay the next call.
-_RATE_LIMIT_COOLDOWN_SECS: float = 15.0
+# Timestamp of the last JSON API request (any endpoint). Used to enforce a minimum
+# inter-request interval so rapid library scans don't trigger rate limiting in the first place.
+_last_json_request_time: float = 0.0
+
+# Base delay (seconds) before the first retry after a 429 Too Many Requests response.
+_RATE_LIMIT_RETRY_SECS: float = 15.0
+
+# How long (seconds) to gate the NEXT book's JSON call after any 429 was seen.
+# Kept separate from the per-book retry delay: Chrome scraping typically takes ~15 s,
+# which previously consumed the entire 15 s window, leaving the next book with no wait.
+# 60 s gives enough breathing room regardless of how long the HTML fallback took.
+_RATE_LIMIT_INTER_BOOK_COOLDOWN_SECS: float = 60.0
+
+# Minimum seconds between any two JSON API requests. Prevents bursting through a large
+# library with no inter-request gap, which is the root cause of initial 429 responses.
+_MIN_JSON_INTERVAL_SECS: float = 1.0
 
 
 def _endpoint_key(url: str) -> str:
@@ -74,13 +88,31 @@ class SearchResult(NamedTuple):
     result: Optional[Any]
 
 
-def _maybe_wait_for_rate_limit(log_func: Callable) -> None:
-    """Sleep if the JSON API was rate-limited recently, to avoid immediate re-triggering."""
-    elapsed = time.time() - _last_rate_limit_time
-    if elapsed < _RATE_LIMIT_COOLDOWN_SECS:
-        wait = _RATE_LIMIT_COOLDOWN_SECS - elapsed
+def _throttle_json_call(log_func: Callable) -> None:
+    """Enforce rate-limit back-pressure and minimum inter-request spacing before a JSON call.
+
+    Must be called immediately before every JSON API attempt (once per book, not per retry).
+    Updates _last_json_request_time so the next call can measure the gap correctly.
+    """
+    global _last_json_request_time  # pylint: disable=global-statement
+    now = time.time()
+
+    # 429 cooldown takes priority: if we hit a rate limit recently, wait out the full window.
+    rate_limit_elapsed = now - _last_rate_limit_time
+    if rate_limit_elapsed < _RATE_LIMIT_INTER_BOOK_COOLDOWN_SECS:
+        wait = _RATE_LIMIT_INTER_BOOK_COOLDOWN_SECS - rate_limit_elapsed
         log_func(f"Rate limit cooldown: waiting {wait:.1f}s before JSON API call...")
         time.sleep(wait)
+        _last_json_request_time = time.time()
+        return
+
+    # Enforce minimum inter-request interval to prevent burst-triggering rate limits.
+    # No log message - this is normal pacing, not an error condition.
+    interval_elapsed = now - _last_json_request_time
+    if interval_elapsed < _MIN_JSON_INTERVAL_SECS:
+        time.sleep(_MIN_JSON_INTERVAL_SECS - interval_elapsed)
+
+    _last_json_request_time = time.time()
 
 
 def _retry_with_delay(
@@ -91,7 +123,7 @@ def _retry_with_delay(
     log_func: Callable,
 ) -> SearchResult:
     """
-    Execute a function with retry logic and constant delay between attempts.
+    Execute a function with retry logic and fixed delay between attempts.
 
     Retries only occur when the function raises an exception (technical failure).
     If the function completes without exception, its return value is returned immediately,
@@ -149,6 +181,17 @@ def _retry_with_delay(
                 # Do NOT mark the endpoint as dead - other books may be available.
                 log_func("  Book not found in JSON API (404), skipping retries. Will try HTML.")
                 return SearchResult(success=False, result=None)
+            if isinstance(e, JsonApiAccessDeniedError):
+                # 403 Forbidden: Cloudflare is blocking plain HTTP requests to the JSON API.
+                # This is a site-wide block - mark ALL JSON endpoints dead for this session
+                # so subsequent books skip JSON entirely and go straight to Chrome/HTML.
+                log_func(
+                    "  JSON API blocked (403 Forbidden) - likely Cloudflare protection.\n"
+                    "  Marking all JSON endpoints dead for this session; subsequent books will go straight to Chrome."
+                )
+                _dead_json_endpoints.add(_endpoint_key(JSON_SEARCH_URL_PREFIX))
+                _dead_json_endpoints.add(_endpoint_key(JSON_BOOKS_URL_PREFIX))
+                return SearchResult(success=False, result=None)
             if isinstance(e, JsonApiEndpointError):
                 log_func("  Endpoint is down (404), skipping retries.")
                 _dead_json_endpoints.add(_endpoint_key(e.url))
@@ -177,9 +220,9 @@ def _retry_with_delay(
                 return SearchResult(success=False, result=None)
             if isinstance(e, JsonApiRateLimitError):
                 _last_rate_limit_time = time.time()
-                next_attempt_delay = _RATE_LIMIT_COOLDOWN_SECS
+                next_attempt_delay = _RATE_LIMIT_RETRY_SECS
                 if attempt < max_retries:
-                    log_func(f"  Rate limited (429). Will retry in {_RATE_LIMIT_COOLDOWN_SECS}s...")
+                    log_func(f"  Rate limited (429). Will retry in {_RATE_LIMIT_RETRY_SECS:.0f}s...")
             elif attempt < max_retries:
                 log_func(f"  Will retry in {retry_delay}s...")
 
@@ -219,7 +262,7 @@ def search_with_fallback(
         log_func("Skipping JSON API search (endpoint returned 404 earlier this session).")
         json_search = SearchResult(success=False, result=None)
     else:
-        _maybe_wait_for_rate_limit(log_func)
+        _throttle_json_call(log_func)
         log_func("Attempting JSON API search first...")
         json_search = _retry_with_delay(
             func=lambda: json_search_func(title, authors, log_func),
@@ -285,7 +328,7 @@ def fetch_details_with_fallback(
         log_func(f"Skipping JSON API fetch for {romanceio_id} (endpoint returned 404 earlier this session).")
         json_fetch = SearchResult(success=False, result=None)
     else:
-        _maybe_wait_for_rate_limit(log_func)
+        _throttle_json_call(log_func)
         log_func(f"Attempting JSON API fetch for {romanceio_id}...")
         json_fetch = _retry_with_delay(
             func=lambda: json_fetch_func(romanceio_id, log_func),
@@ -344,6 +387,7 @@ def get_details_with_fallback(
     if _books_key in _dead_json_endpoints:
         log_func(f"Skipping JSON API for book {romanceio_id} (endpoint returned 404 earlier this session).")
     else:
+        _throttle_json_call(log_func)
         log_func(f"Attempting JSON API for book {romanceio_id}...")
         try:
             details = json_fetch_func(romanceio_id, log_func)

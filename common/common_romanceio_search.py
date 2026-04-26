@@ -471,7 +471,33 @@ def search_for_romanceio_id(title, authors, fetch_page_func, log_func=print):
     Raises:
         RuntimeError: If page fetch fails or HTML parsing fails (technical failures)
     """
-    # Build search query
+    romanceio_id, _, _ = search_for_romanceio_id_with_details(title, authors, fetch_page_func, log_func)
+    return romanceio_id
+
+
+def search_for_romanceio_id_with_details(title, authors, fetch_page_func, log_func=print):
+    """
+    Search Romance.io for a book and return its romanceio_id, title, and authors.
+
+    Core search implementation. Returns the parsed title and authors from the search
+    result alongside the ID. Use this when you need the matched title/authors (e.g.
+    to populate a search_fallback dict so the caller can emit minimal metadata if the
+    detail-page fetch later fails or times out). Use search_for_romanceio_id() when
+    you only need the ID.
+
+    Args:
+        title: Book title
+        authors: List of author names
+        fetch_page_func: Function to fetch pages (e.g., fetch_helper.fetch_page)
+        log_func: Logging function (defaults to print)
+
+    Returns:
+        Tuple of (romanceio_id, title, authors) or (None, None, None) if not found.
+        romanceio_id is None when the search completed successfully but found no match.
+
+    Raises:
+        RuntimeError: If page fetch fails or HTML parsing fails (technical failures)
+    """
     query_url = _build_search_query(title, authors)
     if not query_url:
         error_msg = "search_for_romanceio_id: Could not build search query"
@@ -503,9 +529,10 @@ def search_for_romanceio_id(title, authors, fetch_page_func, log_func=print):
         log_func(error_msg)
         raise RuntimeError(error_msg) from e
 
-    romanceio_id = _parse_search_results(root, title, authors, log_func)
-
-    return romanceio_id
+    result = _parse_search_results_with_details(root, title, authors, log_func)
+    if result:
+        return result  # (romanceio_id, title, authors)
+    return (None, None, None)
 
 
 def parse_search_results_for_id_and_cover(root, orig_title, orig_authors, log_func=print):

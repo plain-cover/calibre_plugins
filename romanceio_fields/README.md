@@ -176,6 +176,10 @@ This means popular/agreed-upon tags are preferred when capping.
 - The plugin uses Chrome to load Romance.io pages (required to bypass Cloudflare)
 - Install Chrome from [google.com/chrome](https://www.google.com/chrome/)
 - Without Chrome, the plugin cannot fetch data
+- **Linux with Chrome installed as a flatpak:** the plugin can find Chrome automatically, but if Calibre is also a flatpak you need to run this once in a terminal and restart Calibre:
+  ```
+  flatpak override --user com.calibre_ebook.calibre --filesystem=host
+  ```
 
 **Slow performance:**
 - Expected: 10-30 seconds per book - browser automation is required to bypass Cloudflare
