@@ -18,6 +18,7 @@ from common.common_romanceio_json_api import (
     JsonApiEndpointError,
     JsonApiBookNotFoundError,
     JsonApiRateLimitError,
+    JsonApiAccessDeniedError,
     JSON_SEARCH_URL_PREFIX,
     JSON_BOOKS_URL_PREFIX,
 )
@@ -664,3 +665,129 @@ def test_throttle_sleeps_for_min_interval():
         assert not any("cooldown" in msg.lower() for msg in logged)
     finally:
         _orchestrator_mod.time.sleep = original_sleep
+
+
+# ---------------------------------------------------------------------------
+# JsonApiAccessDeniedError (403) tests
+# ---------------------------------------------------------------------------
+
+
+def _raise_403(*_args, **_kwargs):
+    raise JsonApiAccessDeniedError("HTTP Error 403: Forbidden")
+
+
+def test_403_does_not_retry():
+    """JsonApiAccessDeniedError must NOT be retried - it's a persistent Cloudflare block."""
+    attempts = []
+
+    def func():
+        attempts.append(1)
+        raise JsonApiAccessDeniedError("HTTP Error 403: Forbidden")
+
+    log_func, _ = _collecting_log()
+    result = _retry_with_delay(func, "JSON API search", max_retries=3, retry_delay=0, log_func=log_func)
+
+    assert len(attempts) == 1, f"Expected exactly 1 attempt for 403, got {len(attempts)}"
+    assert result == SearchResult(success=False, result=None)
+
+
+def test_403_marks_all_endpoints_dead():
+    """A 403 must mark BOTH search and books endpoints dead for this session."""
+
+    def func():
+        raise JsonApiAccessDeniedError("HTTP Error 403: Forbidden")
+
+    _retry_with_delay(func, "JSON API search", max_retries=3, retry_delay=0, log_func=lambda _: None)
+
+    assert _is_endpoint_dead(JSON_SEARCH_URL_PREFIX), "Search endpoint must be marked dead after 403"
+    assert _is_endpoint_dead(JSON_BOOKS_URL_PREFIX), "Books endpoint must be marked dead after 403"
+
+
+def test_403_logs_cloudflare_message():
+    """A 403 must log a message mentioning Cloudflare or blocked access."""
+    log_func, logs = _collecting_log()
+
+    _retry_with_delay(_raise_403, "JSON API search", max_retries=3, retry_delay=0, log_func=log_func)
+
+    combined = " ".join(logs).lower()
+    assert (
+        "403" in combined or "blocked" in combined or "cloudflare" in combined
+    ), f"Expected a 403/blocked/cloudflare mention in logs, got: {logs}"
+
+
+def test_403_search_with_fallback_falls_through_to_html():
+    """search_with_fallback must fall back to HTML and call html_search when JSON returns 403."""
+    html_called = []
+
+    def html_search(title, authors, _log_func):
+        html_called.append((title, authors))
+        return "abc123"
+
+    log_func, _ = _collecting_log()
+    result = search_with_fallback(
+        title="Test Book",
+        authors=["Test Author"],
+        json_search_func=_raise_403,
+        html_search_func=html_search,
+        log_func=log_func,
+        max_retries=1,
+        retry_delay=0,
+    )
+
+    assert result == "abc123", "HTML fallback result must be returned after 403"
+    assert html_called, "HTML search must be called after JSON returns 403"
+
+
+def test_403_fetch_details_falls_through_to_html():
+    """fetch_details_with_fallback must fall through to HTML when JSON returns 403."""
+    html_called = []
+
+    def html_fetch(romanceio_id, _log_func):
+        html_called.append(romanceio_id)
+        return {"title": "some book"}
+
+    log_func, _ = _collecting_log()
+    result = fetch_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=_raise_403,
+        html_fetch_func=html_fetch,
+        log_func=log_func,
+        max_retries=1,
+        retry_delay=0,
+    )
+
+    assert result == {"title": "some book"}, "HTML fallback result must be returned after 403"
+    assert html_called == ["abc123"], "HTML fetch must be called after JSON returns 403"
+
+
+def test_403_subsequent_books_skip_json():
+    """After a 403, both search and detail JSON calls must be skipped for all subsequent books."""
+    # Simulate: first book triggers 403 during search
+    search_count = []
+    fetch_count = []
+
+    def json_search(_title, _authors, _log_func):
+        search_count.append(1)
+        raise JsonApiAccessDeniedError("HTTP Error 403: Forbidden")
+
+    def html_search(_title, _authors, _log_func):
+        return "abc123"
+
+    def json_fetch(_romanceio_id, _log_func):
+        fetch_count.append(1)
+        return {"title": "some book"}
+
+    def html_fetch(_romanceio_id, _log_func):
+        return {"title": "some book"}
+
+    log_func, _ = _collecting_log()
+
+    # First book - triggers 403, falls back to HTML
+    search_with_fallback("Book 1", ["Author"], json_search, html_search, log_func, max_retries=1, retry_delay=0)
+
+    # After 403, both endpoints are dead, so entire JSON is skipped for subsequent books
+    search_with_fallback("Book 2", ["Author"], json_search, html_search, log_func, max_retries=1, retry_delay=0)
+    fetch_details_with_fallback("abc456", json_fetch, html_fetch, log_func, max_retries=1, retry_delay=0)
+
+    assert search_count == [1], f"JSON search called {len(search_count)} times, expected exactly 1 (on first book)"
+    assert not fetch_count, "JSON fetch must not be called after 403 marked endpoints dead"

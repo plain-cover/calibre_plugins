@@ -45,6 +45,16 @@ class JsonApiRateLimitError(RuntimeError):
     """
 
 
+class JsonApiAccessDeniedError(RuntimeError):
+    """Raised when the Romance.io JSON API returns HTTP 403 Forbidden.
+
+    This typically means Cloudflare is blocking plain HTTP requests to the JSON API.
+    The block is site-wide (not per-endpoint), so ALL JSON endpoints should be
+    marked dead for this session and the caller should fall back to Chrome/HTML
+    immediately without retrying.
+    """
+
+
 # Stable URL prefixes for each JSON API endpoint (path up to but not including the resource ID).
 # Used by the orchestrator to cache dead endpoints on a per-endpoint basis.
 JSON_SEARCH_URL_PREFIX = "https://www.romance.io/json/search_books"
@@ -95,6 +105,10 @@ def _make_json_request(url: str, timeout: int = 30, log_func: Optional[Callable]
             if log_func:
                 log_func(msg)
             raise JsonApiEndpointError(msg, url=url) from e
+        if e.code == 403:
+            if log_func:
+                log_func(f"JSON API request failed: HTTPError 403: {e}")
+            raise JsonApiAccessDeniedError(f"HTTP Error 403: Forbidden") from e
         if e.code == 429:
             if log_func:
                 log_func(f"JSON API request failed: HTTPError 429: {e}")

@@ -152,7 +152,7 @@ jobs:
     - name: Test JSON API 404 handling (common)
       if: steps.changes.outputs.substantive_changes == 'true'
       run: |
-        python -m pytest common/test_orchestrator_404.py -v
+        python -m pytest common/test_orchestrator_errors.py -v
 
     - name: Test vendored import (common)
       if: steps.changes.outputs.substantive_changes == 'true'

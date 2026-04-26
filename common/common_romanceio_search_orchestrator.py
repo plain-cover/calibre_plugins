@@ -18,6 +18,7 @@ from .common_romanceio_json_api import (  # pylint: disable=import-outside-tople
     JsonApiEndpointError,
     JsonApiBookNotFoundError,
     JsonApiRateLimitError,
+    JsonApiAccessDeniedError,
     JSON_SEARCH_URL_PREFIX,
     JSON_BOOKS_URL_PREFIX,
 )
@@ -179,6 +180,17 @@ def _retry_with_delay(
                 # Per-book/author 404: this item isn't in the JSON API, try HTML.
                 # Do NOT mark the endpoint as dead - other books may be available.
                 log_func("  Book not found in JSON API (404), skipping retries. Will try HTML.")
+                return SearchResult(success=False, result=None)
+            if isinstance(e, JsonApiAccessDeniedError):
+                # 403 Forbidden: Cloudflare is blocking plain HTTP requests to the JSON API.
+                # This is a site-wide block - mark ALL JSON endpoints dead for this session
+                # so subsequent books skip JSON entirely and go straight to Chrome/HTML.
+                log_func(
+                    "  JSON API blocked (403 Forbidden) - likely Cloudflare protection.\n"
+                    "  Marking all JSON endpoints dead for this session; subsequent books will go straight to Chrome."
+                )
+                _dead_json_endpoints.add(_endpoint_key(JSON_SEARCH_URL_PREFIX))
+                _dead_json_endpoints.add(_endpoint_key(JSON_BOOKS_URL_PREFIX))
                 return SearchResult(success=False, result=None)
             if isinstance(e, JsonApiEndpointError):
                 log_func("  Endpoint is down (404), skipping retries.")
