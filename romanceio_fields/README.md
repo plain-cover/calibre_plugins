@@ -178,7 +178,7 @@ This means popular/agreed-upon tags are preferred when capping.
 - Without Chrome, the plugin cannot fetch data
 - **Linux with Chrome installed as a flatpak:** the plugin can find Chrome automatically, but if Calibre is also a flatpak you need to run this once in a terminal and restart Calibre:
   ```
-  flatpak override --user com.calibre_ebook.calibre --filesystem=host
+  flatpak override --user --filesystem=/var/lib/flatpak:ro com.calibre_ebook.calibre
   ```
 
 **Slow performance:**

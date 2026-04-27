@@ -263,7 +263,7 @@ def _find_flatpak_chrome() -> Optional[str]:
 
     Requires the flatpak app directories to be visible on the filesystem.
     If Calibre is also a flatpak, the user must first run:
-        flatpak override --user com.calibre_ebook.calibre --filesystem=host
+        flatpak override --user --filesystem=/var/lib/flatpak:ro com.calibre_ebook.calibre
     """
     if platform.system() != "Linux":
         return None
@@ -598,7 +598,7 @@ def fetch_page(
             _log(
                 "Running inside a flatpak but no Chrome/Chromium flatpak binary found. "
                 "If Chrome is installed as a flatpak, run: "
-                "flatpak override --user com.calibre_ebook.calibre --filesystem=host"
+                "flatpak override --user --filesystem=/var/lib/flatpak:ro com.calibre_ebook.calibre"
             )
 
         driver = None
