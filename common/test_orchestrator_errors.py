@@ -49,14 +49,14 @@ def clear_orchestrator_state():
     setattr(_orchestrator_mod, _LAST_JSON_REQUEST_TIME, 0.0)
     setattr(_orchestrator_mod, _RATE_LIMIT_BASE_RETRY, 15.0)
     setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 60.0)
-    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 1.0)
+    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 6.0)
     yield
     getattr(_orchestrator_mod, _DEAD_SET).clear()
     setattr(_orchestrator_mod, _RATE_LIMIT_TIME, 0.0)
     setattr(_orchestrator_mod, _LAST_JSON_REQUEST_TIME, 0.0)
     setattr(_orchestrator_mod, _RATE_LIMIT_BASE_RETRY, 15.0)
     setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 60.0)
-    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 1.0)
+    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 6.0)
 
 
 # ---------------------------------------------------------------------------
@@ -531,7 +531,7 @@ def _zero_cooldown():
     finally:
         setattr(_orchestrator_mod, _RATE_LIMIT_BASE_RETRY, 15.0)
         setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 60.0)
-        setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 1.0)
+        setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 6.0)
 
 
 def test_429_does_retry():

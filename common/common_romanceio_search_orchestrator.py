@@ -55,7 +55,9 @@ _RATE_LIMIT_INTER_BOOK_COOLDOWN_SECS: float = 60.0
 
 # Minimum seconds between any two JSON API requests. Prevents bursting through a large
 # library with no inter-request gap, which is the root cause of initial 429 responses.
-_MIN_JSON_INTERVAL_SECS: float = 1.0
+# Empirically, Romance.io allows ~11 requests per 60-second sliding window.
+# 60 / 11 = 5.45 s is the theoretical minimum safe interval.
+_MIN_JSON_INTERVAL_SECS: float = 6.0
 
 
 def _endpoint_key(url: str) -> str:
