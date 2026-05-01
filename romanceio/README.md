@@ -18,6 +18,11 @@ The stored `romanceio` identifier is the key that the companion [Romance.io Fiel
 
 **Preferences > Metadata download > Romance.io > Configure selected source**
 
+- **Get tags directly from website (slower but includes additional community tags)** - When checked, the plugin tries to open each book's page in a browser first to fetch the full set of community-voted tags that only appear after the page's JavaScript has run. If the browser is unavailable or fails, the plugin automatically falls back to the JSON API and then a lightweight HTTP fetch, so you still get metadata even without Chrome. Leave unchecked (default) for faster downloads - the JSON API and lightweight HTTP fetch cover the core tag set and work without a browser.
+
+  > **Why do my tags look different from what I see on romance.io?**
+  > Romance.io displays two layers of tags: a core set (tropes, genres, etc.) stored in their database and returned by the API, and additional community-voted tags injected into the page by JavaScript after it loads. The default fast fetch (JSON API / lightweight HTTP) retrieves only the core set. To get the community tags too, enable this option - but be aware it requires Chrome and is slower since a browser window will have to open for each book.
+
 - **Romance.io tag to Calibre tag mappings** - Controls how Romance.io tags are imported into Calibre's Tags field. Use the green "+" and red "-" buttons to add or remove mappings. Create one row for each Romance.io tag you want to map to one or more Calibre tags. The text you enter for the Romance.io tag must match how the tag looks on the website exactly. Any Romance.io tags that are not mapped will be ignored.
 
   ![Screenshot of the Configure Metadata download dialog with the "Filter and map Romance.io tags to calibre tags" checkbox checked](../images/Configure%20Metadata%20download.png)
@@ -49,6 +54,7 @@ Run from inside the `romanceio/` directory after building.
 ```bash
 calibre-debug test_json_parsing.py          # Title, authors, cover, ID from JSON
 calibre-debug test_json_search_matching.py  # Best-match selection from JSON search results
+calibre-debug test_search_parity.py         # JSON search vs HTML search return same ID
 calibre-debug test_tag_mapping.py           # Genre mapping pipeline: slugs -> display names -> Calibre tags
 calibre-debug test_tag_slug_conversion.py   # Slug-to-display-name conversion (copied from common/)
 calibre-debug test_html_sanitizer.py        # sanitize_html_for_lxml() strips XML 1.0 illegal chars (copied from common/)
@@ -66,6 +72,8 @@ calibre-debug -e __init__.py                    # Smoke test + full functional t
 calibre-debug test_cover_download.py            # Live cover downloads
 calibre-debug test_json_html_parse_matches.py -- --live         # 1 live book
 calibre-debug test_json_html_parse_matches.py -- --live=<id>    # Specific book ID
+calibre-debug test_search_parity.py -- --live                   # JSON search vs HTML search: 1 book
+calibre-debug test_search_parity.py -- --live=all               # JSON search vs HTML search: full suite
 ```
 
 > `test_json_search_matching.py`, `test_tag_slug_conversion.py`, and `test_html_sanitizer.py` are copied from `common/` during build.
@@ -80,9 +88,9 @@ calibre-debug test_json_html_parse_matches.py -- --live=<id>    # Specific book 
 ![Calibre "Edit metadata" menu emphasizing the "Ids" field where users can manually enter the Romance.io ID](../images/Edit%20metadata%20-%20set%20ID.png)
 
 **Chrome is not installed ("Chrome is not installed - HTML metadata fallback is unavailable"):**
-- The plugin uses Chrome to scrape Romance.io as a fallback when the JSON API is unavailable
-- Install Chrome from [google.com/chrome](https://www.google.com/chrome/) to enable this fallback
-- Without Chrome, metadata download will still work when the JSON API is available
+- The plugin tries the JSON API first, then a lightweight HTTP fetch, and only uses Chrome as a final fallback
+- Without Chrome, most books still download fine via the JSON API or lightweight HTTP fetch
+- Install Chrome from [google.com/chrome](https://www.google.com/chrome/) if you see this warning or downloads are failing
 - **Linux with Chrome installed as a flatpak:** the plugin can find Chrome automatically, but if Calibre is also a flatpak you need to run this once in a terminal and restart Calibre:
   ```
   flatpak override --user --filesystem=/var/lib/flatpak:ro com.calibre_ebook.calibre
@@ -100,6 +108,6 @@ Report issues on [GitHub Issues](https://github.com/plain-cover/calibre_plugins/
 - **Which plugin** - if the issue happened during a metadata download (right-click > **Download metadata**), then it is from the **Romance.io** plugin; if the issue happened when clicking the magnifying glass icon, then it is due to the **Romance.io Fields** plugin
 - **Calibre version** - shown in the bottom-left of the Calibre window, or via **Help > About Calibre**
 - **Plugin version** - **Preferences > Plugins**, find the plugin (Romance.io), note the version (e.g. 1.0.0)
-- **Error logs** - if a job fails, a pop-up appears with the error. Otherwise, click the job count in the bottom-right of Calibre, select the failed job, and click **Show job details**. Copy and paste the output.
+- **Error logs** - after the download ends, click the **View log** button and copy the contents.
 
 For more verbose logs, right-click the **Preferences** button (gear icon) and choose **Restart in debug mode**.

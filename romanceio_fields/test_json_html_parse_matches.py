@@ -46,6 +46,7 @@ parse_fields_from_json = parse_json_fields_module.parse_fields_from_json
 
 parse_html_fields_module = load_plugin_module("romanceio_fields.parse_html", "parse_html.py", plugin_dir)
 parse_fields_from_html = parse_html_fields_module.parse_fields_from_html
+parse_fields_from_ssr_html = parse_html_fields_module.parse_fields_from_ssr_html
 
 # Load romanceio modules for basic field parsing
 romanceio_dir = os.path.join(parent_dir, "romanceio")
@@ -97,6 +98,76 @@ def test_static_book(book_data: StaticTestBook) -> None:
     )
 
 
+def test_static_book_ssr_vs_json(book_data: StaticTestBook) -> None:
+    """Test that SSR parsing produces the same results as JSON API for a static book.
+
+    SSR tags come from the meta description which uses the same slugs as the JSON API
+    'tropes' field, so tag sets should be identical. Ratings come from book-stats
+    (identical to Chrome). This test enforces that guarantee.
+    """
+    print("\n" + "=" * 80)
+    print(f"TEST: {book_data.name} (SSR vs JSON) - romanceio_fields fields")
+    print("=" * 80)
+
+    from common.common_romanceio_static_test_data import load_static_html_file, load_static_json_file  # type: ignore[import-not-found]  # pylint: disable=import-error
+    from lxml.html import fromstring
+
+    raw_html = load_static_html_file(book_data.html_filename)
+    root = fromstring(raw_html)
+    ssr_fields = parse_fields_from_ssr_html(root, max_tags=1000)
+
+    json_data = load_static_json_file(book_data.json_filename)
+    json_fields = parse_fields_from_json(json_data)
+
+    errors = []
+
+    # Steam rating: should be identical
+    if ssr_fields["steam_rating"] != json_fields["steam_rating"]:
+        errors.append(f"  ❌ STEAM MISMATCH: SSR={ssr_fields['steam_rating']}, JSON={json_fields['steam_rating']}")
+    else:
+        print(f"  ✓ steam_rating: {ssr_fields['steam_rating']}")
+
+    # Star rating: allow tiny float difference
+    ssr_star = ssr_fields.get("star_rating")
+    json_star = json_fields.get("star_rating")
+    if ssr_star is not None and json_star is not None:
+        if abs(ssr_star - json_star) > 0.01:
+            errors.append(f"  ❌ STAR MISMATCH: SSR={ssr_star}, JSON={json_star}")
+        else:
+            print(f"  ✓ star_rating: {ssr_star} ≈ {json_star}")
+    elif ssr_star != json_star:
+        errors.append(f"  ❌ STAR MISMATCH (one is None): SSR={ssr_star}, JSON={json_star}")
+
+    # Rating count: must be identical
+    if ssr_fields["rating_count"] != json_fields["rating_count"]:
+        errors.append(f"  ❌ COUNT MISMATCH: SSR={ssr_fields['rating_count']}, JSON={json_fields['rating_count']}")
+    else:
+        print(f"  ✓ rating_count: {ssr_fields['rating_count']}")
+
+    # Tags: must be identical (same underlying slug source)
+    ssr_tag_set = set(ssr_fields["tags"])
+    json_tag_set = set(json_fields["tags"])
+    missing = json_tag_set - ssr_tag_set
+    extra = ssr_tag_set - json_tag_set
+    if missing or extra:
+        errors.append(
+            f"  ❌ TAGS MISMATCH:\n"
+            f"     SSR={len(ssr_tag_set)}, JSON={len(json_tag_set)}\n"
+            f"     Missing from SSR ({len(missing)}): {sorted(missing)}\n"
+            f"     Extra in SSR ({len(extra)}): {sorted(extra)}"
+        )
+    else:
+        print(f"  ✓ tags: {len(ssr_tag_set)} (exact match with JSON API)")
+
+    if errors:
+        print(f"\n{'=' * 80}")
+        for err in errors:
+            print(err)
+        raise AssertionError(f"SSR vs JSON mismatch for {book_data.name}:\n" + "\n".join(errors))
+
+    print(f"✓ {book_data.name} SSR vs JSON test passed!")
+
+
 def test_live_parsing(test_books: List[Any], parent_dir_path: str) -> None:
     """Test live HTML parsing vs JSON for the given books (romanceio_fields fields only)."""
     # Import fetch_helper for live HTML fetching from romanceio plugin
@@ -129,9 +200,13 @@ def main() -> None:
     print("Testing romanceio_fields plugin fields: star_rating, steam_rating, rating_count, tags")
     print("=" * 80)
 
-    # Run static tests (these use saved files)
+    # Static tests: JSON vs Chrome HTML
     for book in STATIC_TEST_BOOKS:
         test_static_book(book)
+
+    # Static tests: JSON vs SSR (must match exactly since same underlying source)
+    for book in STATIC_TEST_BOOKS:
+        test_static_book_ssr_vs_json(book)
 
     books_to_test = select_live_test_books(run_live, run_all, target_ids, TEST_BOOKS)
     if books_to_test is not None:

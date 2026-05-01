@@ -267,7 +267,7 @@ def _extract_description_parts(container: HtmlElement) -> List[str]:
     - Inline text variant: description text appears as ``tail`` on child elements
       (first on .book-cover-container, then on a series of <br> paragraph separators)
     - Wrapped text variant: description text is the ``text_content()`` of a child
-      element (e.g. a bare <span>) — no <br> separators are used in this case
+      element (e.g. a bare <span>) - no <br> separators are used in this case
 
     The steam-rating note (.desc-steam-rating) and .book-cover-container subtrees
     are always excluded.
@@ -290,7 +290,7 @@ def _extract_description_parts(container: HtmlElement) -> List[str]:
             # Skip the steam-rating note and its tail entirely
             pass
         elif tag == "br":
-            # Emit one <br/> per <br> element — two consecutive <br>s in the
+            # Emit one <br/> per <br> element - two consecutive <br>s in the
             # source (Romance.io's paragraph separator) become <br/><br/>.
             parts.append("<br/>")
             if child.tail and child.tail.strip():

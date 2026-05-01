@@ -281,17 +281,20 @@ class SetupTab(QWidget):
         general_group_box_layout.addWidget(self.ask_for_confirmation_checkbox, 2, 0, 1, -1)
 
         self.prefer_html_checkbox = QCheckBox(
-            _("&Get tags directly from website HTML (slower)"),  # type: ignore # pylint: disable=undefined-variable
+            _("&Get tags directly from website (slower but includes additional community tags)"),  # type: ignore # pylint: disable=undefined-variable
             self,
         )
         self.prefer_html_checkbox.setToolTip(
             _(  # type: ignore # pylint: disable=undefined-variable
-                "When checked, the plugin fetches tags directly from the Romance.io\n"
-                "website instead of the JSON API. This ensures tags match exactly what\n"
-                "you see on the website - some tags may be missing or slightly different\n"
-                "when using the JSON API.\n\n"
-                "Note: Website fetching requires opening a browser window and is\n"
-                "slower than the JSON API. Leave unchecked for faster downloads."
+                "When checked, the plugin tries to open each book's page in a browser\n"
+                "first to get the full set of tags, including community-voted tags that\n"
+                "only appear after the page's JavaScript has run. These extra tags are\n"
+                "not available from the JSON API or lightweight HTTP fetch.\n\n"
+                "If the browser is unavailable or fails, the plugin automatically falls\n"
+                "back to the JSON API and then to a lightweight HTTP fetch, so you still\n"
+                "get metadata even without Chrome installed.\n\n"
+                "Leave unchecked (default) for faster downloads. The JSON API and\n"
+                "lightweight HTTP fetch cover most tags and work without a browser."
             )
         )
         self.prefer_html_checkbox.setChecked(prefer_html)
@@ -306,7 +309,7 @@ class SetupTab(QWidget):
 
         steam_column_label = QLabel(_("&Steam column:"), self)  # type: ignore # pylint: disable=undefined-variable
         tool_tip = _(  # type: ignore # pylint: disable=undefined-variable
-            'Choose a custom column you have created with the type "Integer".\n'
+            'Choose a custom column you have created with the type "Integers".\n'
             "Leave this blank if you do not want to download steam rating from Romance.io."
         )
         steam_column_label.setToolTip(tool_tip)
@@ -382,7 +385,7 @@ class SetupTab(QWidget):
 
         rating_count_column_label = QLabel(_("Rating &number column:"), self)  # type: ignore # pylint: disable=undefined-variable
         tool_tip = _(  # type: ignore # pylint: disable=undefined-variable
-            'Choose a custom column you have created with the type "Integer".\n'
+            'Choose a custom column you have created with the type "Integers".\n'
             "Leave this blank if you do not want to download rating count from Romance.io."
         )
         rating_count_column_label.setToolTip(tool_tip)

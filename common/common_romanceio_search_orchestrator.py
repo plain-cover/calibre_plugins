@@ -308,6 +308,7 @@ def fetch_details_with_fallback(
     log_func: Callable = print,
     max_retries: int = 3,
     retry_delay: float = 2.0,
+    lightweight_html_fetch_func: Optional[Callable] = None,
 ) -> Optional[Any]:
     """
     Fetch book details using JSON API first, with fallback to HTML scraping.
@@ -317,10 +318,12 @@ def fetch_details_with_fallback(
     Args:
         romanceio_id: The Romance.io book ID
         json_fetch_func: Function to fetch using JSON API (should return book data or None)
-        html_fetch_func: Function to fetch using HTML (should return book data or None)
+        html_fetch_func: Function to fetch using HTML via Chrome (should return book data or None)
         log_func: Logging function
         max_retries: Maximum retry attempts per method (default: 3)
         retry_delay: Delay in seconds between retries (default: 2.0)
+        lightweight_html_fetch_func: Optional function to fetch via lightweight HTTP GET (no Chrome).
+            Tried between the JSON API and Chrome as a faster intermediate fallback.
 
     Returns:
         Book data (any format) or None if fetch failed
@@ -347,10 +350,27 @@ def fetch_details_with_fallback(
         log_func(f"JSON API returned no data for {romanceio_id}. Skipping HTML fallback.")
         return None
 
-    log_func(f"JSON API had technical failures. Falling back to HTML scraping for {romanceio_id}...")
+    if lightweight_html_fetch_func is not None:
+        log_func(f"JSON API had technical failures. Trying lightweight HTTP fetch for {romanceio_id}...")
+        lw_fetch = _retry_with_delay(
+            func=lambda: lightweight_html_fetch_func(romanceio_id, log_func),
+            method_name="Lightweight HTTP fetch",
+            max_retries=max_retries,
+            retry_delay=retry_delay,
+            log_func=log_func,
+        )
+        if lw_fetch.result is not None:
+            return lw_fetch.result
+        if lw_fetch.success:
+            log_func(f"Lightweight HTTP fetch completed but found no data for {romanceio_id}.")
+            return None
+        log_func(f"Lightweight HTTP fetch failed. Falling back to Chrome HTML scraping for {romanceio_id}...")
+    else:
+        log_func(f"JSON API had technical failures. Falling back to Chrome HTML scraping for {romanceio_id}...")
+
     html_fetch = _retry_with_delay(
         func=lambda: html_fetch_func(romanceio_id, log_func),
-        method_name="HTML scraping",
+        method_name="Chrome HTML scraping",
         max_retries=max_retries,
         retry_delay=retry_delay,
         log_func=log_func,
@@ -360,7 +380,7 @@ def fetch_details_with_fallback(
         return html_fetch.result
 
     if html_fetch.success:
-        log_func(f"HTML scraping completed but found no data for {romanceio_id}.")
+        log_func(f"Chrome HTML scraping completed but found no data for {romanceio_id}.")
     else:
         log_func("✗ All fetch attempts failed")
 

@@ -60,11 +60,13 @@ from calibre_plugins.romanceio.config_defaults import (  # type: ignore[import-n
     STORE_NAME,
     KEY_GENRE_MAPPINGS,
     KEY_MAP_GENRES,
+    KEY_PREFER_HTML,
     DEFAULT_GENRE_MAPPINGS,
 )
 
 DEFAULT_STORE_VALUES = {
     KEY_MAP_GENRES: True,
+    KEY_PREFER_HTML: False,
     KEY_GENRE_MAPPINGS: copy.deepcopy(DEFAULT_GENRE_MAPPINGS),
 }
 
@@ -198,6 +200,25 @@ class ConfigWidget(DefaultConfigWidget):
         self.map_genres_checkbox.setChecked(c.get(KEY_MAP_GENRES, DEFAULT_STORE_VALUES[KEY_MAP_GENRES]))
         genre_group_box_layout.addWidget(self.map_genres_checkbox)
 
+        self.prefer_html_checkbox = QCheckBox(
+            _("Get tags directly from website (slower but includes additional community tags)"), self  # type: ignore # pylint: disable=undefined-variable
+        )
+        self.prefer_html_checkbox.setToolTip(
+            _(  # type: ignore # pylint: disable=undefined-variable
+                "When checked, the plugin tries to open each book's page in a browser\n"
+                "first to get the full set of tags, including community-voted tags that\n"
+                "only appear after the page's JavaScript has run. These extra tags are\n"
+                "not available from the JSON API or lightweight HTTP fetch.\n\n"
+                "If the browser is unavailable or fails, the plugin automatically falls\n"
+                "back to the JSON API and then to a lightweight HTTP fetch, so you still\n"
+                "get metadata even without Chrome installed.\n\n"
+                "Leave unchecked (default) for faster downloads. The JSON API and\n"
+                "lightweight HTTP fetch cover most tags and work without a browser."
+            )
+        )
+        self.prefer_html_checkbox.setChecked(c.get(KEY_PREFER_HTML, DEFAULT_STORE_VALUES[KEY_PREFER_HTML]))
+        genre_group_box_layout.addWidget(self.prefer_html_checkbox)
+
         tags_layout = QHBoxLayout()
         genre_group_box_layout.addLayout(tags_layout)
 
@@ -240,6 +261,7 @@ class ConfigWidget(DefaultConfigWidget):
         DefaultConfigWidget.commit(self)
         new_prefs = {}
         new_prefs[KEY_MAP_GENRES] = self.map_genres_checkbox.checkState() == Qt.Checked
+        new_prefs[KEY_PREFER_HTML] = self.prefer_html_checkbox.checkState() == Qt.Checked
         new_prefs[KEY_GENRE_MAPPINGS] = self.edit_table.get_data()
         plugin_prefs[STORE_NAME] = new_prefs
 
@@ -321,6 +343,7 @@ class ConfigWidget(DefaultConfigWidget):
         """Reset all plugin settings to their default values (no confirmation prompt)."""
         self.fields_model.restore_defaults()
         self.map_genres_checkbox.setChecked(DEFAULT_STORE_VALUES[KEY_MAP_GENRES])
+        self.prefer_html_checkbox.setChecked(DEFAULT_STORE_VALUES[KEY_PREFER_HTML])
         self.edit_table.populate_table(copy.deepcopy(DEFAULT_GENRE_MAPPINGS))
 
     def reset_to_defaults(self):

@@ -232,6 +232,89 @@ def test_fetch_details_404_html_also_fails_returns_none():
 
 
 # ---------------------------------------------------------------------------
+# lightweight_html_fetch_func tests
+# ---------------------------------------------------------------------------
+
+
+def test_lightweight_fetch_used_before_chrome():
+    """When lightweight_html_fetch_func is provided and succeeds, Chrome is never called."""
+    chrome_called = []
+    lightweight_called = []
+
+    def lightweight_html(rid, _log_func):
+        lightweight_called.append(rid)
+        return "lightweight_result"
+
+    def chrome_html(rid, _log_func):
+        chrome_called.append(rid)
+        return "chrome_result"
+
+    log_func, _ = _collecting_log()
+    result = fetch_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=_raise_404,
+        lightweight_html_fetch_func=lightweight_html,
+        html_fetch_func=chrome_html,
+        log_func=log_func,
+        max_retries=3,
+        retry_delay=0,
+    )
+
+    assert result == "lightweight_result"
+    assert lightweight_called == ["abc123"]
+    assert not chrome_called, "Chrome must NOT be called when lightweight fetch succeeds"
+
+
+def test_lightweight_fetch_failure_falls_through_to_chrome():
+    """If lightweight fetch raises, Chrome HTML should still be tried."""
+    chrome_called = []
+
+    def lightweight_html(rid, _log_func):
+        raise RuntimeError("Cloudflare blocking plain HTTP")
+
+    def chrome_html(rid, _log_func):
+        chrome_called.append(rid)
+        return "chrome_result"
+
+    log_func, logs = _collecting_log()
+    result = fetch_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=_raise_404,
+        lightweight_html_fetch_func=lightweight_html,
+        html_fetch_func=chrome_html,
+        log_func=log_func,
+        max_retries=1,
+        retry_delay=0,
+    )
+
+    assert result == "chrome_result"
+    assert chrome_called == ["abc123"]
+    assert any("chrome" in msg.lower() or "falling back" in msg.lower() for msg in logs)
+
+
+def test_no_lightweight_func_goes_straight_to_chrome():
+    """Without lightweight_html_fetch_func, Chrome is tried immediately after JSON fails."""
+    chrome_called = []
+
+    def chrome_html(rid, _log_func):
+        chrome_called.append(rid)
+        return "chrome_result"
+
+    log_func, _ = _collecting_log()
+    result = fetch_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=_raise_404,
+        html_fetch_func=chrome_html,
+        log_func=log_func,
+        max_retries=3,
+        retry_delay=0,
+    )
+
+    assert result == "chrome_result"
+    assert chrome_called == ["abc123"]
+
+
+# ---------------------------------------------------------------------------
 # search_with_fallback tests
 # ---------------------------------------------------------------------------
 

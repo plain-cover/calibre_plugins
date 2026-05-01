@@ -49,9 +49,30 @@ class Worker(Thread):
             fetch_details_with_fallback,
         )
 
+        prefer_html = cfg.plugin_prefs[cfg.STORE_NAME].get(
+            cfg.KEY_PREFER_HTML, cfg.DEFAULT_STORE_VALUES[cfg.KEY_PREFER_HTML]
+        )
+
+        if prefer_html:
+            # Try Chrome first for the full JS-rendered tag set.
+            # On technical failure fall through to the normal JSON -> SSR orchestrator.
+            # On a genuine 404 stop immediately.
+            self.log.info(f"prefer_html=True: fetching Chrome HTML directly for {romanceio_id}")
+            try:
+                chrome_root = self._fetch_html(romanceio_id, self.log.info)
+                if chrome_root is not None:
+                    self._build_metadata_from_html(chrome_root)
+                    return
+                # None means 404/invalid — stop
+                self.log.info(f"Romance.io ID {romanceio_id} was not found on the website (404)")
+                return
+            except RuntimeError as e:
+                self.log.info(f"Chrome fetch failed ({e}), falling back to JSON/SSR")
+
         result = fetch_details_with_fallback(
             romanceio_id=romanceio_id,
             json_fetch_func=self._fetch_json,
+            lightweight_html_fetch_func=self._fetch_html_lightweight,
             html_fetch_func=self._fetch_html,
             log_func=self.log.info,
             max_retries=3,
@@ -91,8 +112,42 @@ class Worker(Thread):
         book_json = get_book_details_json(romanceio_id, log_func=log_func, timeout=30)
         return book_json
 
+    def _fetch_html_lightweight(self, romanceio_id, log_func):
+        """Fetch and parse HTML page using a lightweight HTTP GET (no Chrome).
+
+        Romance.io renders book pages server-side, so all metadata is available
+        without JavaScript execution. Much faster than Chrome and requires no installation.
+
+        Returns:
+            lxml root element if successful, None if not found
+        Raises:
+            RuntimeError on technical failure (network, Cloudflare block, etc.)
+        """
+        from calibre_plugins.romanceio.common_romanceio_fetch_helper import (  # type: ignore[import-not-found]  # pylint: disable=import-error
+            fetch_book_page_http,
+            parse_html_from_selenium,
+        )
+
+        log_func(f"Lightweight HTTP fetch: requesting book page for {romanceio_id}")
+        raw_html, is_valid = fetch_book_page_http(romanceio_id, log_func=log_func)
+
+        if raw_html is None or not is_valid:
+            log_func(f"Lightweight HTTP fetch: book {romanceio_id} not found or page invalid")
+            return None
+
+        root = parse_html_from_selenium(raw_html)
+
+        title_node = root.xpath("//title")
+        if title_node:
+            page_title = (title_node[0].text or "").strip()
+            if "search results for" in page_title:
+                log_func(f"Lightweight HTTP fetch: got search results page for {romanceio_id}")
+                return None
+
+        return root
+
     def _fetch_html(self, romanceio_id, log_func):
-        """Fetch and parse HTML page for book details.
+        """Fetch and parse HTML page for book details via Chrome browser automation.
 
         Returns:
             lxml root element if successful, None if not found

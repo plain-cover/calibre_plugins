@@ -822,6 +822,91 @@ def fetch_page(
             shutil.rmtree(user_data_dir, ignore_errors=True)
 
 
+def fetch_book_page_http(romanceio_id: str, log_func: Optional[Callable] = None) -> tuple:
+    """Fetch a Romance.io book page using a simple HTTP GET request (no Chrome).
+
+    Romance.io renders book pages server-side (SSR), so all tag, rating, and metadata
+    content is present in the initial HTML response without JavaScript execution.
+    This makes a lightweight HTTP GET fast and Chrome-free.
+
+    Args:
+        romanceio_id: Romance.io book ID
+        log_func: Optional logging function
+
+    Returns:
+        Tuple of (page_html, is_valid):
+        - page_html: HTML string if a response was received, None on network error
+        - is_valid: True if the page is a valid book page, False if 404 or wrong content
+
+    Raises:
+        RuntimeError: On network/connection errors (caller should retry or fall back)
+    """
+    try:
+        from urllib.request import Request, urlopen
+        from urllib.error import HTTPError
+    except ImportError:
+        from urllib2 import Request, urlopen, HTTPError  # type: ignore[import-not-found,no-redef]
+
+    def _log(msg: str) -> None:
+        if log_func:
+            log_func(msg)
+
+    url = f"https://www.romance.io/books/{romanceio_id}/"
+    _log(f"Lightweight HTTP fetch: requesting {url}")
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    try:
+        req = Request(url, headers=headers)
+        response = urlopen(req, timeout=30)
+        html = response.read().decode("utf-8", errors="replace")
+        _log(f"Lightweight HTTP fetch: received {len(html)} bytes")
+
+        not_found_text = "the page you are looking for can't be found"
+        if not_found_text in html.lower():
+            _log(f"Lightweight HTTP fetch: book {romanceio_id} not found (404 page content)")
+            return html, False
+
+        if "book-stats" not in html:
+            # Cloudflare returned a JS-challenge or interstitial page instead of the book page.
+            # Raising here causes the orchestrator to fall through to Chrome immediately
+            # (after the configured number of retries).
+            raise RuntimeError(
+                f"Lightweight HTTP fetch: page missing expected content for {romanceio_id} "
+                "(Cloudflare may be blocking plain HTTP requests - will fall back to Chrome)"
+            )
+
+        return html, True
+
+    except RuntimeError:
+        raise
+    except HTTPError as e:
+        if e.code == 404:
+            _log(f"Lightweight HTTP fetch: 404 for {romanceio_id}")
+            return None, False
+        if e.code == 403:
+            # Cloudflare or server is blocking plain HTTP requests to this page.
+            # Raise immediately without retrying - Chrome can bypass this.
+            raise RuntimeError(
+                f"Lightweight HTTP fetch: 403 Forbidden for {romanceio_id} "
+                "(Cloudflare blocking plain HTTP - will fall back to Chrome)"
+            ) from e
+        if e.code == 429:
+            # Rate limited. Raise so the orchestrator retries with delay,
+            # then falls back to Chrome if retries are exhausted.
+            raise RuntimeError(f"Lightweight HTTP fetch: 429 Too Many Requests for {romanceio_id}") from e
+        raise RuntimeError(f"Lightweight HTTP fetch failed for {romanceio_id}: HTTP {e.code}") from e
+    except Exception as e:
+        raise RuntimeError(f"Lightweight HTTP fetch failed for {romanceio_id}: {type(e).__name__}: {e}") from e
+
+
 def fetch_romanceio_book_page(url, plugin_name, log=None):
     """
     Fetch a Romance.io book page with validation.
