@@ -104,6 +104,13 @@ def test_live_search_parity(test_books: List[Any], fetch_page_func: Any) -> None
             print(f"\nSkipping {book!r}: no title/authors")
             continue
 
+        # Skip books that already have a romanceio_id - the plugin would use that
+        # ID directly (no search needed), so searching by title won't necessarily
+        # return that specific book.
+        if book.romanceio_id is not None:
+            print(f"\nSkipping {title!r}: already has romanceio_id, no search needed")
+            continue
+
         print(f"\n{'=' * 70}")
         print(f"LIVE SEARCH: {title!r} by {authors}")
         print("=" * 70)
