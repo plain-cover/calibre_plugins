@@ -16,7 +16,9 @@ class Worker(Thread):
     Get book details from Romance.io book page in a separate thread
     """
 
-    def __init__(self, url, result_queue, browser, log, relevance, plugin, timeout=20, search_fallback=None):
+    def __init__(
+        self, url, result_queue, browser, log, relevance, plugin, timeout=20, search_fallback=None, abort=None
+    ):
         Thread.__init__(self)
         self.daemon = True
         self.url, self.result_queue = url, result_queue
@@ -26,6 +28,7 @@ class Worker(Thread):
         self.cover_url = None
         self.romanceio_id = None
         self.search_fallback = search_fallback or {}
+        self.abort = abort
 
     def run(self):
         try:
@@ -47,6 +50,7 @@ class Worker(Thread):
         # Use orchestrator to try JSON first, then HTML fallback with retries
         from calibre_plugins.romanceio.common_romanceio_search_orchestrator import (  # type: ignore[import-not-found]  # pylint: disable=import-error
             fetch_details_with_fallback,
+            _BookNotFound,
         )
 
         prefer_html = cfg.plugin_prefs[cfg.STORE_NAME].get(
@@ -57,14 +61,15 @@ class Worker(Thread):
             # Try Chrome first for the full JS-rendered tag set.
             # On technical failure fall through to the normal JSON -> SSR orchestrator.
             # On a genuine 404 stop immediately.
+            if self.abort is not None and self.abort.is_set():
+                return
             self.log.info(f"prefer_html=True: fetching Chrome HTML directly for {romanceio_id}")
             try:
                 chrome_root = self._fetch_html(romanceio_id, self.log.info)
-                if chrome_root is not None:
-                    self._build_metadata_from_html(chrome_root)
+                if isinstance(chrome_root, _BookNotFound):
+                    self.log.info(f"Romance.io ID {romanceio_id} was not found on the website (404)")
                     return
-                # None means 404/invalid — stop
-                self.log.info(f"Romance.io ID {romanceio_id} was not found on the website (404)")
+                self._build_metadata_from_html(chrome_root)
                 return
             except Exception as e:  # pylint: disable=broad-except
                 self.log.info(f"Chrome fetch failed ({type(e).__name__}: {e}), falling back to JSON/SSR")
@@ -77,6 +82,7 @@ class Worker(Thread):
             log_func=self.log.info,
             max_retries=3,
             retry_delay=2.0,
+            abort=self.abort,
         )
 
         if result is None:
@@ -90,6 +96,10 @@ class Worker(Thread):
                 self._build_minimal_metadata(romanceio_id, fallback_title, fallback_authors)
             else:
                 self.log.error(f"Failed to fetch details for {romanceio_id} from {self.url!r}")
+            return
+
+        if isinstance(result, _BookNotFound):
+            self.log.info(f"Romance.io ID {romanceio_id} was not found on the website (404)")
             return
 
         # Result could be JSON dict or HTML root element
@@ -109,7 +119,7 @@ class Worker(Thread):
         """
         from calibre_plugins.romanceio.common_romanceio_json_api import get_book_details_json  # type: ignore[import-not-found]  # pylint: disable=import-error
 
-        book_json = get_book_details_json(romanceio_id, log_func=log_func, timeout=30)
+        book_json = get_book_details_json(romanceio_id, log_func=log_func, timeout=min(self.timeout, 10))
         return book_json
 
     def _fetch_html_lightweight(self, romanceio_id, log_func):
@@ -119,21 +129,22 @@ class Worker(Thread):
         without JavaScript execution. Much faster than Chrome and requires no installation.
 
         Returns:
-            lxml root element if successful, None if not found
+            lxml root element if successful, _BookNotFound if book not found
         Raises:
             RuntimeError on technical failure (network, Cloudflare block, etc.)
         """
+        from calibre_plugins.romanceio.common_romanceio_search_orchestrator import _BookNotFound  # type: ignore[import-not-found]  # pylint: disable=import-error
         from calibre_plugins.romanceio.common_romanceio_fetch_helper import (  # type: ignore[import-not-found]  # pylint: disable=import-error
             fetch_book_page_http,
             parse_html_from_selenium,
         )
 
         log_func(f"Lightweight HTTP fetch: requesting book page for {romanceio_id}")
-        raw_html, is_valid = fetch_book_page_http(romanceio_id, log_func=log_func)
+        raw_html, is_valid = fetch_book_page_http(romanceio_id, log_func=log_func, timeout=min(self.timeout, 10))
 
         if raw_html is None or not is_valid:
             log_func(f"Lightweight HTTP fetch: book {romanceio_id} not found or page invalid")
-            return None
+            return _BookNotFound()
 
         root = parse_html_from_selenium(raw_html)
 
@@ -142,7 +153,7 @@ class Worker(Thread):
             page_title = (title_node[0].text or "").strip().lower()
             if "search results for" in page_title:
                 log_func(f"Lightweight HTTP fetch: got search results page for {romanceio_id}")
-                return None
+                return _BookNotFound()
 
         return root
 
@@ -150,12 +161,14 @@ class Worker(Thread):
         """Fetch and parse HTML page for book details via Chrome browser automation.
 
         Returns:
-            lxml root element if successful, None if not found
+            lxml root element if successful, _BookNotFound if book not found
         Raises:
             Exception on technical failure (network, parsing, etc.)
         """
+        from calibre_plugins.romanceio.common_romanceio_search_orchestrator import _BookNotFound  # type: ignore[import-not-found]  # pylint: disable=import-error
         from calibre_plugins.romanceio.common_romanceio_fetch_helper import (  # type: ignore[import-not-found]  # pylint: disable=import-error
             fetch_romanceio_book_page,
+            parse_html_from_selenium,
         )
 
         log_func(f"HTML fetch: requesting book page for {romanceio_id}")
@@ -165,11 +178,9 @@ class Worker(Thread):
             if not page_html:
                 raise RuntimeError(f"Chrome failed to fetch page for {romanceio_id}: {self.url}")
             log_func(f"HTML fetch: page is invalid (404 or wrong content) for {romanceio_id}")
-            return None
+            return _BookNotFound()
 
         log_func(f"HTML fetch: parsing {len(page_html)} bytes of HTML for {romanceio_id}")
-        from calibre_plugins.romanceio.common_romanceio_fetch_helper import parse_html_from_selenium  # type: ignore[import-not-found]  # pylint: disable=import-error
-
         root = parse_html_from_selenium(page_html)
 
         title_node = root.xpath("//title")
@@ -177,7 +188,7 @@ class Worker(Thread):
             page_title = (title_node[0].text or "").strip().lower()
             if "search results for" in page_title:
                 log_func(f"HTML fetch: got search results page instead of book page for {romanceio_id}")
-                return None
+                return _BookNotFound()
 
         errmsg = root.xpath('//*[@id="errorMessage"]')
         if errmsg:

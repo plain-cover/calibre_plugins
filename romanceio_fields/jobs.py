@@ -24,6 +24,9 @@ class _SsrParsedFields:
     fields: Dict[str, Any]
 
 
+_JSON_REQUEST_TIMEOUT_SECS: int = 10
+
+
 def prepare_books_for_download(
     book_ids: List[int],
     fields_to_cols_map: Dict[str, str],
@@ -61,7 +64,7 @@ def prepare_books_for_download(
         from calibre_plugins.romanceio_fields.common_romanceio_json_api import search_books_json  # type: ignore[import-not-found]  # pylint: disable=import-error
         from calibre_plugins.romanceio_fields.common_romanceio_search import find_best_json_match  # type: ignore[import-not-found]  # pylint: disable=import-error
 
-        books = search_books_json(title, authors, 30, log_func)
+        books = search_books_json(title, authors, _JSON_REQUEST_TIMEOUT_SECS, log_func)
         if books and len(books) > 0:
             return find_best_json_match(books, title, authors, log_func)
         return None
@@ -135,10 +138,6 @@ class BookToScan:
         self.book_id = book_id
         self.romanceio_id = romanceio_id
         self.fields_to_run = fields_to_run if fields_to_run is not None else []
-
-    def to_tuple(self) -> Tuple[int, Optional[str], List[str]]:
-        """Convert to tuple format for job processing."""
-        return (self.book_id, self.romanceio_id, self.fields_to_run)
 
 
 def call_plugin_callback(plugin_callback: Dict[str, Any], parent: Any, plugin_results: Optional[Any] = None) -> None:
@@ -298,6 +297,7 @@ def get_romanceio_fields_for_book(
                 # Use orchestrator to try JSON first, then HTML fallback with retries
                 from calibre_plugins.romanceio_fields.common_romanceio_search_orchestrator import (  # type: ignore[import-not-found]  # pylint: disable=import-error
                     fetch_details_with_fallback,
+                    _BookNotFound,
                 )
 
                 # Create fetch functions without field-specific logic
@@ -309,7 +309,7 @@ def get_romanceio_fields_for_book(
                     log(f"prefer_html=True: fetching Chrome HTML directly for {romanceio_id}")
                     try:
                         chrome_result = _fetch_html(romanceio_id, log)
-                        if isinstance(chrome_result, dict) and chrome_result.get("invalid_romanceio_id"):
+                        if isinstance(chrome_result, _BookNotFound):
                             log(f"Romance.io ID {romanceio_id} was not found on the website (404)")
                             return _result({})
                         from calibre_plugins.romanceio_fields.parse_html import parse_fields_from_html  # type: ignore[import-not-found]  # pylint: disable=import-error
@@ -328,6 +328,9 @@ def get_romanceio_fields_for_book(
                     log_func=log,
                     max_retries=3,
                     retry_delay=2.0,
+                    # abort= intentionally omitted: this runs in a Calibre child process
+                    # with no shared threading.Event. Calibre handles cancellation at the
+                    # process level by terminating the child process.
                 )
 
                 if result is None:
@@ -335,10 +338,10 @@ def get_romanceio_fields_for_book(
                     return _result({})
 
                 # Parse result to a common fields dict, then map to calibre field constants
-                if isinstance(result, dict):
-                    if result.get("invalid_romanceio_id"):
-                        log(f"Romance.io ID {romanceio_id} was not found on the website (404)")
-                        return _result({})
+                if isinstance(result, _BookNotFound):
+                    log(f"Romance.io ID {romanceio_id} was not found on the website (404)")
+                    return _result({})
+                elif isinstance(result, dict):
                     from calibre_plugins.romanceio_fields.parse_json import parse_fields_from_json  # type: ignore[import-not-found]  # pylint: disable=import-error
 
                     parsed_fields = parse_fields_from_json(result)
@@ -379,7 +382,7 @@ def _fetch_json(
     """
     from calibre_plugins.romanceio_fields.common_romanceio_json_api import get_book_details_json  # type: ignore[import-not-found]  # pylint: disable=import-error
 
-    book_json = get_book_details_json(romanceio_id, log_func=log_func, timeout=30)
+    book_json = get_book_details_json(romanceio_id, log_func=log_func, timeout=_JSON_REQUEST_TIMEOUT_SECS)
     return book_json
 
 
@@ -395,23 +398,31 @@ def _fetch_html_lightweight(
     so this method produces tag results equivalent to the JSON API.
 
     Returns:
-        Dict with '__ssr_parsed__': True and pre-parsed fields, or
-        {'invalid_romanceio_id': True} if the book was not found (404)
+        _SsrParsedFields with pre-parsed fields, or _BookNotFound if the book was not found (404)
     Raises:
         RuntimeError on technical failure (network, Cloudflare block, etc.)
     """
+    from calibre_plugins.romanceio_fields.common_romanceio_search_orchestrator import _BookNotFound  # type: ignore[import-not-found]  # pylint: disable=import-error
     from calibre_plugins.romanceio_fields.common_romanceio_fetch_helper import (  # type: ignore[import-not-found]  # pylint: disable=import-error
         fetch_book_page_http,
         parse_html_from_selenium,
     )
     from calibre_plugins.romanceio_fields.parse_html import parse_fields_from_ssr_html  # type: ignore[import-not-found]  # pylint: disable=import-error
 
-    raw_html, is_valid = fetch_book_page_http(romanceio_id, log_func=log_func)
+    raw_html, is_valid = fetch_book_page_http(romanceio_id, log_func=log_func, timeout=_JSON_REQUEST_TIMEOUT_SECS)
 
     if raw_html is None or not is_valid:
-        return {"invalid_romanceio_id": True}
+        return _BookNotFound()
 
     root = parse_html_from_selenium(raw_html)
+
+    title_node = root.xpath("//title")
+    if title_node:
+        page_title = (title_node[0].text or "").strip().lower()
+        if "search results for" in page_title:
+            log_func(f"Lightweight HTTP fetch: got search results page for {romanceio_id}")
+            return _BookNotFound()
+
     parsed = parse_fields_from_ssr_html(root)
     return _SsrParsedFields(fields=parsed)
 
@@ -423,10 +434,11 @@ def _fetch_html(
     """Fetch and parse HTML page for book via Chrome browser automation.
 
     Returns:
-        lxml HtmlElement root if successful, dict with {"invalid_romanceio_id": True} if not found
+        lxml HtmlElement root if successful, _BookNotFound if book not found
     Raises:
         Exception on technical failure (network, parsing, etc.)
     """
+    from calibre_plugins.romanceio_fields.common_romanceio_search_orchestrator import _BookNotFound  # type: ignore[import-not-found]  # pylint: disable=import-error
     from calibre_plugins.romanceio_fields.fetch_helper import (  # type: ignore[import-not-found]  # pylint: disable=import-error
         fetch_romanceio_book_page,
     )
@@ -440,7 +452,7 @@ def _fetch_html(
 
     if not is_valid:
         # Page loaded but shows 404 / "page not found" - invalid book ID
-        return {"invalid_romanceio_id": True}
+        return _BookNotFound()
 
     from calibre_plugins.romanceio_fields.common_romanceio_fetch_helper import parse_html_from_selenium  # type: ignore[import-not-found]  # pylint: disable=import-error
 

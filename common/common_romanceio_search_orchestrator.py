@@ -44,7 +44,7 @@ _last_rate_limit_time: float = 0.0
 # inter-request interval so rapid library scans don't trigger rate limiting.
 # Keyed by endpoint prefix (e.g. "https://www.romance.io/json/search_books").
 # Separate per endpoint so that a search call doesn't force a delay before a detail call.
-_last_json_request_time: dict = {}
+_last_json_request_time: Dict[str, float] = {}
 
 # Base delay (seconds) before the first retry after a 429 Too Many Requests response.
 _RATE_LIMIT_RETRY_SECS: float = 15.0
@@ -92,7 +92,16 @@ class SearchResult(NamedTuple):
     result: Optional[Any]
 
 
-def _throttle_json_call(log_func: Callable, endpoint_key: str = "") -> None:
+class _BookNotFound:
+    """Sentinel returned by fetch functions when a book ID is definitively not found (404).
+
+    Distinct from None (technical failure) so that not-found propagates cleanly through the
+    orchestrator without being confused with a network error. Callers and dispatch code
+    use isinstance() to distinguish this from valid data or None (technical failure).
+    """
+
+
+def _throttle_json_call(log_func: Callable, endpoint_key: str, abort: Optional[Any] = None) -> None:
     """Enforce rate-limit back-pressure and minimum inter-request spacing before a JSON call.
 
     Must be called immediately before every JSON API attempt (once per book, not per retry).
@@ -101,26 +110,29 @@ def _throttle_json_call(log_func: Callable, endpoint_key: str = "") -> None:
     Args:
         log_func: Logging function.
         endpoint_key: The endpoint key (from _endpoint_key()) to throttle independently.
-            Defaults to empty string (shared bucket) if not provided.
+        abort: Optional threading.Event; if set, sleep is interrupted and the call returns early.
     """
-    global _last_json_request_time  # pylint: disable=global-statement
-    now = time.time()
-
     # 429 cooldown takes priority: if we hit a rate limit recently, wait out the full window.
-    rate_limit_elapsed = now - _last_rate_limit_time
+    rate_limit_elapsed = time.time() - _last_rate_limit_time
     if rate_limit_elapsed < _RATE_LIMIT_INTER_BOOK_COOLDOWN_SECS:
         wait = _RATE_LIMIT_INTER_BOOK_COOLDOWN_SECS - rate_limit_elapsed
         log_func(f"Rate limit cooldown: waiting {wait:.1f}s before JSON API call...")
-        time.sleep(wait)
+        while wait > 0:
+            if abort is not None and abort.is_set():
+                return
+            time.sleep(min(0.5, wait))
+            wait -= 0.5
         _last_json_request_time[endpoint_key] = time.time()
         return
 
     # Enforce minimum inter-request interval per endpoint to prevent burst-triggering rate limits.
-    # No log message - this is normal pacing, not an error condition.
     last_time = _last_json_request_time.get(endpoint_key, 0.0)
-    interval_elapsed = now - last_time
-    if interval_elapsed < _MIN_JSON_INTERVAL_SECS:
-        time.sleep(_MIN_JSON_INTERVAL_SECS - interval_elapsed)
+    remaining = _MIN_JSON_INTERVAL_SECS - (time.time() - last_time)
+    while remaining > 0:
+        if abort is not None and abort.is_set():
+            return
+        time.sleep(min(0.5, remaining))
+        remaining -= 0.5
 
     _last_json_request_time[endpoint_key] = time.time()
 
@@ -131,6 +143,7 @@ def _retry_with_delay(
     max_retries: int,
     retry_delay: float,
     log_func: Callable,
+    abort: Optional[Any] = None,
 ) -> SearchResult:
     """
     Execute a function with retry logic and fixed delay between attempts.
@@ -145,6 +158,7 @@ def _retry_with_delay(
         max_retries: Maximum number of retry attempts
         retry_delay: Delay in seconds between retries
         log_func: Logging function
+        abort: Optional threading.Event; if set, retries are abandoned immediately.
 
     Returns:
         SearchResult with:
@@ -155,10 +169,19 @@ def _retry_with_delay(
     global _last_rate_limit_time  # pylint: disable=global-statement
     next_attempt_delay = retry_delay
     for attempt in range(1, max_retries + 1):
+        if abort is not None and abort.is_set():
+            log_func(f"{method_name}: aborting (timeout exceeded)")
+            return SearchResult(success=False, result=None)
         try:
             if attempt > 1:
                 log_func(f"{method_name} retry attempt {attempt}/{max_retries}...")
-                time.sleep(next_attempt_delay)
+                sleep_remaining = next_attempt_delay
+                while sleep_remaining > 0:
+                    if abort is not None and abort.is_set():
+                        log_func(f"{method_name}: aborting during retry wait (timeout exceeded)")
+                        return SearchResult(success=False, result=None)
+                    time.sleep(min(0.5, sleep_remaining))
+                    sleep_remaining -= 0.5
                 next_attempt_delay = retry_delay  # reset; may be overridden below on next failure
 
             result = func()
@@ -171,10 +194,15 @@ def _retry_with_delay(
                     log_func(f"✓ {method_name} found match: {result}")
                 elif isinstance(result, dict):
                     log_func(f"✓ {method_name} found match (dict with {len(result)} keys)")
+                elif isinstance(result, _BookNotFound):
+                    log_func(f"○ {method_name}: book not found (404)")
                 else:
                     log_func(f"✓ {method_name} found match: {type(result).__name__}")
                 if attempt > 1:
-                    log_func(f"  (Succeeded on retry attempt {attempt})")
+                    if isinstance(result, _BookNotFound):
+                        log_func(f"  (Not found confirmed on attempt {attempt})")
+                    else:
+                        log_func(f"  (Succeeded on retry attempt {attempt})")
             else:
                 log_func(f"○ {method_name} completed successfully, but no match found")
                 if attempt > 1:
@@ -212,6 +240,7 @@ def _retry_with_delay(
                     "  Install Chrome to enable this feature: https://www.google.com/chrome/"
                 )
                 return SearchResult(success=False, result=None)
+            # type().__name__ check handles cross-module identity mismatch in plugin reload scenarios.
             if isinstance(e, SeleniumBaseImportError) or type(e).__name__ == "SeleniumBaseImportError":
                 log_func(
                     "  Browser automation (SeleniumBase) could not be loaded.\n"
@@ -248,6 +277,7 @@ def search_with_fallback(
     log_func: Callable = print,
     max_retries: int = 3,
     retry_delay: float = 2.0,
+    abort: Optional[Any] = None,
 ) -> Optional[str]:
     """
     Search for a book's romanceio_id using JSON API first, with fallback to HTML scraping.
@@ -262,6 +292,7 @@ def search_with_fallback(
         log_func: Logging function
         max_retries: Maximum retry attempts per method (default: 3)
         retry_delay: Delay in seconds between retries (default: 2.0)
+        abort: Optional threading.Event; if set, search is abandoned immediately.
 
     Returns:
         romanceio_id (str) or None if not found
@@ -272,7 +303,7 @@ def search_with_fallback(
         log_func("Skipping JSON API search (endpoint returned 404 earlier this session).")
         json_search = SearchResult(success=False, result=None)
     else:
-        _throttle_json_call(log_func, _search_key)
+        _throttle_json_call(log_func, _search_key, abort=abort)
         log_func("Attempting JSON API search first...")
         json_search = _retry_with_delay(
             func=lambda: json_search_func(title, authors, log_func),
@@ -280,25 +311,33 @@ def search_with_fallback(
             max_retries=max_retries,
             retry_delay=retry_delay,
             log_func=log_func,
+            abort=abort,
         )
 
-    if json_search.result:
+    if json_search.result is not None and not isinstance(json_search.result, _BookNotFound):
         return json_search.result
 
-    if json_search.success:
+    # success=True, result=None means the API returned cleanly with no match — skip HTML fallback.
+    # success=True, result=_BookNotFound should not occur (sentinels are for detail fetch, not search),
+    # but if it did we fall through to HTML rather than silently returning None.
+    if json_search.success and json_search.result is None:
         log_func("JSON API search completed successfully but found no match. Skipping HTML fallback.")
         return None
 
     log_func("JSON API had technical failures. Falling back to Chrome/HTML scraping...")
+    if abort is not None and abort.is_set():
+        log_func("Aborting before Chrome search (timeout exceeded)")
+        return None
     html_search = _retry_with_delay(
         func=lambda: html_search_func(title, authors, log_func),
         method_name="HTML scraping",
         max_retries=max_retries,
         retry_delay=retry_delay,
         log_func=log_func,
+        abort=abort,
     )
 
-    if html_search.result:
+    if html_search.result is not None and not isinstance(html_search.result, _BookNotFound):
         return html_search.result
 
     if html_search.success:
@@ -317,6 +356,7 @@ def fetch_details_with_fallback(
     max_retries: int = 3,
     retry_delay: float = 2.0,
     lightweight_html_fetch_func: Optional[Callable] = None,
+    abort: Optional[Any] = None,
 ) -> Optional[Any]:
     """
     Fetch book details using JSON API first, with fallback to HTML scraping.
@@ -332,6 +372,7 @@ def fetch_details_with_fallback(
         retry_delay: Delay in seconds between retries (default: 2.0)
         lightweight_html_fetch_func: Optional function to fetch via lightweight HTTP GET (no Chrome).
             Tried between the JSON API and Chrome as a faster intermediate fallback.
+        abort: Optional threading.Event; if set, fetch is abandoned immediately.
 
     Returns:
         Book data (any format) or None if fetch failed
@@ -341,7 +382,7 @@ def fetch_details_with_fallback(
         log_func(f"Skipping JSON API fetch for {romanceio_id} (endpoint returned 404 earlier this session).")
         json_fetch = SearchResult(success=False, result=None)
     else:
-        _throttle_json_call(log_func, _books_key)
+        _throttle_json_call(log_func, _books_key, abort=abort)
         log_func(f"Attempting JSON API fetch for {romanceio_id}...")
         json_fetch = _retry_with_delay(
             func=lambda: json_fetch_func(romanceio_id, log_func),
@@ -349,13 +390,18 @@ def fetch_details_with_fallback(
             max_retries=max_retries,
             retry_delay=retry_delay,
             log_func=log_func,
+            abort=abort,
         )
 
-    if json_fetch.result:
+    if json_fetch.result is not None and not isinstance(json_fetch.result, _BookNotFound):
         return json_fetch.result
 
     if json_fetch.success:
         log_func(f"JSON API returned no data for {romanceio_id}. Skipping HTML fallback.")
+        return None
+
+    if abort is not None and abort.is_set():
+        log_func(f"Aborting detail fetch for {romanceio_id} (timeout exceeded)")
         return None
 
     if lightweight_html_fetch_func is not None:
@@ -366,7 +412,10 @@ def fetch_details_with_fallback(
             max_retries=max_retries,
             retry_delay=retry_delay,
             log_func=log_func,
+            abort=abort,
         )
+        if isinstance(lw_fetch.result, _BookNotFound):
+            return lw_fetch.result  # book definitively not found, no point trying Chrome
         if lw_fetch.result is not None:
             return lw_fetch.result
         if lw_fetch.success:
@@ -376,12 +425,17 @@ def fetch_details_with_fallback(
     else:
         log_func(f"JSON API had technical failures. Falling back to Chrome HTML scraping for {romanceio_id}...")
 
+    if abort is not None and abort.is_set():
+        log_func(f"Aborting before Chrome fetch for {romanceio_id} (timeout exceeded)")
+        return None
+
     html_fetch = _retry_with_delay(
         func=lambda: html_fetch_func(romanceio_id, log_func),
         method_name="Chrome HTML scraping",
         max_retries=max_retries,
         retry_delay=retry_delay,
         log_func=log_func,
+        abort=abort,
     )
 
     if html_fetch.result is not None:
@@ -417,11 +471,11 @@ def get_details_with_fallback(
     if _books_key in _dead_json_endpoints:
         log_func(f"Skipping JSON API for book {romanceio_id} (endpoint returned 404 earlier this session).")
     else:
-        _throttle_json_call(log_func, _books_key)
+        _throttle_json_call(log_func, _books_key, abort=None)  # legacy path, no abort support
         log_func(f"Attempting JSON API for book {romanceio_id}...")
         try:
             details = json_fetch_func(romanceio_id, log_func)
-            if details:
+            if details and not isinstance(details, _BookNotFound):
                 log_func(f"✓ JSON API book details successful for {romanceio_id}")
                 return details
         except (OSError, ValueError, RuntimeError) as e:
@@ -431,9 +485,14 @@ def get_details_with_fallback(
 
     try:
         details = html_fetch_func(romanceio_id, log_func)
-        if details:
+        if details and not isinstance(details, _BookNotFound):
             log_func(f"✓ HTML scraping successful for {romanceio_id}")
-        return details
+            return details
+        if isinstance(details, _BookNotFound):
+            log_func(f"○ HTML scraping: book {romanceio_id} not found (404)")
+        else:
+            log_func(f"○ HTML scraping completed but no data returned for {romanceio_id}")
+        return None
     except (OSError, ValueError, RuntimeError) as e:
         log_func(f"HTML scraping also failed: {e}")
         return None

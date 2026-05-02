@@ -822,7 +822,7 @@ def fetch_page(
             shutil.rmtree(user_data_dir, ignore_errors=True)
 
 
-def fetch_book_page_http(romanceio_id: str, log_func: Optional[Callable] = None) -> tuple:
+def fetch_book_page_http(romanceio_id: str, log_func: Optional[Callable] = None, timeout: int = 30) -> tuple:
     """Fetch a Romance.io book page using a simple HTTP GET request (no Chrome).
 
     Romance.io renders book pages server-side (SSR), so all tag, rating, and metadata
@@ -832,6 +832,8 @@ def fetch_book_page_http(romanceio_id: str, log_func: Optional[Callable] = None)
     Args:
         romanceio_id: Romance.io book ID
         log_func: Optional logging function
+        timeout: Socket timeout in seconds (default: 30). Callers should pass a value
+            appropriate to their retry budget (e.g. _JSON_REQUEST_TIMEOUT_SECS).
 
     Returns:
         Tuple of (page_html, is_valid):
@@ -865,7 +867,7 @@ def fetch_book_page_http(romanceio_id: str, log_func: Optional[Callable] = None)
 
     try:
         req = Request(url, headers=headers)
-        response = urlopen(req, timeout=30)
+        response = urlopen(req, timeout=timeout)
         html = response.read().decode("utf-8", errors="replace")
         _log(f"Lightweight HTTP fetch: received {len(html)} bytes")
 
