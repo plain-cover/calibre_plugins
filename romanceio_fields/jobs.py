@@ -4,6 +4,7 @@ We use jobs to manage downloading fields from Romance.io.
 """
 
 import traceback
+from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
@@ -13,6 +14,14 @@ from calibre.utils.ipc.server import Server
 from calibre.utils.ipc.job import ParallelJob
 
 from . import config as cfg
+
+
+@dataclass
+class _SsrParsedFields:
+    """Wrapper returned by _fetch_html_lightweight to distinguish pre-parsed SSR fields
+    from a raw JSON API dict. Avoids sentinel key pollution in the result dict."""
+
+    fields: Dict[str, Any]
 
 
 def prepare_books_for_download(
@@ -292,15 +301,6 @@ def get_romanceio_fields_for_book(
                 )
 
                 # Create fetch functions without field-specific logic
-                def fetch_json(rid, log_func):
-                    return _fetch_json(rid, log_func)
-
-                def fetch_html_lightweight(rid, log_func):
-                    return _fetch_html_lightweight(rid, log_func)
-
-                def fetch_html(rid, log_func):
-                    return _fetch_html(rid, log_func)
-
                 if prefer_html:
                     # Try Chrome first for the full JS-rendered tag set.
                     # On technical failure (Chrome unavailable, driver crash, etc.) fall back
@@ -317,14 +317,14 @@ def get_romanceio_fields_for_book(
                         return _result(
                             _build_fields(parse_fields_from_html(chrome_result, max_tags), fields_to_run, max_tags)
                         )
-                    except RuntimeError as e:
-                        log(f"Chrome fetch failed ({e}), falling back to JSON/SSR")
+                    except Exception as e:  # pylint: disable=broad-except
+                        log(f"Chrome fetch failed ({type(e).__name__}: {e}), falling back to JSON/SSR")
 
                 result = fetch_details_with_fallback(
                     romanceio_id=romanceio_id,
-                    json_fetch_func=fetch_json,
-                    lightweight_html_fetch_func=fetch_html_lightweight,
-                    html_fetch_func=fetch_html,
+                    json_fetch_func=_fetch_json,
+                    lightweight_html_fetch_func=_fetch_html_lightweight,
+                    html_fetch_func=_fetch_html,
                     log_func=log,
                     max_retries=3,
                     retry_delay=2.0,
@@ -339,12 +339,11 @@ def get_romanceio_fields_for_book(
                     if result.get("invalid_romanceio_id"):
                         log(f"Romance.io ID {romanceio_id} was not found on the website (404)")
                         return _result({})
-                    if result.get("__ssr_parsed__"):
-                        parsed_fields = {k: v for k, v in result.items() if k != "__ssr_parsed__"}
-                    else:
-                        from calibre_plugins.romanceio_fields.parse_json import parse_fields_from_json  # type: ignore[import-not-found]  # pylint: disable=import-error
+                    from calibre_plugins.romanceio_fields.parse_json import parse_fields_from_json  # type: ignore[import-not-found]  # pylint: disable=import-error
 
-                        parsed_fields = parse_fields_from_json(result)
+                    parsed_fields = parse_fields_from_json(result)
+                elif isinstance(result, _SsrParsedFields):
+                    parsed_fields = result.fields
                 else:
                     from calibre_plugins.romanceio_fields.parse_html import parse_fields_from_html  # type: ignore[import-not-found]  # pylint: disable=import-error
 
@@ -414,8 +413,7 @@ def _fetch_html_lightweight(
 
     root = parse_html_from_selenium(raw_html)
     parsed = parse_fields_from_ssr_html(root)
-    parsed["__ssr_parsed__"] = True
-    return parsed
+    return _SsrParsedFields(fields=parsed)
 
 
 def _fetch_html(

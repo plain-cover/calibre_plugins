@@ -66,8 +66,8 @@ class Worker(Thread):
                 # None means 404/invalid — stop
                 self.log.info(f"Romance.io ID {romanceio_id} was not found on the website (404)")
                 return
-            except RuntimeError as e:
-                self.log.info(f"Chrome fetch failed ({e}), falling back to JSON/SSR")
+            except Exception as e:  # pylint: disable=broad-except
+                self.log.info(f"Chrome fetch failed ({type(e).__name__}: {e}), falling back to JSON/SSR")
 
         result = fetch_details_with_fallback(
             romanceio_id=romanceio_id,
@@ -139,7 +139,7 @@ class Worker(Thread):
 
         title_node = root.xpath("//title")
         if title_node:
-            page_title = (title_node[0].text or "").strip()
+            page_title = (title_node[0].text or "").strip().lower()
             if "search results for" in page_title:
                 log_func(f"Lightweight HTTP fetch: got search results page for {romanceio_id}")
                 return None
@@ -174,7 +174,7 @@ class Worker(Thread):
 
         title_node = root.xpath("//title")
         if title_node:
-            page_title = (title_node[0].text or "").strip()
+            page_title = (title_node[0].text or "").strip().lower()
             if "search results for" in page_title:
                 log_func(f"HTML fetch: got search results page instead of book page for {romanceio_id}")
                 return None

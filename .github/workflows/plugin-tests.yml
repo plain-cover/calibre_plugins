@@ -230,19 +230,19 @@ jobs:
       run: |
         cd romanceio && calibre-debug -e test_json_search_matching.py
 
-    - name: Test romanceio plugin search parity (JSON vs HTML)
-      if: steps.changes.outputs.romanceio_changed == 'true'
-      env:
-        PYTHONPATH: ${{ github.workspace }}/..
-      run: |
-        cd romanceio && calibre-debug -e test_search_parity.py
-
     - name: Test romanceio plugin HTML search parsing
       if: steps.changes.outputs.romanceio_changed == 'true'
       env:
         PYTHONPATH: ${{ github.workspace }}/..
       run: |
         cd romanceio && calibre-debug -e test_html_search_parsing.py
+
+    - name: Test romanceio plugin search parity (JSON vs HTML)
+      if: steps.changes.outputs.romanceio_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio && calibre-debug -e test_search_parity.py
 
     - name: Test that romanceio JSON vs HTML metadata parsing matches
       if: steps.changes.outputs.romanceio_changed == 'true'
