@@ -40,9 +40,11 @@ _dead_json_endpoints: set = set()
 # Used to insert a cooldown delay before the next JSON API call when rate-limited.
 _last_rate_limit_time: float = 0.0
 
-# Timestamp of the last JSON API request (any endpoint). Used to enforce a minimum
-# inter-request interval so rapid library scans don't trigger rate limiting in the first place.
-_last_json_request_time: float = 0.0
+# Timestamps of the last JSON API request per endpoint. Used to enforce a minimum
+# inter-request interval so rapid library scans don't trigger rate limiting.
+# Keyed by endpoint prefix (e.g. "https://www.romance.io/json/search_books").
+# Separate per endpoint so that a search call doesn't force a delay before a detail call.
+_last_json_request_time: dict = {}
 
 # Base delay (seconds) before the first retry after a 429 Too Many Requests response.
 _RATE_LIMIT_RETRY_SECS: float = 15.0
@@ -90,11 +92,16 @@ class SearchResult(NamedTuple):
     result: Optional[Any]
 
 
-def _throttle_json_call(log_func: Callable) -> None:
+def _throttle_json_call(log_func: Callable, endpoint_key: str = "") -> None:
     """Enforce rate-limit back-pressure and minimum inter-request spacing before a JSON call.
 
     Must be called immediately before every JSON API attempt (once per book, not per retry).
-    Updates _last_json_request_time so the next call can measure the gap correctly.
+    Updates the per-endpoint timestamp so the next call to the same endpoint is correctly spaced.
+
+    Args:
+        log_func: Logging function.
+        endpoint_key: The endpoint key (from _endpoint_key()) to throttle independently.
+            Defaults to empty string (shared bucket) if not provided.
     """
     global _last_json_request_time  # pylint: disable=global-statement
     now = time.time()
@@ -105,16 +112,17 @@ def _throttle_json_call(log_func: Callable) -> None:
         wait = _RATE_LIMIT_INTER_BOOK_COOLDOWN_SECS - rate_limit_elapsed
         log_func(f"Rate limit cooldown: waiting {wait:.1f}s before JSON API call...")
         time.sleep(wait)
-        _last_json_request_time = time.time()
+        _last_json_request_time[endpoint_key] = time.time()
         return
 
-    # Enforce minimum inter-request interval to prevent burst-triggering rate limits.
+    # Enforce minimum inter-request interval per endpoint to prevent burst-triggering rate limits.
     # No log message - this is normal pacing, not an error condition.
-    interval_elapsed = now - _last_json_request_time
+    last_time = _last_json_request_time.get(endpoint_key, 0.0)
+    interval_elapsed = now - last_time
     if interval_elapsed < _MIN_JSON_INTERVAL_SECS:
         time.sleep(_MIN_JSON_INTERVAL_SECS - interval_elapsed)
 
-    _last_json_request_time = time.time()
+    _last_json_request_time[endpoint_key] = time.time()
 
 
 def _retry_with_delay(
@@ -264,7 +272,7 @@ def search_with_fallback(
         log_func("Skipping JSON API search (endpoint returned 404 earlier this session).")
         json_search = SearchResult(success=False, result=None)
     else:
-        _throttle_json_call(log_func)
+        _throttle_json_call(log_func, _search_key)
         log_func("Attempting JSON API search first...")
         json_search = _retry_with_delay(
             func=lambda: json_search_func(title, authors, log_func),
@@ -333,7 +341,7 @@ def fetch_details_with_fallback(
         log_func(f"Skipping JSON API fetch for {romanceio_id} (endpoint returned 404 earlier this session).")
         json_fetch = SearchResult(success=False, result=None)
     else:
-        _throttle_json_call(log_func)
+        _throttle_json_call(log_func, _books_key)
         log_func(f"Attempting JSON API fetch for {romanceio_id}...")
         json_fetch = _retry_with_delay(
             func=lambda: json_fetch_func(romanceio_id, log_func),
@@ -409,7 +417,7 @@ def get_details_with_fallback(
     if _books_key in _dead_json_endpoints:
         log_func(f"Skipping JSON API for book {romanceio_id} (endpoint returned 404 earlier this session).")
     else:
-        _throttle_json_call(log_func)
+        _throttle_json_call(log_func, _books_key)
         log_func(f"Attempting JSON API for book {romanceio_id}...")
         try:
             details = json_fetch_func(romanceio_id, log_func)
