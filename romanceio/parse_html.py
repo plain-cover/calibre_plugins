@@ -121,19 +121,28 @@ def parse_authors(root: HtmlElement, log_func: Optional[Callable] = None) -> Lis
     return authors
 
 
-def parse_star_rating(root: HtmlElement) -> float:
+def parse_star_rating(root: HtmlElement) -> Optional[float]:
     """Extract star rating from Romance.io book page.
 
-    Returns rating as a float (e.g., 4.54).
+    Returns rating as a float (e.g., 4.54), or None if the element is absent
+    or the text cannot be parsed.
     """
-    star_str = root.xpath('//div[@id="main"]//div[@id="book-stats"]/span[@class="is-sr-only"][1]')[0].text_content()
-    star = float(star_str.strip().split("Rated: ")[1].split(" of")[0])
+    nodes = root.xpath('//div[@id="main"]//div[@id="book-stats"]/span[@class="is-sr-only"][1]')
+    if not nodes:
+        return None
+    try:
+        star = float(nodes[0].text_content().strip().split("Rated: ")[1].split(" of")[0])
+    except (ValueError, IndexError):
+        return None
     return star
 
 
 def parse_rating_count(root: HtmlElement) -> Optional[int]:
     """Extract total number of user ratings from Romance.io book page."""
-    stats_text = root.xpath('//div[@id="main"]//div[@id="book-stats"]')[0].text_content()
+    nodes = root.xpath('//div[@id="main"]//div[@id="book-stats"]')
+    if not nodes:
+        return None
+    stats_text = nodes[0].text_content()
     match = re.search(r"(\d+)\s+ratings?", stats_text)
     if match:
         rating_count = int(match.group(1))

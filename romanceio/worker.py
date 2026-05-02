@@ -102,11 +102,17 @@ class Worker(Thread):
             self.log.info(f"Romance.io ID {romanceio_id} was not found on the website (404)")
             return
 
-        # Result could be JSON dict or HTML root element
+        # Result could be JSON dict or HTML root element.
+        # Note: unlike romanceio_fields/jobs.py which uses an _SsrParsedFields wrapper to
+        # distinguish SSR field dicts from JSON dicts, this plugin keeps them separate:
+        # _fetch_html_lightweight returns a raw lxml root (same as _fetch_html), and
+        # both are dispatched via the same _build_metadata_from_html path below.
+        # _SsrParsedFields is not needed here because the HTML parsers handle both
+        # SSR and JS-rendered root elements identically for the romanceio (metadata) plugin.
         if isinstance(result, dict):
             self._build_metadata_from_json(romanceio_id, result)
         else:
-            # It's an HTML root element
+            # It's an HTML root element (either SSR from lightweight fetch or JS-rendered from Chrome)
             self._build_metadata_from_html(result)
 
     def _fetch_json(self, romanceio_id, log_func):
@@ -143,7 +149,7 @@ class Worker(Thread):
         raw_html, is_valid = fetch_book_page_http(romanceio_id, log_func=log_func, timeout=min(self.timeout, 10))
 
         if raw_html is None or not is_valid:
-            log_func(f"Lightweight HTTP fetch: book {romanceio_id} not found or page invalid")
+            log_func(f"Lightweight HTTP fetch: book {romanceio_id} not found (404)")
             return _BookNotFound()
 
         root = parse_html_from_selenium(raw_html)
@@ -172,7 +178,7 @@ class Worker(Thread):
         )
 
         log_func(f"HTML fetch: requesting book page for {romanceio_id}")
-        page_html, is_valid = fetch_romanceio_book_page(self.url, plugin_name="romanceio", log=self.log)
+        page_html, is_valid = fetch_romanceio_book_page(self.url, plugin_name="romanceio", log=log_func)
 
         if not is_valid:
             if not page_html:

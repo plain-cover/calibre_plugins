@@ -10,6 +10,8 @@ KEY_GENRE_MAPPINGS = "genreMappings"
 KEY_MAP_GENRES = "mapGenres"
 KEY_PREFER_HTML = "preferHtmlParsing"
 
+DEFAULT_PREFER_HTML = False
+
 DEFAULT_GENRE_MAPPINGS = {
     "contemporary": ["Romance", "Contemporary"],
     "dark romance": ["Romance", "Dark Romance"],

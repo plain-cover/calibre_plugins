@@ -7,6 +7,7 @@ RosettaNotInstalledError) are handled correctly:
 import contextlib
 import sys
 import os
+from collections.abc import Iterator
 
 import pytest
 
@@ -74,7 +75,7 @@ def _raise_404(*_args, **_kwargs):
 def _raise_book_not_found(*_args, **_kwargs):
     """Simulates get_book_details_json when a specific book isn't in the JSON API."""
     raise JsonApiBookNotFoundError(
-        "JSON API: book abc123 not available via JSON (404), will try HTML",
+        "JSON API: book abc123 not available via JSON (404)",
         url="https://www.romance.io/json/books/abc123",
     )
 
@@ -156,7 +157,7 @@ def test_book_not_found_does_not_retry():
     def func():
         attempts.append(1)
         raise JsonApiBookNotFoundError(
-            "JSON API: book abc123 not available via JSON (404), will try HTML",
+            "JSON API: book abc123 not available via JSON (404)",
             url="https://www.romance.io/json/books/abc123",
         )
 
@@ -617,6 +618,40 @@ def _zero_cooldown():
         setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 6.0)
 
 
+@contextlib.contextmanager
+def _mock_time_and_sleep(initial_time: float) -> Iterator[tuple[list[float], list[float]]]:
+    """Mock time.time and time.sleep on the orchestrator module with an advancing fake clock.
+
+    mock_sleep advances the fake clock by the requested duration so deadline-based
+    loops in _throttle_json_call terminate without real elapsed time.
+
+    Yields:
+        (slept, fake_clock) where slept is a list of sleep durations recorded and
+        fake_clock is a one-element list holding the current simulated timestamp.
+    """
+    import time as _stdlib_time  # noqa: PLC0415
+
+    fake_clock = [initial_time]
+    slept: list[float] = []
+    original_sleep = _orchestrator_mod.time.sleep
+    original_time = _orchestrator_mod.time.time
+
+    def mock_sleep(secs: float) -> None:
+        slept.append(secs)
+        fake_clock[0] += secs
+
+    def mock_time() -> float:
+        return fake_clock[0]
+
+    _orchestrator_mod.time.sleep = mock_sleep
+    _orchestrator_mod.time.time = mock_time
+    try:
+        yield slept, fake_clock
+    finally:
+        _orchestrator_mod.time.sleep = original_sleep
+        _orchestrator_mod.time.time = original_time
+
+
 def test_429_does_retry():
     """JsonApiRateLimitError must be retried (unlike 404 which exits immediately)."""
     with _zero_cooldown():
@@ -702,52 +737,32 @@ def test_maybe_wait_no_sleep_without_prior_429():
 
 def test_maybe_wait_sleeps_after_recent_429():
     """_throttle_json_call must sleep for the 429 cooldown window when a 429 occurred recently."""
-    import time
+    import time as _stdlib_time
 
-    setattr(_orchestrator_mod, _RATE_LIMIT_TIME, time.time())
-    setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 10.0)
-    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 0.0)
-
-    slept: list[float] = []
-    logged: list[str] = []
-    original_sleep = _orchestrator_mod.time.sleep
-
-    def mock_sleep(secs: float) -> None:
-        slept.append(secs)
-
-    _orchestrator_mod.time.sleep = mock_sleep
-    try:
+    with _mock_time_and_sleep(_stdlib_time.time()) as (slept, fake_clock):
+        logged: list[str] = []
+        setattr(_orchestrator_mod, _RATE_LIMIT_TIME, fake_clock[0])  # rate limit hit 'now'
+        setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 10.0)
+        setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 0.0)
         getattr(_orchestrator_mod, _THROTTLE)(logged.append, JSON_SEARCH_URL_PREFIX)
         assert len(slept) > 0, "Should sleep at least once"
         assert 9.0 < sum(slept) <= 10.5, f"Should sleep close to 10s, got {sum(slept)}"
         assert any("cooldown" in msg.lower() for msg in logged)
-    finally:
-        _orchestrator_mod.time.sleep = original_sleep
 
 
 def test_throttle_sleeps_for_min_interval():
     """_throttle_json_call must enforce the minimum inter-request interval when no 429 is active."""
-    import time
+    import time as _stdlib_time
 
-    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 5.0)
-    setattr(_orchestrator_mod, _LAST_JSON_REQUEST_TIME, {JSON_SEARCH_URL_PREFIX: time.time()})  # just fired a request
-
-    slept: list[float] = []
-    logged: list[str] = []
-    original_sleep = _orchestrator_mod.time.sleep
-
-    def mock_sleep(secs: float) -> None:
-        slept.append(secs)
-
-    _orchestrator_mod.time.sleep = mock_sleep
-    try:
+    with _mock_time_and_sleep(_stdlib_time.time()) as (slept, fake_clock):
+        logged: list[str] = []
+        setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 5.0)
+        setattr(_orchestrator_mod, _LAST_JSON_REQUEST_TIME, {JSON_SEARCH_URL_PREFIX: fake_clock[0]})  # just fired
         getattr(_orchestrator_mod, _THROTTLE)(logged.append, JSON_SEARCH_URL_PREFIX)
         assert len(slept) > 0, "Should sleep at least once"
         assert 4.0 < sum(slept) <= 5.5, f"Should sleep close to 5s, got {sum(slept)}"
         # Minimum interval sleep is silent - no log message expected
         assert not any("cooldown" in msg.lower() for msg in logged)
-    finally:
-        _orchestrator_mod.time.sleep = original_sleep
 
 
 # ---------------------------------------------------------------------------
@@ -917,3 +932,31 @@ def test_get_details_html_returns_book_not_found_yields_none():
 
     assert result is None, "Must return None, not _BookNotFound, when HTML also signals not-found"
     assert not isinstance(result, _BookNotFound), "Sentinel must never escape to callers"
+
+
+# ---------------------------------------------------------------------------
+# _throttle_json_call: abort already set at call time
+# ---------------------------------------------------------------------------
+
+
+def test_throttle_returns_immediately_when_abort_already_set():
+    """_throttle_json_call must not sleep at all when abort is already set at call time.
+    Without this guard a 60-second 429 cooldown would hang even after Calibre cancels."""
+    import threading
+    import time
+
+    abort = threading.Event()
+    abort.set()
+
+    # Put the throttle into 429 cooldown so it would otherwise sleep for 60 s
+    setattr(_orchestrator_mod, _RATE_LIMIT_TIME, time.time())
+    setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 60.0)
+
+    slept: list[float] = []
+    original_sleep = _orchestrator_mod.time.sleep
+    _orchestrator_mod.time.sleep = slept.append
+    try:
+        getattr(_orchestrator_mod, _THROTTLE)(lambda _: None, JSON_SEARCH_URL_PREFIX, abort)
+        assert not slept, f"Must not sleep when abort is already set, but slept for: {slept}"
+    finally:
+        _orchestrator_mod.time.sleep = original_sleep

@@ -3,8 +3,10 @@ HTML parsing functions specific to the romanceio_fields plugin.
 Extracts field data from Romance.io book pages.
 """
 
+import re
 from typing import List, Optional, Dict, Any
 from lxml.html import HtmlElement
+from .common_romanceio_tag_mappings import convert_json_tags_to_display_names  # pylint: disable=import-error
 
 
 def parse_steam_rating(root: HtmlElement) -> Optional[int]:
@@ -24,7 +26,10 @@ def parse_steam_rating(root: HtmlElement) -> Optional[int]:
         return None
 
     steam_str = steam_element.text_content()
-    steam = int(steam_str.strip().split("Steam/Spice level:")[1].split("of")[0].strip())
+    try:
+        steam = int(steam_str.strip().split("Steam/Spice level:")[1].split("of")[0].strip())
+    except (ValueError, IndexError):
+        return None
     return steam
 
 
@@ -56,10 +61,11 @@ def parse_star_rating(root: HtmlElement) -> Optional[float]:
 
 def parse_rating_count(root: HtmlElement) -> Optional[int]:
     """Extract total number of user ratings from Romance.io book page."""
-    import re
-
     # Rating count is in the book-stats div, format: "1351 ratings" or "1 rating"
-    stats_text = root.xpath('//div[@id="main"]//div[@id="book-stats"]')[0].text_content()
+    nodes = root.xpath('//div[@id="main"]//div[@id="book-stats"]')
+    if not nodes:
+        return None
+    stats_text = nodes[0].text_content()
     match = re.search(r"(\d+)\s+ratings?", stats_text)
     if match:
         rating_count = int(match.group(1))
@@ -143,11 +149,6 @@ def parse_tags_from_description(root: HtmlElement) -> List[str]:
     Returns:
         List of display name strings (slug -> display mapped)
     """
-    import re
-    from .common_romanceio_tag_mappings import (  # pylint: disable=import-error
-        convert_json_tags_to_display_names,
-    )  # pylint: disable=import-outside-toplevel
-
     meta_nodes = root.xpath('//meta[@name="description"]/@content')
     if not meta_nodes:
         return []

@@ -62,12 +62,13 @@ from calibre_plugins.romanceio.config_defaults import (  # type: ignore[import-n
     KEY_GENRE_MAPPINGS,
     KEY_MAP_GENRES,
     KEY_PREFER_HTML,
+    DEFAULT_PREFER_HTML,
     DEFAULT_GENRE_MAPPINGS,
 )
 
 DEFAULT_STORE_VALUES = {
     KEY_MAP_GENRES: True,
-    KEY_PREFER_HTML: False,
+    KEY_PREFER_HTML: DEFAULT_PREFER_HTML,
     KEY_GENRE_MAPPINGS: copy.deepcopy(DEFAULT_GENRE_MAPPINGS),
 }
 

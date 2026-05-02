@@ -113,26 +113,28 @@ def _throttle_json_call(log_func: Callable, endpoint_key: str, abort: Optional[A
         abort: Optional threading.Event; if set, sleep is interrupted and the call returns early.
     """
     # 429 cooldown takes priority: if we hit a rate limit recently, wait out the full window.
-    rate_limit_elapsed = time.time() - _last_rate_limit_time
+    now = time.time()
+    rate_limit_elapsed = now - _last_rate_limit_time
     if rate_limit_elapsed < _RATE_LIMIT_INTER_BOOK_COOLDOWN_SECS:
         wait = _RATE_LIMIT_INTER_BOOK_COOLDOWN_SECS - rate_limit_elapsed
         log_func(f"Rate limit cooldown: waiting {wait:.1f}s before JSON API call...")
-        while wait > 0:
+        deadline = now + wait  # use same clock sample to avoid small overshoot
+        while time.time() < deadline:
             if abort is not None and abort.is_set():
+                _last_json_request_time[endpoint_key] = time.time()
                 return
-            time.sleep(min(0.5, wait))
-            wait -= 0.5
+            time.sleep(min(0.5, deadline - time.time()))
         _last_json_request_time[endpoint_key] = time.time()
         return
 
     # Enforce minimum inter-request interval per endpoint to prevent burst-triggering rate limits.
     last_time = _last_json_request_time.get(endpoint_key, 0.0)
-    remaining = _MIN_JSON_INTERVAL_SECS - (time.time() - last_time)
-    while remaining > 0:
+    deadline = last_time + _MIN_JSON_INTERVAL_SECS
+    while time.time() < deadline:
         if abort is not None and abort.is_set():
+            _last_json_request_time[endpoint_key] = time.time()
             return
-        time.sleep(min(0.5, remaining))
-        remaining -= 0.5
+        time.sleep(min(0.5, deadline - time.time()))
 
     _last_json_request_time[endpoint_key] = time.time()
 
@@ -175,13 +177,12 @@ def _retry_with_delay(
         try:
             if attempt > 1:
                 log_func(f"{method_name} retry attempt {attempt}/{max_retries}...")
-                sleep_remaining = next_attempt_delay
-                while sleep_remaining > 0:
+                sleep_deadline = time.time() + next_attempt_delay
+                while time.time() < sleep_deadline:
                     if abort is not None and abort.is_set():
                         log_func(f"{method_name}: aborting during retry wait (timeout exceeded)")
                         return SearchResult(success=False, result=None)
-                    time.sleep(min(0.5, sleep_remaining))
-                    sleep_remaining -= 0.5
+                    time.sleep(min(0.5, sleep_deadline - time.time()))
                 next_attempt_delay = retry_delay  # reset; may be overridden below on next failure
 
             result = func()
@@ -217,7 +218,7 @@ def _retry_with_delay(
             if isinstance(e, JsonApiBookNotFoundError):
                 # Per-book/author 404: this item isn't in the JSON API, try HTML.
                 # Do NOT mark the endpoint as dead - other books may be available.
-                log_func("  Book not found in JSON API (404), skipping retries. Will try HTML.")
+                log_func("  Book not found in JSON API (404), skipping retries.")
                 return SearchResult(success=False, result=None)
             if isinstance(e, JsonApiAccessDeniedError):
                 # 403 Forbidden: Cloudflare is blocking plain HTTP requests to the JSON API.
@@ -375,7 +376,8 @@ def fetch_details_with_fallback(
         abort: Optional threading.Event; if set, fetch is abandoned immediately.
 
     Returns:
-        Book data (any format) or None if fetch failed
+        Book data (any format), or _BookNotFound if the book definitively does not exist (404),
+        or None if all fetch methods failed without a definitive answer.
     """
     _books_key = _endpoint_key(JSON_BOOKS_URL_PREFIX)
     if _books_key in _dead_json_endpoints:
@@ -395,6 +397,9 @@ def fetch_details_with_fallback(
 
     if json_fetch.result is not None and not isinstance(json_fetch.result, _BookNotFound):
         return json_fetch.result
+
+    if isinstance(json_fetch.result, _BookNotFound):
+        return json_fetch.result  # definitive 404 from JSON, no point trying HTML
 
     if json_fetch.success:
         log_func(f"JSON API returned no data for {romanceio_id}. Skipping HTML fallback.")

@@ -201,7 +201,7 @@ def get_book_details_json(
         # 404 for a specific book means this book isn't in the JSON API.
         # Re-raise as JsonApiBookNotFoundError so the orchestrator knows to fall
         # back to HTML for THIS book without marking the entire endpoint as dead.
-        msg = f"JSON API: book {romanceio_id} not available via JSON (404), will try HTML"
+        msg = f"JSON API: book {romanceio_id} not available via JSON (404)"
         if log_func:
             log_func(msg)
         raise JsonApiBookNotFoundError(msg, url=e.url) from e
@@ -258,7 +258,7 @@ def get_author_details_json(
         # 404 for a specific author means this author isn't in the JSON API.
         # Re-raise as JsonApiBookNotFoundError so the orchestrator falls back
         # to HTML without marking the entire endpoint as dead.
-        msg = f"JSON API: author {author_id} not available via JSON (404), will try HTML"
+        msg = f"JSON API: author {author_id} not available via JSON (404)"
         if log_func:
             log_func(msg)
         raise JsonApiBookNotFoundError(msg, url=e.url) from e
