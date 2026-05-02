@@ -7,6 +7,7 @@ RosettaNotInstalledError) are handled correctly:
 import contextlib
 import sys
 import os
+from collections.abc import Iterator
 
 import pytest
 
@@ -46,17 +47,17 @@ def clear_orchestrator_state():
     """Reset all module-level state before and after every test."""
     getattr(_orchestrator_mod, _DEAD_SET).clear()
     setattr(_orchestrator_mod, _RATE_LIMIT_TIME, 0.0)
-    setattr(_orchestrator_mod, _LAST_JSON_REQUEST_TIME, 0.0)
+    setattr(_orchestrator_mod, _LAST_JSON_REQUEST_TIME, {})
     setattr(_orchestrator_mod, _RATE_LIMIT_BASE_RETRY, 15.0)
     setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 60.0)
-    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 1.0)
+    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 6.0)
     yield
     getattr(_orchestrator_mod, _DEAD_SET).clear()
     setattr(_orchestrator_mod, _RATE_LIMIT_TIME, 0.0)
-    setattr(_orchestrator_mod, _LAST_JSON_REQUEST_TIME, 0.0)
+    setattr(_orchestrator_mod, _LAST_JSON_REQUEST_TIME, {})
     setattr(_orchestrator_mod, _RATE_LIMIT_BASE_RETRY, 15.0)
     setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 60.0)
-    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 1.0)
+    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 6.0)
 
 
 # ---------------------------------------------------------------------------
@@ -74,7 +75,7 @@ def _raise_404(*_args, **_kwargs):
 def _raise_book_not_found(*_args, **_kwargs):
     """Simulates get_book_details_json when a specific book isn't in the JSON API."""
     raise JsonApiBookNotFoundError(
-        "JSON API: book abc123 not available via JSON (404), will try HTML",
+        "JSON API: book abc123 not available via JSON (404)",
         url="https://www.romance.io/json/books/abc123",
     )
 
@@ -156,7 +157,7 @@ def test_book_not_found_does_not_retry():
     def func():
         attempts.append(1)
         raise JsonApiBookNotFoundError(
-            "JSON API: book abc123 not available via JSON (404), will try HTML",
+            "JSON API: book abc123 not available via JSON (404)",
             url="https://www.romance.io/json/books/abc123",
         )
 
@@ -229,6 +230,89 @@ def test_fetch_details_404_html_also_fails_returns_none():
     )
 
     assert result is None
+
+
+# ---------------------------------------------------------------------------
+# lightweight_html_fetch_func tests
+# ---------------------------------------------------------------------------
+
+
+def test_lightweight_fetch_used_before_chrome():
+    """When lightweight_html_fetch_func is provided and succeeds, Chrome is never called."""
+    chrome_called = []
+    lightweight_called = []
+
+    def lightweight_html(rid, _log_func):
+        lightweight_called.append(rid)
+        return "lightweight_result"
+
+    def chrome_html(rid, _log_func):
+        chrome_called.append(rid)
+        return "chrome_result"
+
+    log_func, _ = _collecting_log()
+    result = fetch_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=_raise_404,
+        lightweight_html_fetch_func=lightweight_html,
+        html_fetch_func=chrome_html,
+        log_func=log_func,
+        max_retries=3,
+        retry_delay=0,
+    )
+
+    assert result == "lightweight_result"
+    assert lightweight_called == ["abc123"]
+    assert not chrome_called, "Chrome must NOT be called when lightweight fetch succeeds"
+
+
+def test_lightweight_fetch_failure_falls_through_to_chrome():
+    """If lightweight fetch raises, Chrome HTML should still be tried."""
+    chrome_called = []
+
+    def lightweight_html(rid, _log_func):
+        raise RuntimeError("Cloudflare blocking plain HTTP")
+
+    def chrome_html(rid, _log_func):
+        chrome_called.append(rid)
+        return "chrome_result"
+
+    log_func, logs = _collecting_log()
+    result = fetch_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=_raise_404,
+        lightweight_html_fetch_func=lightweight_html,
+        html_fetch_func=chrome_html,
+        log_func=log_func,
+        max_retries=1,
+        retry_delay=0,
+    )
+
+    assert result == "chrome_result"
+    assert chrome_called == ["abc123"]
+    assert any("chrome" in msg.lower() or "falling back" in msg.lower() for msg in logs)
+
+
+def test_no_lightweight_func_goes_straight_to_chrome():
+    """Without lightweight_html_fetch_func, Chrome is tried immediately after JSON fails."""
+    chrome_called = []
+
+    def chrome_html(rid, _log_func):
+        chrome_called.append(rid)
+        return "chrome_result"
+
+    log_func, _ = _collecting_log()
+    result = fetch_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=_raise_404,
+        html_fetch_func=chrome_html,
+        log_func=log_func,
+        max_retries=3,
+        retry_delay=0,
+    )
+
+    assert result == "chrome_result"
+    assert chrome_called == ["abc123"]
 
 
 # ---------------------------------------------------------------------------
@@ -531,7 +615,41 @@ def _zero_cooldown():
     finally:
         setattr(_orchestrator_mod, _RATE_LIMIT_BASE_RETRY, 15.0)
         setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 60.0)
-        setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 1.0)
+        setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 6.0)
+
+
+@contextlib.contextmanager
+def _mock_time_and_sleep(initial_time: float) -> Iterator[tuple[list[float], list[float]]]:
+    """Mock time.time and time.sleep on the orchestrator module with an advancing fake clock.
+
+    mock_sleep advances the fake clock by the requested duration so deadline-based
+    loops in _throttle_json_call terminate without real elapsed time.
+
+    Yields:
+        (slept, fake_clock) where slept is a list of sleep durations recorded and
+        fake_clock is a one-element list holding the current simulated timestamp.
+    """
+    import time as _stdlib_time  # noqa: PLC0415
+
+    fake_clock = [initial_time]
+    slept: list[float] = []
+    original_sleep = _orchestrator_mod.time.sleep
+    original_time = _orchestrator_mod.time.time
+
+    def mock_sleep(secs: float) -> None:
+        slept.append(secs)
+        fake_clock[0] += secs
+
+    def mock_time() -> float:
+        return fake_clock[0]
+
+    _orchestrator_mod.time.sleep = mock_sleep
+    _orchestrator_mod.time.time = mock_time
+    try:
+        yield slept, fake_clock
+    finally:
+        _orchestrator_mod.time.sleep = original_sleep
+        _orchestrator_mod.time.time = original_time
 
 
 def test_429_does_retry():
@@ -611,7 +729,7 @@ def test_maybe_wait_no_sleep_without_prior_429():
 
         _orchestrator_mod.time.sleep = mock_sleep
         try:
-            getattr(_orchestrator_mod, _THROTTLE)(lambda _: None)
+            getattr(_orchestrator_mod, _THROTTLE)(lambda _: None, JSON_SEARCH_URL_PREFIX)
             assert not slept, "Should not sleep when no prior 429 and min interval is zeroed"
         finally:
             _orchestrator_mod.time.sleep = original_sleep
@@ -619,52 +737,32 @@ def test_maybe_wait_no_sleep_without_prior_429():
 
 def test_maybe_wait_sleeps_after_recent_429():
     """_throttle_json_call must sleep for the 429 cooldown window when a 429 occurred recently."""
-    import time
+    import time as _stdlib_time
 
-    setattr(_orchestrator_mod, _RATE_LIMIT_TIME, time.time())
-    setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 10.0)
-    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 0.0)
-
-    slept: list[float] = []
-    logged: list[str] = []
-    original_sleep = _orchestrator_mod.time.sleep
-
-    def mock_sleep(secs: float) -> None:
-        slept.append(secs)
-
-    _orchestrator_mod.time.sleep = mock_sleep
-    try:
-        getattr(_orchestrator_mod, _THROTTLE)(logged.append)
-        assert len(slept) == 1, "Should sleep exactly once"
-        assert 9.0 < slept[0] <= 10.0, f"Should sleep close to 10s, got {slept[0]}"
+    with _mock_time_and_sleep(_stdlib_time.time()) as (slept, fake_clock):
+        logged: list[str] = []
+        setattr(_orchestrator_mod, _RATE_LIMIT_TIME, fake_clock[0])  # rate limit hit 'now'
+        setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 10.0)
+        setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 0.0)
+        getattr(_orchestrator_mod, _THROTTLE)(logged.append, JSON_SEARCH_URL_PREFIX)
+        assert len(slept) > 0, "Should sleep at least once"
+        assert 9.0 < sum(slept) <= 10.5, f"Should sleep close to 10s, got {sum(slept)}"
         assert any("cooldown" in msg.lower() for msg in logged)
-    finally:
-        _orchestrator_mod.time.sleep = original_sleep
 
 
 def test_throttle_sleeps_for_min_interval():
     """_throttle_json_call must enforce the minimum inter-request interval when no 429 is active."""
-    import time
+    import time as _stdlib_time
 
-    setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 5.0)
-    setattr(_orchestrator_mod, _LAST_JSON_REQUEST_TIME, time.time())  # just fired a request
-
-    slept: list[float] = []
-    logged: list[str] = []
-    original_sleep = _orchestrator_mod.time.sleep
-
-    def mock_sleep(secs: float) -> None:
-        slept.append(secs)
-
-    _orchestrator_mod.time.sleep = mock_sleep
-    try:
-        getattr(_orchestrator_mod, _THROTTLE)(logged.append)
-        assert len(slept) == 1, "Should sleep once for the minimum interval"
-        assert 4.0 < slept[0] <= 5.0, f"Should sleep close to 5s, got {slept[0]}"
+    with _mock_time_and_sleep(_stdlib_time.time()) as (slept, fake_clock):
+        logged: list[str] = []
+        setattr(_orchestrator_mod, _MIN_JSON_INTERVAL, 5.0)
+        setattr(_orchestrator_mod, _LAST_JSON_REQUEST_TIME, {JSON_SEARCH_URL_PREFIX: fake_clock[0]})  # just fired
+        getattr(_orchestrator_mod, _THROTTLE)(logged.append, JSON_SEARCH_URL_PREFIX)
+        assert len(slept) > 0, "Should sleep at least once"
+        assert 4.0 < sum(slept) <= 5.5, f"Should sleep close to 5s, got {sum(slept)}"
         # Minimum interval sleep is silent - no log message expected
         assert not any("cooldown" in msg.lower() for msg in logged)
-    finally:
-        _orchestrator_mod.time.sleep = original_sleep
 
 
 # ---------------------------------------------------------------------------
@@ -791,3 +889,74 @@ def test_403_subsequent_books_skip_json():
 
     assert search_count == [1], f"JSON search called {len(search_count)} times, expected exactly 1 (on first book)"
     assert not fetch_count, "JSON fetch must not be called after 403 marked endpoints dead"
+
+
+# ---------------------------------------------------------------------------
+# get_details_with_fallback: _BookNotFound sentinel return value
+# ---------------------------------------------------------------------------
+
+
+def test_get_details_json_returns_book_not_found_falls_through_to_html():
+    """get_details_with_fallback must treat a _BookNotFound sentinel from json_fetch_func as a
+    miss and fall through to html_fetch_func, not return the sentinel to the caller."""
+    from common.common_romanceio_search_orchestrator import _BookNotFound
+
+    html_called = []
+
+    def html_fetch(romanceio_id, _log_func):
+        html_called.append(romanceio_id)
+        return "html_result"
+
+    result = get_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=lambda rid, log: _BookNotFound(),
+        html_fetch_func=html_fetch,
+        log_func=lambda _: None,
+    )
+
+    assert result == "html_result", "HTML fallback must be used when JSON returns _BookNotFound"
+    assert html_called == ["abc123"], "HTML fetch must be called when JSON returns _BookNotFound"
+
+
+def test_get_details_html_returns_book_not_found_yields_none():
+    """get_details_with_fallback must return None (not the sentinel) when html_fetch_func
+    returns _BookNotFound — callers must never receive the sentinel object."""
+    from common.common_romanceio_search_orchestrator import _BookNotFound
+
+    result = get_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=_raise_404,
+        html_fetch_func=lambda rid, log: _BookNotFound(),
+        log_func=lambda _: None,
+    )
+
+    assert result is None, "Must return None, not _BookNotFound, when HTML also signals not-found"
+    assert not isinstance(result, _BookNotFound), "Sentinel must never escape to callers"
+
+
+# ---------------------------------------------------------------------------
+# _throttle_json_call: abort already set at call time
+# ---------------------------------------------------------------------------
+
+
+def test_throttle_returns_immediately_when_abort_already_set():
+    """_throttle_json_call must not sleep at all when abort is already set at call time.
+    Without this guard a 60-second 429 cooldown would hang even after Calibre cancels."""
+    import threading
+    import time
+
+    abort = threading.Event()
+    abort.set()
+
+    # Put the throttle into 429 cooldown so it would otherwise sleep for 60 s
+    setattr(_orchestrator_mod, _RATE_LIMIT_TIME, time.time())
+    setattr(_orchestrator_mod, _RATE_LIMIT_INTER_BOOK_COOLDOWN, 60.0)
+
+    slept: list[float] = []
+    original_sleep = _orchestrator_mod.time.sleep
+    _orchestrator_mod.time.sleep = slept.append
+    try:
+        getattr(_orchestrator_mod, _THROTTLE)(lambda _: None, JSON_SEARCH_URL_PREFIX, abort)
+        assert not slept, f"Must not sleep when abort is already set, but slept for: {slept}"
+    finally:
+        _orchestrator_mod.time.sleep = original_sleep

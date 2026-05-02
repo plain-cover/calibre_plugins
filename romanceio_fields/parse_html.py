@@ -3,8 +3,10 @@ HTML parsing functions specific to the romanceio_fields plugin.
 Extracts field data from Romance.io book pages.
 """
 
+import re
 from typing import List, Optional, Dict, Any
 from lxml.html import HtmlElement
+from .common_romanceio_tag_mappings import convert_json_tags_to_display_names  # pylint: disable=import-error
 
 
 def parse_steam_rating(root: HtmlElement) -> Optional[int]:
@@ -24,7 +26,10 @@ def parse_steam_rating(root: HtmlElement) -> Optional[int]:
         return None
 
     steam_str = steam_element.text_content()
-    steam = int(steam_str.strip().split("Steam/Spice level:")[1].split("of")[0].strip())
+    try:
+        steam = int(steam_str.strip().split("Steam/Spice level:")[1].split("of")[0].strip())
+    except (ValueError, IndexError):
+        return None
     return steam
 
 
@@ -56,10 +61,11 @@ def parse_star_rating(root: HtmlElement) -> Optional[float]:
 
 def parse_rating_count(root: HtmlElement) -> Optional[int]:
     """Extract total number of user ratings from Romance.io book page."""
-    import re
-
     # Rating count is in the book-stats div, format: "1351 ratings" or "1 rating"
-    stats_text = root.xpath('//div[@id="main"]//div[@id="book-stats"]')[0].text_content()
+    nodes = root.xpath('//div[@id="main"]//div[@id="book-stats"]')
+    if not nodes:
+        return None
+    stats_text = nodes[0].text_content()
     match = re.search(r"(\d+)\s+ratings?", stats_text)
     if match:
         rating_count = int(match.group(1))
@@ -67,7 +73,7 @@ def parse_rating_count(root: HtmlElement) -> Optional[int]:
     return None
 
 
-def parse_romance_tags(root: HtmlElement) -> List[str]:
+def parse_tags_from_js_html(root: HtmlElement) -> List[str]:
     """
     Extract all tags from Romance.io book page.
     """
@@ -96,6 +102,15 @@ def parse_romance_tags(root: HtmlElement) -> List[str]:
     return tags + geo_tags + cw_tags + all_format_tags
 
 
+def _parse_ratings(root: HtmlElement) -> Dict[str, Any]:
+    """Parse steam, star, and rating count from the book-stats element."""
+    return {
+        "steam_rating": parse_steam_rating(root),
+        "star_rating": parse_star_rating(root),
+        "rating_count": parse_rating_count(root),
+    }
+
+
 def parse_fields_from_html(
     root: HtmlElement,
     max_tags: int,
@@ -113,14 +128,60 @@ def parse_fields_from_html(
         - rating_count: Number of ratings (int) or None
         - tags: List of tag strings
     """
-    steam_rating = parse_steam_rating(root)
-    star_rating = parse_star_rating(root)
-    rating_count = parse_rating_count(root)
-    tags = parse_romance_tags(root)[:max_tags]
+    return {**_parse_ratings(root), "tags": parse_tags_from_js_html(root)[:max_tags]}
 
-    return {
-        "steam_rating": steam_rating,
-        "star_rating": star_rating,
-        "rating_count": rating_count,
-        "tags": tags,
-    }
+
+def parse_tags_from_description(root: HtmlElement) -> List[str]:
+    """Extract tags from the page's <meta name="description"> attribute.
+
+    Romance.io's description text lists tag slugs in the format:
+    "'BookTitle' is tagged as slug1, slug2, slug3."
+    These slugs are identical to the JSON API 'tropes' field, so the returned
+    display names exactly match what parse_fields_from_json() returns for tags.
+
+    This is the correct tag source for lightweight HTTP (SSR) responses: the
+    client-side JavaScript adds extra community-voted tags to the page, but
+    the description meta tag (server-side) always matches the JSON API.
+
+    Args:
+        root: lxml HtmlElement root
+
+    Returns:
+        List of display name strings (slug -> display mapped)
+    """
+    meta_nodes = root.xpath('//meta[@name="description"]/@content')
+    if not meta_nodes:
+        return []
+
+    description = meta_nodes[0]
+    tag_match = re.search(r"is tagged as ([^.]+)\.", description)
+    if not tag_match:
+        return []
+
+    slugs = [s.strip() for s in tag_match.group(1).split(", ") if s.strip()]
+    return convert_json_tags_to_display_names(slugs)
+
+
+def parse_fields_from_ssr_html(root: HtmlElement, max_tags: int = 100) -> Dict[str, Any]:
+    """Parse all fields from a server-side rendered (SSR) HTML page.
+
+    Romance.io renders book pages server-side. Ratings are in the book-stats
+    element (same as Chrome-rendered pages). Tags appear as slugs in the
+    meta description attribute - the same underlying source as the JSON API
+    'tropes' field - so this function produces results equivalent to the JSON API:
+
+    - steam_rating, star_rating, rating_count: identical to Chrome parsing
+    - tags: identical to JSON API tags (Chrome adds extra community-voted tags via JS)
+
+    Args:
+        root: lxml HtmlElement root parsed from a plain HTTP response
+        max_tags: Maximum number of tags to return
+
+    Returns:
+        Dict with the same generic keys as parse_fields_from_json:
+        - steam_rating: Steam/spice rating (1-5 int) or None
+        - star_rating: Star rating (0-5 float) or None
+        - rating_count: Number of ratings (int) or None
+        - tags: List of display name strings
+    """
+    return {**_parse_ratings(root), "tags": parse_tags_from_description(root)[:max_tags]}

@@ -27,7 +27,7 @@ parse_html = load_plugin_module("romanceio_fields.parse_html", "parse_html.py", 
 parse_steam_rating = parse_html.parse_steam_rating
 parse_star_rating = parse_html.parse_star_rating
 parse_rating_count = parse_html.parse_rating_count
-parse_romance_tags = parse_html.parse_romance_tags
+parse_tags_from_js_html = parse_html.parse_tags_from_js_html
 
 
 def load_html_file(filename: str) -> Optional[HtmlElement]:
@@ -93,7 +93,7 @@ def verify_common_fields(root: HtmlElement, expected_steam: Optional[int]) -> No
 
 def verify_tags(root: HtmlElement, expected_count: Optional[int], expected_tags: List[str]) -> None:
     """Verify romance tags parsing and check for expected tags."""
-    tags = parse_romance_tags(root)
+    tags = parse_tags_from_js_html(root)
 
     # If count is less than expected, print actual tags for debugging
     if expected_count is not None and len(tags) < expected_count:
@@ -111,10 +111,10 @@ def verify_tags(root: HtmlElement, expected_count: Optional[int], expected_tags:
 def verify_max_tags(root: HtmlElement) -> None:
     """Verify that max_tags limiting works correctly."""
     # Simulate what happens in get_romanceio_fields_for_book
-    # where tags are sliced: parse_romance_tags(root)[:max_tags]
-    max_10 = parse_romance_tags(root)[:10]
-    max_5 = parse_romance_tags(root)[:5]
-    max_1 = parse_romance_tags(root)[:1]
+    # where tags are sliced: parse_tags_from_js_html(root)[:max_tags]
+    max_10 = parse_tags_from_js_html(root)[:10]
+    max_5 = parse_tags_from_js_html(root)[:5]
+    max_1 = parse_tags_from_js_html(root)[:1]
 
     assert len(max_10) == 10, f"Expected 10 tags, got {len(max_10)}"
     assert len(max_5) == 5, f"Expected 5 tags, got {len(max_5)}"
@@ -153,7 +153,7 @@ def test_parse_no_ratings() -> None:
         print(f"✓ Rating count: {rating_count}")
 
         # Tags might still exist even if ratings don't
-        tags = parse_romance_tags(root)
+        tags = parse_tags_from_js_html(root)
         print(f"✓ Found {len(tags)} tags (any count is acceptable)")
 
     run_test("book with no ratings", "no_ratings_source.html", test_logic)
@@ -176,7 +176,7 @@ def test_parse_no_tags() -> None:
         print(f"✓ Rating count: {rating_count} (any value is acceptable)")
 
         # Test tags - should return empty list gracefully
-        tags = parse_romance_tags(root)
+        tags = parse_tags_from_js_html(root)
         assert isinstance(tags, list), f"Expected list, got {type(tags)}"
         assert len(tags) == 0, f"Expected 0 tags for book with no tags, got {len(tags)}"
         print(f"✓ Found {len(tags)} tags (0 as expected)")

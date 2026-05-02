@@ -34,7 +34,7 @@ from calibre.constants import numeric_version as calibre_version
 PLUGIN_NAME = "Romance.io"
 PLUGIN_DESCRIPTION = "Downloads metadata from Romance.io"
 PLUGIN_AUTHOR = "plain-cover"
-PLUGIN_VERSION = (1, 1, 2)
+PLUGIN_VERSION = (1, 2, 0)
 PLUGIN_MINIMUM_CALIBRE_VERSION = (2, 0, 0)
 
 
@@ -43,7 +43,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
     name = "Romance.io"  # Must match PLUGIN_NAME
     description = "Downloads metadata from Romance.io"  # Must match PLUGIN_DESCRIPTION
     author = "plain-cover"  # Must match PLUGIN_AUTHOR
-    version = (1, 1, 2)  # Must match PLUGIN_VERSION
+    version = (1, 2, 0)  # Must match PLUGIN_VERSION
     minimum_calibre_version = (2, 0, 0)  # Must match PLUGIN_MINIMUM_CALIBRE_VERSION
 
     capabilities = frozenset(["identify", "cover"])
@@ -163,7 +163,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
         title=None,
         authors=None,
         identifiers=None,
-        timeout=30,  # pylint: disable=unused-argument
+        timeout=30,
     ):
         """Identify a book by its Title/Author/etc."""
         if identifiers is None:
@@ -199,7 +199,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
                     from calibre_plugins.romanceio.common_romanceio_json_api import search_books_json  # type: ignore[import-not-found]  # pylint: disable=import-error
                     from calibre_plugins.romanceio.common_romanceio_search import find_best_json_match  # type: ignore[import-not-found]  # pylint: disable=import-error
 
-                    books = search_books_json(title, authors, 30, log_func)
+                    books = search_books_json(title, authors, min(timeout, 10), log_func)
                     if books and len(books) > 0:
                         match_id = find_best_json_match(books, title, authors, log_func)
                         if match_id:
@@ -235,7 +235,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
                             search_fallback["authors"] = match_authors
                     return match_id
 
-                json_id = search_with_fallback(title, authors, json_search, html_search, log.info)
+                json_id = search_with_fallback(title, authors, json_search, html_search, log.info, abort=abort)
                 if json_id:
                     matches.append(f"{RomanceIO.BASE_URL}/books/{json_id}")
                 else:
@@ -255,7 +255,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
         from .worker import Worker
 
         workers = [
-            Worker(url, result_queue, br, log, i, self, search_fallback=search_fallback)
+            Worker(url, result_queue, br, log, i, self, timeout=timeout, search_fallback=search_fallback, abort=abort)
             for i, url in enumerate(matches)
         ]
 

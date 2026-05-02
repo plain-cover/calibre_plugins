@@ -20,7 +20,7 @@ A Calibre interface action plugin that fetches Romance.io-specific data (steam r
 |---|---|---|
 | Refresh existing fields | ✓ checked | Re-download all fields even if already set (ID is never overwritten) |
 | Prompt to save | ☐ unchecked | Show confirmation dialog before writing to library |
-| Get tags directly from website HTML (slower) | ☐ unchecked | Fetch tags from the Romance.io website instead of the JSON API for exact tag matching (slower, requires browser) |
+| Get tags directly from website (slower but includes additional community tags) | ☐ unchecked | Try the browser first to get the full JS-rendered tag set including community-voted tags; falls back to the JSON API and lightweight HTTP fetch if the browser is unavailable |
 | Steam column | - | Lookup name of your steam rating column |
 | Tags column | - | Lookup name of your tags column |
 | Maximum tags | 50 | Cap on number of tags downloaded per book |
@@ -29,27 +29,61 @@ A Calibre interface action plugin that fetches Romance.io-specific data (steam r
 
 ## Custom Columns Setup
 
-Users must create custom columns before the plugin can write to them.
+The plugin writes data from [Romance.io](https://romance.io) into custom columns in Calibre. You need to create the columns yourself first so we have a place to put the data. Each field (Romance.io ID, steam rating, star rating, vote count, tags) needs its own column with the right column type so Calibre knows how to store and sort the data.
 
-1. *Preferences > Add your own columns*
-2. Click "Add custom column" and create:
+**Step 1 - Create custom columns**
+
+Go to **Preferences > Add your own columns** and add a new column for each field you want. You don't have to create all of them - only the columns you want to be able to sort and filter on. Here's what each column should look like when you're creating it:
+
+Romance.io ID:
+
+![Calibre "Create a custom column" menu showing the configuration details for the Romance.io ID column](../images/Add%20custom%20column%20-%20ID.png)
+
+Romance.io Steam Rating:
+
+![Calibre "Create a custom column" menu showing the configuration details for the Romance.io Steam Rating column](../images/Add%20custom%20column%20-%20steam.png)
+
+Romance.io Stars:
+
+![Calibre "Create a custom column" menu showing the configuration details for the Romance.io Stars column](../images/Add%20custom%20column%20-%20stars.png)
+
+Romance.io Vote Count:
+
+![Calibre "Create a custom column" menu showing the configuration details for the Romance.io Vote Count column](../images/Add%20custom%20column%20-%20votes.png)
+
+Romance.io Tags:
+
+![Calibre "Create a custom column" menu showing the configuration details for the Romance.io Tags column](../images/Add%20custom%20column%20-%20tags.png)
+
+Here's a reference table for creating each column. Lookup names can be anything you choose - you'll map them to your chosen names in Step 2.
 
 | Field | Lookup Name | Column Type | Additional Setup | Description |
 |-------|-------------|-------------|------------------|-------------|
 | Romance.io ID | `#romanceio` | Column built from other columns | Template `{identifiers:select(romanceio)}` and sort by `Text` | ID used in Romance.io URL. Show this column as an indicator of whether the book was able to be found on Romance.io. |
 | Romance.io Steam Rating | `#romiosteam` | Integers | | Values 1-5 based on [Romance.io steam ratings](https://www.romance.io/steamrating) |
 | Romance.io Stars | `#romiostars` | Floating point numbers | With 2 decimals | Star rating from Romance.io user votes |
-| Romance.io Vote Count | `#romiovotes` | Integer | | Total number of star ratings for a book on Romance.io |
+| Romance.io Vote Count | `#romiovotes` | Integers | | Total number of star ratings for a book on Romance.io |
 | Romance.io Tags | `#romiotags` | Comma-separated text, like tags | | User-sourced tags from Romance.io |
 
-> **Note:** You can use any field and lookup names you prefer - you'll configure them in the plugin settings.
+**Step 2 - Map columns in plugin settings**
+
+Click the dropdown arrow next to the Romance.io icon and select **Customize plugin**:
+
+![Screenshot of the main toolbar in Calibre with the Romance.io Fields plugin dropdown selected](../images/Main%20toolbar%20icon.png)
+
+You can also open **Preferences > Plugins**, find "Romance.io Fields", and click **Customize plugin**.
+
+In the customization menu, map each field to the lookup name of the column you created:
+
+![Calibre "Customize Romance.io Fields" menu showing the mapping of fields to column lookup names](../images/Customize%20plugin%20field%20mappings.png)
 
 Additional customization settings:
 - **Refresh existing fields when downloading from Romance.io** - When checked (default), all configured fields are updated with the latest data from Romance.io, even if they already have values. The Romance.io ID is never overwritten to avoid unnecessary searches. To change or re-download the ID, manually delete it from the book's identifiers. Uncheck if you have manually edited field values and don't want them overwritten.
 - **Prompt to save fields after downloading** - At the end of the download process, user can confirm if they would like to add the downloaded metadata for all selected books
 - **Maximum tags to download** - Maximum number of tags to download (default: 50)
-- **Minimum tag votes** - Minimum user votes for a tag to be included in the download (default: 0)
-- **Prioritize website (HTML) for tags instead of JSON API** - When checked, the plugin fetches data directly from the Romance.io website instead of the JSON API. This ensures tags match exactly what you see on the website - without this option, the JSON API is used first (faster), but some tags may be missing or slightly different compared to what appears on the site. Requires opening a browser window and is slower than the default JSON API.
+- **Get tags directly from website (slower but includes additional community tags)** - When checked, the plugin tries to open the Romance.io page in a browser first. This gives you the full community-voted tag set that is only available after JavaScript renders the page. If the browser is unavailable or fails, the plugin automatically falls back to the JSON API and then to a lightweight HTTP fetch, so you still get metadata even without Chrome. Unchecked (default): the plugin goes straight to the JSON API, then lightweight HTTP, then browser - which is faster and works without Chrome for most users.
+  > **Why do my tags look different from what I see on Romance.io?**
+  > Romance.io displays two layers of tags: a core set (tropes, genres, etc.) stored in their database and returned by the API, and additional community-voted tags injected into the page by JavaScript after it loads. The default fast fetch (JSON API / lightweight HTTP) retrieves only the core set. To get the community tags too, enable this option - but be aware it requires Chrome and is slower since a browser window will have to open for each book.
 
 ## Usage
 
@@ -63,7 +97,7 @@ Additional customization settings:
    - Download the selected fields (steam rating, star rating, vote count, tags)
    - Update your custom columns with the downloaded values
 
-> **Note:** Browser windows may open during the process - just ignore them and let the plugin work. Don't close them or click anything.
+> **Note:** Occasionally a browser window may open if the JSON API and lightweight HTTP both fail for a book - just ignore it and let the plugin work. Don't close the window or click anything on the page.
 
 ### Updating Existing Books
 
@@ -95,18 +129,14 @@ The plugin needs to know the Romance.io ID for each book. Either:
 
 This plugin:
 1. Gets the Romance.io ID from the book's identifiers or searches for it
-2. Uses SeleniumBase to load the book's detail page (bypassing Cloudflare)
-3. Parses the HTML to extract steam rating, star rating, rating count, and tags
+2. Fetches the book's Romance.io detail page - first trying the JSON API, then a lightweight HTTP request, then via Chrome as a final fallback if needed
+3. Parses the response to extract steam rating, star rating, rating count, and tags
 4. Filters and formats tags based on your settings
 5. Updates your custom columns with the downloaded data
 
 ## Tag Filtering
 
-Tags are filtered by the number of users who have voted for them:
-- **Min Tag Votes = 0** - All tags included
-- **Min Tag Votes = 10** - Only tags with 10+ user votes
-
-Tags are also limited by the **Max Tags** setting and ordered by vote count (most popular first). If a book has 15 tags and **Max Tags** is set to 10, the plugin will only download the 10 highest-voted tags for that book.
+Tags are ordered by vote count (most popular first) and limited by the **Max Tags** setting. If a book has 15 tags and **Max Tags** is set to 10, the plugin will only download the 10 highest-voted tags for that book.
 
 ## Building
 
@@ -137,6 +167,7 @@ calibre-debug test_html_sanitizer.py        # sanitize_html_for_lxml() strips XM
 **HTML unit tests** (offline, uses static HTML from `common_romanceio_static_test_data/`):
 ```bash
 calibre-debug test_html_fields_parsing.py
+calibre-debug test_http_fields_parsing.py
 calibre-debug test_json_html_parse_matches.py
 ```
 
@@ -173,16 +204,16 @@ This means popular/agreed-upon tags are preferred when capping.
 - Verify the lookup names match exactly (case-sensitive)
 
 **Chrome is not installed ("Chrome is not installed - HTML metadata fallback is unavailable"):**
-- The plugin uses Chrome to load Romance.io pages (required to bypass Cloudflare)
-- Install Chrome from [google.com/chrome](https://www.google.com/chrome/)
-- Without Chrome, the plugin cannot fetch data
+- The plugin tries the JSON API first, then a lightweight HTTP fetch, and only uses Chrome as a final fallback
+- Without Chrome, most books still download fine via the JSON API or lightweight HTTP fetch
+- Install Chrome from [google.com/chrome](https://www.google.com/chrome/) if you see this warning or downloads are failing
 - **Linux with Chrome installed as a flatpak:** the plugin can find Chrome automatically, but if Calibre is also a flatpak you need to run this once in a terminal and restart Calibre:
   ```
-  flatpak override --user com.calibre_ebook.calibre --filesystem=host
+  flatpak override --user --filesystem=/var/lib/flatpak:ro com.calibre_ebook.calibre
   ```
 
 **Slow performance:**
-- Expected: 10-30 seconds per book - browser automation is required to bypass Cloudflare
+- Most books download in seconds via the JSON API or a lightweight HTTP fetch. Chrome (via browser automation) is only used as a last resort when those methods fail, and takes 10-30 seconds per book
 
 ## Support
 
@@ -191,6 +222,6 @@ Report issues on [GitHub Issues](https://github.com/plain-cover/calibre_plugins/
 - **Which plugin** - if the issue happened when clicking the magnifying glass icon, then it is due to the **Romance.io Fields** plugin; if it happened during a metadata download, it is the **Romance.io** plugin
 - **Calibre version** - shown in the bottom-left of the Calibre window, or via **Help > About Calibre**
 - **Plugin version** - **Preferences > Plugins**, find the plugin (Romance.io Fields), note the version (e.g. 1.0.0)
-- **Error logs** - if a job fails, a pop-up appears with the error. Otherwise, click the job count in the bottom-right of Calibre, select the failed job, and click **Show job details**. Copy and paste the output.
+- **Error logs** - click the **Jobs: 0** button in the bottom-right corner of Calibre after the job runs. Select the most recent job — there may be two: **Finding books on Romance.io** (the search step) and **Download Romance.io Fields** (the download step). Choose whichever failed (usually the latest one), click **Show job details**, and copy the output.
 
 For more verbose logs, right-click the **Preferences** button (gear icon) and choose **Restart in debug mode**.

@@ -49,6 +49,7 @@ from calibre.utils.config import JSONConfig
 from calibre_plugins.romanceio.common_compatibility import (  # type: ignore[import-not-found]  # pylint: disable=import-error
     qSizePolicy_Expanding,
     qSizePolicy_Minimum,
+    PREFER_HTML_TOOLTIP,
 )
 from calibre_plugins.romanceio.common_icons import get_icon  # type: ignore[import-not-found]  # pylint: disable=import-error
 from calibre_plugins.romanceio.common_widgets import ReadOnlyTableWidgetItem  # type: ignore[import-not-found]  # pylint: disable=import-error
@@ -60,11 +61,14 @@ from calibre_plugins.romanceio.config_defaults import (  # type: ignore[import-n
     STORE_NAME,
     KEY_GENRE_MAPPINGS,
     KEY_MAP_GENRES,
+    KEY_PREFER_HTML,
+    DEFAULT_PREFER_HTML,
     DEFAULT_GENRE_MAPPINGS,
 )
 
 DEFAULT_STORE_VALUES = {
     KEY_MAP_GENRES: True,
+    KEY_PREFER_HTML: DEFAULT_PREFER_HTML,
     KEY_GENRE_MAPPINGS: copy.deepcopy(DEFAULT_GENRE_MAPPINGS),
 }
 
@@ -198,6 +202,15 @@ class ConfigWidget(DefaultConfigWidget):
         self.map_genres_checkbox.setChecked(c.get(KEY_MAP_GENRES, DEFAULT_STORE_VALUES[KEY_MAP_GENRES]))
         genre_group_box_layout.addWidget(self.map_genres_checkbox)
 
+        self.prefer_html_checkbox = QCheckBox(
+            _("Get tags directly from website (slower but includes additional community tags)"), self  # type: ignore # pylint: disable=undefined-variable
+        )
+        self.prefer_html_checkbox.setToolTip(
+            _(PREFER_HTML_TOOLTIP)  # type: ignore # pylint: disable=undefined-variable
+        )
+        self.prefer_html_checkbox.setChecked(c.get(KEY_PREFER_HTML, DEFAULT_STORE_VALUES[KEY_PREFER_HTML]))
+        genre_group_box_layout.addWidget(self.prefer_html_checkbox)
+
         tags_layout = QHBoxLayout()
         genre_group_box_layout.addLayout(tags_layout)
 
@@ -240,6 +253,7 @@ class ConfigWidget(DefaultConfigWidget):
         DefaultConfigWidget.commit(self)
         new_prefs = {}
         new_prefs[KEY_MAP_GENRES] = self.map_genres_checkbox.checkState() == Qt.Checked
+        new_prefs[KEY_PREFER_HTML] = self.prefer_html_checkbox.checkState() == Qt.Checked
         new_prefs[KEY_GENRE_MAPPINGS] = self.edit_table.get_data()
         plugin_prefs[STORE_NAME] = new_prefs
 
@@ -321,6 +335,7 @@ class ConfigWidget(DefaultConfigWidget):
         """Reset all plugin settings to their default values (no confirmation prompt)."""
         self.fields_model.restore_defaults()
         self.map_genres_checkbox.setChecked(DEFAULT_STORE_VALUES[KEY_MAP_GENRES])
+        self.prefer_html_checkbox.setChecked(DEFAULT_STORE_VALUES[KEY_PREFER_HTML])
         self.edit_table.populate_table(copy.deepcopy(DEFAULT_GENRE_MAPPINGS))
 
     def reset_to_defaults(self):

@@ -192,9 +192,13 @@ class MetadataComparison:
                         if extra_in_html:
                             print(f"        Extra in HTML ({len(extra_in_html)}): {sorted(extra_in_html)}")
             elif html_tags:
-                # JSON has no tags but HTML does - should we fail?
-                # For now, allow it (fuzzy matching)
-                print(f"     Note: JSON has no tags but HTML has {len(html_tags)} (fuzzy match OK)")
+                mismatches.append("  ❌ TAGS: JSON returned no tags but HTML has tags (JSON parser failure?)")
+                mismatches.append(f"     HTML tags ({len(html_tags)}): {sorted(html_tags)[:10]}")
+                all_match = False
+            else:
+                # Both parsers returned empty tag sets
+                mismatches.append("  ❌ TAGS: both JSON and HTML returned no tags (parser failure or missing data)")
+                all_match = False
 
         if self._should_compare_field("series"):
             json_series = self.json_data.get("series")
@@ -256,7 +260,10 @@ class MetadataComparison:
             json_desc_plain = _plain(self.json_data.get("description"))
             html_desc_plain = _plain(self.html_data.get("description"))
             if not json_desc_plain and not html_desc_plain:
-                mismatches.append("  ⚠️  DESCRIPTION: both JSON and HTML returned empty (missing from page?)")
+                mismatches.append(
+                    "  ❌ DESCRIPTION: both JSON and HTML returned empty (parser failure or field missing)"
+                )
+                all_match = False
             elif json_desc_plain[:100] != html_desc_plain[:100]:
                 mismatches.append("  ❌ DESCRIPTION MISMATCH (first 100 chars of plain text):")
                 mismatches.append(f"     JSON:  {json_desc_plain[:120]!r}")
@@ -563,6 +570,25 @@ def run_live_parsing_tests(
                     f"JSON parser returned invalid ID for validated book {book.title}: "
                     f"{json_metadata['reason']} ({json_metadata['romanceio_id']})"
                 )
+
+            # Check expected_fields: if a field is expected to be non-empty, fail fast
+            # rather than silently passing a parity test where both sides return nothing.
+            expected_fields = getattr(book, "expected_fields", {})
+            if expected_fields.get("comments") and callable(expected_fields["comments"]):
+                desc = json_metadata.get("description")
+                if not desc or not str(desc).strip():
+                    raise AssertionError(
+                        f"Expected non-empty description for '{book.title}' "
+                        f"but JSON parser returned empty/None - parser may be broken"
+                    )
+            if expected_fields.get("tags") is not None:
+                tags_val = json_metadata.get("tags")
+                tags_empty = tags_val is None or (isinstance(tags_val, (list, str)) and len(tags_val) == 0)
+                if tags_empty:
+                    raise AssertionError(
+                        f"Expected non-empty tags for '{book.title}' "
+                        f"but JSON parser returned empty/None - parser may be broken"
+                    )
 
             comparison.add_json_data(json_metadata)
 
