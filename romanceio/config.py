@@ -49,6 +49,7 @@ from calibre.utils.config import JSONConfig
 from calibre_plugins.romanceio.common_compatibility import (  # type: ignore[import-not-found]  # pylint: disable=import-error
     qSizePolicy_Expanding,
     qSizePolicy_Minimum,
+    PREFER_HTML_TOOLTIP,
 )
 from calibre_plugins.romanceio.common_icons import get_icon  # type: ignore[import-not-found]  # pylint: disable=import-error
 from calibre_plugins.romanceio.common_widgets import ReadOnlyTableWidgetItem  # type: ignore[import-not-found]  # pylint: disable=import-error
@@ -204,17 +205,7 @@ class ConfigWidget(DefaultConfigWidget):
             _("Get tags directly from website (slower but includes additional community tags)"), self  # type: ignore # pylint: disable=undefined-variable
         )
         self.prefer_html_checkbox.setToolTip(
-            _(  # type: ignore # pylint: disable=undefined-variable
-                "When checked, the plugin tries to open each book's page in a browser\n"
-                "first to get the full set of tags, including community-voted tags that\n"
-                "only appear after the page's JavaScript has run. These extra tags are\n"
-                "not available from the JSON API or lightweight HTTP fetch.\n\n"
-                "If the browser is unavailable or fails, the plugin automatically falls\n"
-                "back to the JSON API and then to a lightweight HTTP fetch, so you still\n"
-                "get metadata even without Chrome installed.\n\n"
-                "Leave unchecked (default) for faster downloads. The JSON API and\n"
-                "lightweight HTTP fetch cover most tags and work without a browser."
-            )
+            _(PREFER_HTML_TOOLTIP)  # type: ignore # pylint: disable=undefined-variable
         )
         self.prefer_html_checkbox.setChecked(c.get(KEY_PREFER_HTML, DEFAULT_STORE_VALUES[KEY_PREFER_HTML]))
         genre_group_box_layout.addWidget(self.prefer_html_checkbox)

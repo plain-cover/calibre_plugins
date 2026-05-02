@@ -144,7 +144,7 @@ def parse_tags_from_description(root: HtmlElement) -> List[str]:
         List of display name strings (slug -> display mapped)
     """
     import re
-    from .common_romanceio_tag_mappings import (
+    from .common_romanceio_tag_mappings import (  # pylint: disable=import-error
         convert_json_tags_to_display_names,
     )  # pylint: disable=import-outside-toplevel
 

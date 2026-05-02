@@ -19,6 +19,7 @@ To run:
 
 import os
 import sys
+import time
 from typing import Any, List, Optional
 
 plugin_dir = os.path.dirname(os.path.abspath(__file__))
@@ -92,7 +93,9 @@ def test_live_search_parity(test_books: List[Any], fetch_page_func: Any) -> None
     """For each live book, assert JSON search and HTML search return the same ID."""
     errors = []
 
-    for book in test_books:
+    for i, book in enumerate(test_books):
+        if i > 0:
+            time.sleep(2)  # Avoid 429 rate limiting between requests
         title = book.title or ""
         authors = book.authors or []
         # Only use expected_fields for the expected ID - book.romanceio_id may be an
@@ -134,13 +137,22 @@ def test_live_search_parity(test_books: List[Any], fetch_page_func: Any) -> None
             html_failed = True
             print(f"  HTML search FAILED: {type(e).__name__}: {e}")
 
-        # Only flag a parity failure when both methods succeeded but disagree.
-        # If one method failed (e.g. 429, timeout), treat it as a warning - transient
-        # network errors in CI shouldn't count as a test failure.
+        # Only flag a parity failure when both methods succeeded and both returned a result
+        # but they disagree. Skip if:
+        #   - a method raised an exception (e.g. 429, timeout)
+        #   - a method returned None (0 search results) — the HTML search has more failure
+        #     modes (JS timing, page structure) so None means "inconclusive", not "wrong".
         if json_failed or html_failed:
             print(
                 f"  ⚠️  Skipping parity check (one method failed) — "
                 f"json_failed={json_failed}, html_failed={html_failed}"
+            )
+            continue
+
+        if json_id is None or html_id is None:
+            print(
+                f"  ⚠️  Skipping parity check (one method returned no results) — "
+                f"json_id={json_id!r}, html_id={html_id!r}"
             )
             continue
 

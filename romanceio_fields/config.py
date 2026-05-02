@@ -39,6 +39,7 @@ from calibre.gui2 import open_url
 from calibre.utils.config import JSONConfig
 
 from .common_dialogs import KeyboardConfigDialog, PrefsViewerDialog  # pylint: disable=import-error
+from .common_compatibility import PREFER_HTML_TOOLTIP  # pylint: disable=import-error
 from .common_widgets import CustomColumnComboBox  # pylint: disable=import-error
 
 # Pull in translation files for _() strings
@@ -285,17 +286,7 @@ class SetupTab(QWidget):
             self,
         )
         self.prefer_html_checkbox.setToolTip(
-            _(  # type: ignore # pylint: disable=undefined-variable
-                "When checked, the plugin tries to open each book's page in a browser\n"
-                "first to get the full set of tags, including community-voted tags that\n"
-                "only appear after the page's JavaScript has run. These extra tags are\n"
-                "not available from the JSON API or lightweight HTTP fetch.\n\n"
-                "If the browser is unavailable or fails, the plugin automatically falls\n"
-                "back to the JSON API and then to a lightweight HTTP fetch, so you still\n"
-                "get metadata even without Chrome installed.\n\n"
-                "Leave unchecked (default) for faster downloads. The JSON API and\n"
-                "lightweight HTTP fetch cover most tags and work without a browser."
-            )
+            _(PREFER_HTML_TOOLTIP)  # type: ignore # pylint: disable=undefined-variable
         )
         self.prefer_html_checkbox.setChecked(prefer_html)
         general_group_box_layout.addWidget(self.prefer_html_checkbox, 3, 0, 1, -1)
