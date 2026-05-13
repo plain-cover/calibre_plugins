@@ -10,6 +10,10 @@ from calibre_plugins.romanceio.parse_html import (  # type: ignore[import-not-fo
     convert_genres_to_calibre_tags,
 )
 
+# Cap for JSON API and lightweight HTTP fetch timeouts.
+# Keeps individual requests short so retries and Chrome fallback fit within self.timeout.
+_JSON_TIMEOUT_SECS: int = 10
+
 
 class Worker(Thread):
     """
@@ -50,7 +54,7 @@ class Worker(Thread):
         # Use orchestrator to try JSON first, then HTML fallback with retries
         from calibre_plugins.romanceio.common_romanceio_search_orchestrator import (  # type: ignore[import-not-found]  # pylint: disable=import-error
             fetch_details_with_fallback,
-            _BookNotFound,
+            _is_book_not_found,
         )
 
         prefer_html = cfg.plugin_prefs[cfg.STORE_NAME].get(
@@ -66,7 +70,7 @@ class Worker(Thread):
             self.log.info(f"prefer_html=True: fetching Chrome HTML directly for {romanceio_id}")
             try:
                 chrome_root = self._fetch_html(romanceio_id, self.log.info)
-                if isinstance(chrome_root, _BookNotFound):
+                if _is_book_not_found(chrome_root):
                     self.log.info(f"Romance.io ID {romanceio_id} was not found on the website (404)")
                     return
                 self._build_metadata_from_html(chrome_root)
@@ -98,7 +102,7 @@ class Worker(Thread):
                 self.log.error(f"Failed to fetch details for {romanceio_id} from {self.url!r}")
             return
 
-        if isinstance(result, _BookNotFound):
+        if _is_book_not_found(result):
             self.log.info(f"Romance.io ID {romanceio_id} was not found on the website (404)")
             return
 
@@ -125,7 +129,9 @@ class Worker(Thread):
         """
         from calibre_plugins.romanceio.common_romanceio_json_api import get_book_details_json  # type: ignore[import-not-found]  # pylint: disable=import-error
 
-        book_json = get_book_details_json(romanceio_id, log_func=log_func, timeout=min(self.timeout, 10))
+        book_json = get_book_details_json(
+            romanceio_id, log_func=log_func, timeout=min(self.timeout, _JSON_TIMEOUT_SECS)
+        )
         return book_json
 
     def _fetch_html_lightweight(self, romanceio_id, log_func):
@@ -146,7 +152,9 @@ class Worker(Thread):
         )
 
         log_func(f"Lightweight HTTP fetch: requesting book page for {romanceio_id}")
-        raw_html, is_valid = fetch_book_page_http(romanceio_id, log_func=log_func, timeout=min(self.timeout, 10))
+        raw_html, is_valid = fetch_book_page_http(
+            romanceio_id, log_func=log_func, timeout=min(self.timeout, _JSON_TIMEOUT_SECS)
+        )
 
         if raw_html is None or not is_valid:
             log_func(f"Lightweight HTTP fetch: book {romanceio_id} not found (404)")

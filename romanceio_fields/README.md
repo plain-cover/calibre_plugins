@@ -222,6 +222,6 @@ Report issues on [GitHub Issues](https://github.com/plain-cover/calibre_plugins/
 - **Which plugin** - if the issue happened when clicking the magnifying glass icon, then it is due to the **Romance.io Fields** plugin; if it happened during a metadata download, it is the **Romance.io** plugin
 - **Calibre version** - shown in the bottom-left of the Calibre window, or via **Help > About Calibre**
 - **Plugin version** - **Preferences > Plugins**, find the plugin (Romance.io Fields), note the version (e.g. 1.0.0)
-- **Error logs** - click the **Jobs: 0** button in the bottom-right corner of Calibre after the job runs. Select the most recent job — there may be two: **Finding books on Romance.io** (the search step) and **Download Romance.io Fields** (the download step). Choose whichever failed (usually the latest one), click **Show job details**, and copy the output.
+- **Error logs** - click the **Jobs: 0** button in the bottom-right corner of Calibre after the job runs. Select the most recent job - there may be two: **Finding books on Romance.io** (the search step) and **Download Romance.io Fields** (the download step). Choose whichever failed (usually the latest one), click **Show job details**, and copy the output.
 
 For more verbose logs, right-click the **Preferences** button (gear icon) and choose **Restart in debug mode**.

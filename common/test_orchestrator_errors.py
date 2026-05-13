@@ -920,7 +920,7 @@ def test_get_details_json_returns_book_not_found_falls_through_to_html():
 
 def test_get_details_html_returns_book_not_found_yields_none():
     """get_details_with_fallback must return None (not the sentinel) when html_fetch_func
-    returns _BookNotFound — callers must never receive the sentinel object."""
+    returns _BookNotFound - callers must never receive the sentinel object."""
     from common.common_romanceio_search_orchestrator import _BookNotFound
 
     result = get_details_with_fallback(

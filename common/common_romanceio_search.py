@@ -32,6 +32,11 @@ except ImportError:
         return x.lower()
 
 
+# Single-word number names zero through twenty. Higher tens ("thirty", "forty", …) and
+# compound forms ("twenty-one", "thirty-two", …) are intentionally excluded - they are
+# rare as standalone book titles, and handling them would require multi-token lookahead.
+# Tokens not in this dict fall through to the word path in the matcher, so they still
+# match correctly when both sides use the same form.
 _TEXTUAL_TO_DIGIT = {
     "zero": "0",
     "one": "1",
@@ -57,15 +62,23 @@ _TEXTUAL_TO_DIGIT = {
 }
 
 
-def _text_number_to_digit(text):
+def _text_number_to_digit(text: str) -> str:
     """
     Convert textual number to its digit equivalent.
     Example: "One" -> "1", "Two" -> "2", "Twenty" -> "20"
     Returns the original text if not a recognized number word.
     """
-    if not text:
-        return text
     return _TEXTUAL_TO_DIGIT.get(text.lower(), text)
+
+
+def _normalize_numbers_in_title(title: str) -> str:
+    """
+    Replace every number-word token in a title with its digit form.
+    This allows "Thirteen" and "13" to compare as equal.
+    Case-insensitive; handles both "Thirteen" and "thirteen".
+    Example: "thirteen" -> "13", "Thirteen" -> "13", "funny story" -> "funny story"
+    """
+    return " ".join(_text_number_to_digit(w) for w in title.split())
 
 
 def _normalize_for_matching(text):
@@ -195,15 +208,17 @@ def create_title_author_matcher(orig_title, title_tokens, author_tokens):
         where score is the number of matching tokens (higher is better)
     """
 
+    # Precompute search-side normalized strings once (not per result book).
+    search_main, _ = _split_title_parts(orig_title)
+    search_main_normalized = lower(_normalize_for_matching(search_main))
+    search_full_normalized = lower(_normalize_for_matching(orig_title))
+    search_full_normalized_digit = _normalize_numbers_in_title(search_full_normalized)
+    search_main_normalized_digit = _normalize_numbers_in_title(search_main_normalized)
+
     def get_match_score(result_title, result_authors):
         """Check if result matches and return match quality score."""
         result_authors_str = lower(" ".join(result_authors))
 
-        # Split search title into main title and subtitle for weighted matching
-        search_main, _ = _split_title_parts(orig_title)
-
-        # Normalize both search and result for accent-insensitive matching
-        search_main_normalized = lower(_normalize_for_matching(search_main))
         result_title_normalized = lower(_normalize_for_matching(result_title))
 
         # Author matching with scoring
@@ -225,12 +240,10 @@ def create_title_author_matcher(orig_title, title_tokens, author_tokens):
                 author_score += 100
 
             # First name match (if we have multiple tokens) - use word boundaries
-            first_name_match = False
             if len(author_tokens) > 1:
                 first_name = str(lower(author_tokens[0]))
                 first_name_pattern = r"\b" + str(re.escape(first_name)) + r"\b"
-                first_name_match = bool(re.search(first_name_pattern, result_authors_str_val))
-                if first_name_match:
+                if re.search(first_name_pattern, result_authors_str_val):
                     author_score += 50
 
             # If no match yet, check if names are reversed
@@ -326,8 +339,8 @@ def create_title_author_matcher(orig_title, title_tokens, author_tokens):
             if not t:
                 continue
             digit_val = _text_number_to_digit(t)
-            if (t and t.isdigit()) or (digit_val and digit_val.isdigit()):
-                search_numbers.append(digit_val if (digit_val and digit_val.isdigit()) else t)
+            if t.isdigit() or digit_val.isdigit():
+                search_numbers.append(digit_val)
             else:
                 search_words.append(t)
 
@@ -337,8 +350,8 @@ def create_title_author_matcher(orig_title, title_tokens, author_tokens):
             if not t:
                 continue
             digit_val = _text_number_to_digit(t)
-            if (t and t.isdigit()) or (digit_val and digit_val.isdigit()):
-                result_numbers.append(digit_val if (digit_val and digit_val.isdigit()) else t)
+            if t.isdigit() or digit_val.isdigit():
+                result_numbers.append(digit_val)
             else:
                 result_words.append(t)
 
@@ -361,7 +374,6 @@ def create_title_author_matcher(orig_title, title_tokens, author_tokens):
         # Match against full search title (main + subtitle) with normalization
         result_words_in_search = 0
         result_words_in_main = 0  # Track how many result words match main title
-        search_full_normalized = lower(_normalize_for_matching(orig_title))
         result_words_unique = list(dict.fromkeys(result_words))  # Remove duplicates
         for token in result_words_unique:
             token_normalized = lower(_normalize_for_matching(token))
@@ -372,14 +384,24 @@ def create_title_author_matcher(orig_title, title_tokens, author_tokens):
                 if search_main and re.search(pattern, str(search_main_normalized)):
                     result_words_in_main += 1
 
-        # Match if either:
-        # 1. All search words are in result (handles "High Flyer" -> "High Flyer (Verdant String)")
-        # 2. All result words are in search (handles "Funny Story (ORIGINAL)" -> "Funny Story")
-        # Note: We ignore number tokens for initial matching and use unique words for comparison
-        all_search_words_in_result = search_words_in_result == len(search_words_unique)
-        all_result_words_in_search = result_words_in_search == len(result_words_unique)
+        # Match if all search words appear in the result ("High Flyer" -> "High Flyer (Verdant String)")
+        # or all result words appear in the search ("Funny Story (ORIGINAL)" -> "Funny Story").
+        # Require non-empty word lists to prevent purely-numeric titles (e.g. "Thirteen" -> digit token
+        # only, word list empty) from incorrectly matching. Digit-normalised exact matches bypass this
+        # so purely-numeric titles still match themselves (and their digit equivalents).
 
-        if not (all_search_words_in_result or all_result_words_in_search):
+        # Limitation: all_search_words_in_result can false-positive on supersets - searching "The Search"
+        # could match "The Search Party" if the latter is the only result. When both appear, the exact
+        # match wins on score (~1000 vs ~300), so this is only a risk when the correct book is absent.
+        result_title_normalized_digit = _normalize_numbers_in_title(result_title_normalized)
+        is_digit_normalized_exact_match = (
+            result_title_normalized_digit == search_full_normalized_digit
+            or result_title_normalized_digit == search_main_normalized_digit
+        )
+        all_search_words_in_result = len(search_words_unique) > 0 and search_words_in_result == len(search_words_unique)
+        all_result_words_in_search = len(result_words_unique) > 0 and result_words_in_search == len(result_words_unique)
+
+        if not (is_digit_normalized_exact_match or all_search_words_in_result or all_result_words_in_search):
             return (False, 0)
 
         # Additional check: tokens must appear in the same order
@@ -404,6 +426,12 @@ def create_title_author_matcher(orig_title, title_tokens, author_tokens):
         # Check for exact match on main title only (handles "Gold" matching "Gold" not "Lord of Gold and Glory")
         elif result_title_normalized == search_main_normalized:
             score = 900 + len(title_tokens)
+        # Digit-normalised exact match (e.g. "13" == "Thirteen", "The 13" == "The Thirteen").
+        # Fires after string-exact checks, before word-overlap branches, so pure-numeric
+        # titles (empty word list) are handled here rather than falling through to the
+        # else branch with a misleadingly low score.
+        elif is_digit_normalized_exact_match:
+            score = 900 + max(len(title_tokens), len(result_title_tokens))
         elif all_search_words_in_result and all_result_words_in_search:
             score = 500 + max(search_words_in_result, result_words_in_search)
             # Bonus if result words primarily match main title (not subtitle)
@@ -715,14 +743,7 @@ def _parse_search_results_with_details(root, orig_title, orig_authors, log_func)
     orig_title_lower = lower(orig_title)
 
     # Check if original title has series info (e.g., "#1", "Book 1", "Vol. 1", "Part One", or just "1" at end)
-    # This includes standalone numbers like "The Burning Witch 1"
-    has_series_info = bool(
-        re.search(
-            r"#\d+|book\s+\d+|vol\.?\s*\d+|part\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d+)|\b\d+$",
-            str(orig_title_lower),
-            re.IGNORECASE,
-        )
-    )
+    has_series_info = _has_series_info(orig_title_lower)
 
     # Check if search title is looking for first book (has "1" or "One" in any form)
     search_for_first = bool(
@@ -782,19 +803,7 @@ def _parse_search_results_with_details(root, orig_title, orig_authors, log_func)
 
                     if not has_series_info:
                         # Search didn't specify series info, so prefer omnibus/standalone over individual volumes
-                        # Check if result has single volume indicators
-                        # Match: "#5", "Vol. 5", "Volume 5", "Book 5", "Part Two"
-                        # Don't match: "#1-5", "Vol. 1-5" (these are omnibus/collections)
-                        has_single_volume = bool(
-                            re.search(
-                                r"(#|vol\.?|volume|book)\s*\d+(?!\s*[-–—]\s*\d+)"
-                                r"|part\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d+)",
-                                str(result_title_lower),
-                                re.IGNORECASE,
-                            )
-                        )
-
-                        if not has_single_volume:
+                        if not _has_individual_volume(result_title_lower):
                             # Prefer results without single volume numbers (likely omnibus or standalone)
                             score += 100
                         else:
@@ -837,21 +846,8 @@ def _parse_search_results_with_details(root, orig_title, orig_authors, log_func)
                             )
                             if result_part_match:
                                 result_part = result_part_match.group(1).lower()
-                                # Convert word numbers to digits for comparison
-                                word_to_num = {
-                                    "one": "1",
-                                    "two": "2",
-                                    "three": "3",
-                                    "four": "4",
-                                    "five": "5",
-                                    "six": "6",
-                                    "seven": "7",
-                                    "eight": "8",
-                                    "nine": "9",
-                                    "ten": "10",
-                                }
-                                search_part_num = word_to_num.get(search_part, search_part)
-                                result_part_num = word_to_num.get(result_part, result_part)
+                                search_part_num = _text_number_to_digit(search_part)
+                                result_part_num = _text_number_to_digit(result_part)
 
                                 if search_part_num != result_part_num:
                                     # Different parts - reject this match
@@ -871,6 +867,20 @@ def _parse_search_results_with_details(root, orig_title, orig_authors, log_func)
         return best_match
 
     return None
+
+
+def _has_series_info(title: str) -> bool:
+    """
+    Check if a title contains series/volume information
+    (e.g., "#1", "Book 1", "Vol. 1", "Part One", or a trailing digit).
+    """
+    return bool(
+        re.search(
+            r"#\d+|book\s+\d+|vol\.?\s*\d+|part\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d+)|\b\d+$",
+            title,
+            re.IGNORECASE,
+        )
+    )
 
 
 def _has_volume_range(title: str) -> bool:
@@ -898,9 +908,12 @@ def _has_individual_volume(title: str) -> bool:
     Returns:
         True if title contains an individual volume number, False otherwise
     """
-    # Match patterns like "Vol. 2", "#2", "Book 2" but NOT ranges
-    # Negative lookahead to avoid matching ranges
-    individual_pattern = r"(?:#|vol\.?\s*|book\s+|volume\s+)(\d+)(?!\s*[-–—]\s*\d+)"
+    # Match patterns like "Vol. 2", "#2", "Book 2", "Part Three" but NOT ranges.
+    # Negative lookahead to avoid matching ranges.
+    individual_pattern = (
+        r"(?:#|vol\.?\s*|book\s+|volume\s+)(\d+)(?!\s*[-–—]\s*\d+)"
+        r"|part\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d+)"
+    )
     return bool(re.search(individual_pattern, title, re.IGNORECASE))
 
 
@@ -939,13 +952,7 @@ def find_best_json_match(
 
     # Check if search title has series info (same logic as HTML search)
     search_title_lower = lower(search_title)
-    has_series_info = bool(
-        re.search(
-            r"#\d+|book\s+\d+|vol\.?\s*\d+|part\s+(one|two|three|four|five|six|seven|eight|nine|ten|\d+)|\b\d+$",
-            str(search_title_lower),
-            re.IGNORECASE,
-        )
-    )
+    has_series_info = _has_series_info(search_title_lower)
 
     best_match_id = None
     best_score = 0

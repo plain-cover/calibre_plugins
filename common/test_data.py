@@ -707,4 +707,46 @@ TEST_BOOKS = [
             "tags": lambda x, delimiter: x is not None and len(x.split(delimiter)) > 0,
         },
     ),
+    # A book that's not on Romance.io shouldn't return a false positive on another book by the same author.
+    BookTestData(
+        title="Known to the Victim",
+        authors=["Kelley Armstrong"],
+        expected_fields={
+            "romanceio_id": None,
+        },
+    ),
+    # A book with a purely numeric title
+    BookTestData(
+        title="Thirteen",
+        authors=["Kelley Armstrong"],
+        expected_fields={
+            "romanceio_id": "54553de28c7d2382e0414467",
+            "title": "Thirteen",
+            "authors": ["Kelley Armstrong"],
+            "series": "Women of the Otherworld",
+            "series_index": 13.0,
+            "pubdate": (2012, 7, 24),
+            "comments": lambda x: x is not None and len(x) > 50 and "Savannah Levine" in x,
+            "star_rating": lambda x: x is not None and 0 <= x <= 5,
+            "rating_count": lambda x: x is not None and x >= 0,
+            "tags": lambda x, delimiter: x is not None and len(x.split(delimiter)) > 0,
+        },
+    ),
+    # Digit title in Calibre ("13") matching spelled-out title on Romance.io ("Thirteen")
+    BookTestData(
+        title="13",
+        authors=["Kelley Armstrong"],
+        expected_fields={
+            "romanceio_id": "54553de28c7d2382e0414467",
+            "title": "Thirteen",
+            "authors": ["Kelley Armstrong"],
+            "series": "Women of the Otherworld",
+            "series_index": 13.0,
+            "pubdate": (2012, 7, 24),
+            "comments": lambda x: x is not None and len(x) > 50 and "Savannah Levine" in x,
+            "star_rating": lambda x: x is not None and 0 <= x <= 5,
+            "rating_count": lambda x: x is not None and x >= 0,
+            "tags": lambda x, delimiter: x is not None and len(x.split(delimiter)) > 0,
+        },
+    ),
 ]

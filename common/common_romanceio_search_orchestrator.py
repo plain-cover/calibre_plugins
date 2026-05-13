@@ -28,7 +28,6 @@ from .common_romanceio_fetch_helper import (
     SeleniumBaseImportError,
 )  # pylint: disable=import-outside-toplevel
 
-
 # Set of URL prefixes for JSON API endpoints that returned 404 this session.
 # Keyed by the stable endpoint prefix (e.g. "https://www.romance.io/json/books")
 # so that /json/books/abc123 and /json/books/def456 are treated as the same endpoint.
@@ -96,9 +95,25 @@ class _BookNotFound:
     """Sentinel returned by fetch functions when a book ID is definitively not found (404).
 
     Distinct from None (technical failure) so that not-found propagates cleanly through the
-    orchestrator without being confused with a network error. Callers and dispatch code
-    use isinstance() to distinguish this from valid data or None (technical failure).
+    orchestrator without being confused with a network error. Use _is_book_not_found() rather
+    than isinstance() directly to guard against Calibre plugin-reload identity mismatches.
     """
+
+
+def _is_book_not_found(val: Any) -> bool:
+    """Return True if val is a _BookNotFound sentinel.
+
+    Uses a type-name fallback alongside isinstance() so that Calibre plugin reloads
+    (which create a new class identity) don't cause stale isinstance() checks to silently
+    return False.
+    """
+    return isinstance(val, _BookNotFound) or (
+        # Module check: both plugins' modules contain "romanceio", which distinguishes
+        # this sentinel from any third-party class also named _BookNotFound.
+        # Keep the string "_BookNotFound" in sync with the class name above.
+        type(val).__name__ == "_BookNotFound"
+        and "romanceio" in getattr(type(val), "__module__", "")
+    )
 
 
 def _throttle_json_call(log_func: Callable, endpoint_key: str, abort: Optional[Any] = None) -> None:
@@ -195,12 +210,12 @@ def _retry_with_delay(
                     log_func(f"✓ {method_name} found match: {result}")
                 elif isinstance(result, dict):
                     log_func(f"✓ {method_name} found match (dict with {len(result)} keys)")
-                elif isinstance(result, _BookNotFound):
+                elif _is_book_not_found(result):
                     log_func(f"○ {method_name}: book not found (404)")
                 else:
                     log_func(f"✓ {method_name} found match: {type(result).__name__}")
                 if attempt > 1:
-                    if isinstance(result, _BookNotFound):
+                    if _is_book_not_found(result):
                         log_func(f"  (Not found confirmed on attempt {attempt})")
                     else:
                         log_func(f"  (Succeeded on retry attempt {attempt})")
@@ -315,10 +330,10 @@ def search_with_fallback(
             abort=abort,
         )
 
-    if json_search.result is not None and not isinstance(json_search.result, _BookNotFound):
+    if json_search.result is not None and not _is_book_not_found(json_search.result):
         return json_search.result
 
-    # success=True, result=None means the API returned cleanly with no match — skip HTML fallback.
+    # success=True, result=None means the API returned cleanly with no match - skip HTML fallback.
     # success=True, result=_BookNotFound should not occur (sentinels are for detail fetch, not search),
     # but if it did we fall through to HTML rather than silently returning None.
     if json_search.success and json_search.result is None:
@@ -338,7 +353,7 @@ def search_with_fallback(
         abort=abort,
     )
 
-    if html_search.result is not None and not isinstance(html_search.result, _BookNotFound):
+    if html_search.result is not None and not _is_book_not_found(html_search.result):
         return html_search.result
 
     if html_search.success:
@@ -395,10 +410,10 @@ def fetch_details_with_fallback(
             abort=abort,
         )
 
-    if json_fetch.result is not None and not isinstance(json_fetch.result, _BookNotFound):
+    if json_fetch.result is not None and not _is_book_not_found(json_fetch.result):
         return json_fetch.result
 
-    if isinstance(json_fetch.result, _BookNotFound):
+    if _is_book_not_found(json_fetch.result):
         return json_fetch.result  # definitive 404 from JSON, no point trying HTML
 
     if json_fetch.success:
@@ -419,7 +434,7 @@ def fetch_details_with_fallback(
             log_func=log_func,
             abort=abort,
         )
-        if isinstance(lw_fetch.result, _BookNotFound):
+        if _is_book_not_found(lw_fetch.result):
             return lw_fetch.result  # book definitively not found, no point trying Chrome
         if lw_fetch.result is not None:
             return lw_fetch.result
@@ -480,7 +495,7 @@ def get_details_with_fallback(
         log_func(f"Attempting JSON API for book {romanceio_id}...")
         try:
             details = json_fetch_func(romanceio_id, log_func)
-            if details and not isinstance(details, _BookNotFound):
+            if details and not _is_book_not_found(details):
                 log_func(f"✓ JSON API book details successful for {romanceio_id}")
                 return details
         except (OSError, ValueError, RuntimeError) as e:
@@ -490,10 +505,10 @@ def get_details_with_fallback(
 
     try:
         details = html_fetch_func(romanceio_id, log_func)
-        if details and not isinstance(details, _BookNotFound):
+        if details and not _is_book_not_found(details):
             log_func(f"✓ HTML scraping successful for {romanceio_id}")
             return details
-        if isinstance(details, _BookNotFound):
+        if _is_book_not_found(details):
             log_func(f"○ HTML scraping: book {romanceio_id} not found (404)")
         else:
             log_func(f"○ HTML scraping completed but no data returned for {romanceio_id}")
