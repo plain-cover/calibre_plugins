@@ -98,10 +98,12 @@ def test_live_search_parity(test_books: List[Any], fetch_page_func: Any) -> None
             time.sleep(2)  # Avoid 429 rate limiting between requests
         title = book.title or ""
         authors = book.authors or []
-        # Only use expected_fields for the expected ID - book.romanceio_id may be an
-        # intentionally invalid placeholder (e.g. "000000000000000000000000") used to test
-        # graceful failure in detail-fetch tests, which is unrelated to search parity.
-        expected_id = (book.expected_fields or {}).get("romanceio_id")
+        # Use expected_fields for the ID; book.romanceio_id may be a placeholder.
+        # key absent -> no assertion; None -> expect no match; non-None -> expect that ID
+        expected_fields = book.expected_fields or {}
+        expected_id_set = "romanceio_id" in expected_fields
+        expected_id = expected_fields.get("romanceio_id")
+        expect_no_match = expected_id_set and expected_id is None
 
         if not title or not authors:
             print(f"\nSkipping {book!r}: no title/authors")
@@ -140,18 +142,36 @@ def test_live_search_parity(test_books: List[Any], fetch_page_func: Any) -> None
         # Only flag a parity failure when both methods succeeded and both returned a result
         # but they disagree. Skip if:
         #   - a method raised an exception (e.g. 429, timeout)
-        #   - a method returned None (0 search results) — the HTML search has more failure
+        #   - a method returned None (0 search results) - the HTML search has more failure
         #     modes (JS timing, page structure) so None means "inconclusive", not "wrong".
         if json_failed or html_failed:
             print(
-                f"  ⚠️  Skipping parity check (one method failed) — "
+                f"  ⚠️  Skipping parity check (one method failed) - "
                 f"json_failed={json_failed}, html_failed={html_failed}"
             )
             continue
 
+        # For no-match cases, JSON is authoritative (HTML has more failure modes).
+        if expect_no_match:
+            if json_id is not None:
+                msg = f"Expected no match for {title!r} but JSON search returned {json_id!r}"
+                errors.append(msg)
+                print(f"  ❌ {msg}")
+            else:
+                print("  ✓ JSON search correctly returned no match")
+                if html_id is not None:
+                    # HTML has more failure modes than JSON, so this is inconclusive rather
+                    # than a hard error - but worth surfacing in case the HTML matcher
+                    # develops a systematic false-positive.
+                    print(f"  ⚠️  HTML search returned {html_id!r} for expected-no-match {title!r} (inconclusive)")
+            continue
+
+        # Skip parity check if either method returned no results.
+        # HTML search has more failure modes (JS timing, page structure) so None
+        # means "inconclusive", not "wrong".
         if json_id is None or html_id is None:
             print(
-                f"  ⚠️  Skipping parity check (one method returned no results) — "
+                f"  ⚠️  Skipping parity check (one method returned no results) - "
                 f"json_id={json_id!r}, html_id={html_id!r}"
             )
             continue
