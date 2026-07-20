@@ -60,6 +60,8 @@ KEY_STEAM_CUSTOM_COLUMN = "customColumnSteam"
 KEY_TAGS_CUSTOM_COLUMN = "customColumnRomanceTags"
 KEY_STAR_RATING_CUSTOM_COLUMN = "customColumnStarRating"
 KEY_RATING_COUNT_CUSTOM_COLUMN = "customColumnRatingCount"
+KEY_ADD_STEAM_TO_TAGS = "addSteamToTags"
+KEY_ADD_STAR_RATING_TO_TAGS = "addStarRatingToTags"
 
 STORE_NAME = "Options"
 KEY_MAX_TAGS = "maxRomanceTags"
@@ -89,6 +91,8 @@ DEFAULT_LIBRARY_VALUES: Dict[str, Any] = {
     KEY_TAGS_CUSTOM_COLUMN: "",
     KEY_STAR_RATING_CUSTOM_COLUMN: "",
     KEY_RATING_COUNT_CUSTOM_COLUMN: "",
+    KEY_ADD_STEAM_TO_TAGS: False,
+    KEY_ADD_STAR_RATING_TO_TAGS: False,
 }
 
 PLUGIN_ICONS: List[str] = [
@@ -97,7 +101,7 @@ PLUGIN_ICONS: List[str] = [
 ]
 
 KEY_SCHEMA_VERSION = "SchemaVersion"
-DEFAULT_SCHEMA_VERSION = 1.61
+DEFAULT_SCHEMA_VERSION = 1.62
 
 
 # This is where all preferences for this plugin will be stored
@@ -185,6 +189,8 @@ class ConfigWidget(QWidget):
         library_config[KEY_TAGS_CUSTOM_COLUMN] = self.setup_tab.tags_column_combo.get_selected_column()
         library_config[KEY_STAR_RATING_CUSTOM_COLUMN] = self.setup_tab.star_rating_column_combo.get_selected_column()
         library_config[KEY_RATING_COUNT_CUSTOM_COLUMN] = self.setup_tab.rating_count_column_combo.get_selected_column()
+        library_config[KEY_ADD_STEAM_TO_TAGS] = self.setup_tab.add_steam_to_tags_checkbox.isChecked()
+        library_config[KEY_ADD_STAR_RATING_TO_TAGS] = self.setup_tab.add_star_rating_to_tags_checkbox.isChecked()
         set_library_config(db, library_config)
 
     def get_custom_int_columns(self):
@@ -244,6 +250,8 @@ class SetupTab(QWidget):
         prefer_html = c.get(KEY_PREFER_HTML, DEFAULT_STORE_VALUES[KEY_PREFER_HTML])
         library_config = get_library_config(self.parent_dialog.plugin_action.gui.current_db)
         max_tags = library_config.get(KEY_MAX_TAGS, DEFAULT_LIBRARY_VALUES[KEY_MAX_TAGS])
+        add_steam_to_tags = library_config.get(KEY_ADD_STEAM_TO_TAGS, False)
+        add_star_rating_to_tags = library_config.get(KEY_ADD_STAR_RATING_TO_TAGS, False)
 
         # --- General options ---
         layout.addSpacing(5)
@@ -291,6 +299,41 @@ class SetupTab(QWidget):
         self.prefer_html_checkbox.setChecked(prefer_html)
         general_group_box_layout.addWidget(self.prefer_html_checkbox, 3, 0, 1, -1)
 
+        # --- Rating tags ---
+        layout.addSpacing(5)
+        rating_tags_group_box = QGroupBox(
+            _("Rating tag options:"), self  # type: ignore # pylint: disable=undefined-variable
+        )
+        layout.addWidget(rating_tags_group_box)
+        rating_tags_group_box_layout = QGridLayout()
+        rating_tags_group_box.setLayout(rating_tags_group_box_layout)
+
+        self.add_steam_to_tags_checkbox = QCheckBox(
+            _("Add stea&m rating to calibre Tags"), self  # type: ignore # pylint: disable=undefined-variable
+        )
+        self.add_steam_to_tags_checkbox.setToolTip(
+            _(  # type: ignore[name-defined]  # pylint: disable=undefined-variable
+                "Add the fetched steam rating to calibre's standard Tags field, for example\n"
+                "'Romance.io steam: 3/5'. Existing tags are preserved, and an older\n"
+                "Romance.io steam tag is replaced when the rating changes."
+            )
+        )
+        self.add_steam_to_tags_checkbox.setChecked(add_steam_to_tags)
+        rating_tags_group_box_layout.addWidget(self.add_steam_to_tags_checkbox, 0, 0, 1, -1)
+
+        self.add_star_rating_to_tags_checkbox = QCheckBox(
+            _("Add star rating to calibre T&ags"), self  # type: ignore # pylint: disable=undefined-variable
+        )
+        self.add_star_rating_to_tags_checkbox.setToolTip(
+            _(  # type: ignore[name-defined]  # pylint: disable=undefined-variable
+                "Add the fetched star rating to calibre's standard Tags field, for example\n"
+                "'Romance.io stars: 4.25/5'. Existing tags are preserved, and an older\n"
+                "Romance.io stars tag is replaced when the rating changes."
+            )
+        )
+        self.add_star_rating_to_tags_checkbox.setChecked(add_star_rating_to_tags)
+        rating_tags_group_box_layout.addWidget(self.add_star_rating_to_tags_checkbox, 1, 0, 1, -1)
+
         # --- Steam rating ---
         layout.addSpacing(5)
         steam_group_box = QGroupBox(_("Steam rating options:"), self)  # type: ignore # pylint: disable=undefined-variable
@@ -333,7 +376,7 @@ class SetupTab(QWidget):
         tags_group_box_layout.addWidget(tags_column_label, 0, 0, 1, 1)
         tags_group_box_layout.addWidget(self.tags_column_combo, 0, 1, 1, 3)
 
-        self.max_tags_label = QLabel(_("&Maximum tags to download:"), self)  # type: ignore # pylint: disable=undefined-variable
+        self.max_tags_label = QLabel(_("Ma&ximum tags to download:"), self)  # type: ignore # pylint: disable=undefined-variable
         tool_tip = _(  # type: ignore # pylint: disable=undefined-variable
             "Specify the maximum number of tags to\n"
             "download (e.g. the top 10 most upvoted).\n"

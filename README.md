@@ -5,7 +5,7 @@ Two Calibre plugins that link your library with [Romance.io](https://romance.io)
 - Adds a clickable link to the book's Romance.io page in Calibre's book details panel (both plugins)
 - Adds cover art, series, star rating, description, and publication date from Romance.io (Romance.io metadata plugin)
 - Adds Romance.io tags to Calibre's Tags field based on a customizable mapping (Romance.io metadata plugin)
-- Adds steam rating, star rating, and vote count to custom columns (Romance.io Fields plugin)
+- Adds steam rating, star rating, and vote count to custom columns, with optional steam/star tags for e-readers (Romance.io Fields plugin)
 - Adds Romance.io tags to a custom column so you can sort and filter your library by tropes, themes, settings, and more (Romance.io Fields plugin)
 
 ![Screenshot of Calibre showing each feature of the Romance.io plugins emphasized with red boxes and arrows](images/Full%20Calibre.png)
@@ -69,7 +69,7 @@ You can choose which fields you want to populate from [Romance.io](https://roman
 
 ## Romance.io Fields - Custom Columns Plugin for Calibre
 
-A toolbar button that fetches steam rating, star rating, vote count, and community tags from [Romance.io](https://romance.io) and writes them into custom columns in your library. Once set up, you can sort and filter your entire library by any of these fields.
+A toolbar button that fetches steam rating, star rating, vote count, and community tags from [Romance.io](https://romance.io) and writes them into custom columns in your library. Once set up, you can sort and filter your entire library by any of these fields. It can also add steam/star ratings to calibre's standard Tags field for display on an e-reader.
 
 ![Screenshot of Calibre showing each feature of the Romance.io plugins emphasized with red boxes and arrows](images/Full%20Calibre.png)
 
@@ -77,7 +77,7 @@ A toolbar button that fetches steam rating, star rating, vote count, and communi
 
 **Step 1 - Create custom columns**
 
-The plugin writes data from [Romance.io](https://romance.io) into custom columns in Calibre. You need to create the columns yourself first so we have a place to put the data. Each field (Romance.io ID, steam rating, star rating, vote count, tags) needs its own column with the right column type so Calibre knows how to store and sort the data.
+The plugin writes data from [Romance.io](https://romance.io) into custom columns in Calibre. You need to create the columns yourself first so we have a place to put the data. Each field (Romance.io ID, steam rating, star rating, vote count, tags) needs its own column with the right column type so Calibre knows how to store and sort the data. If you only want steam and/or star ratings added to calibre's standard Tags field, those ratings do not require custom columns.
 
 Go to **Preferences > Add your own columns** and add a new column for each field you want. You don't have to create all of them - only the columns you want to be able to sort and filter on. Here's what each column should look like when you're creating it:
 
@@ -138,6 +138,8 @@ Select one or more books and click the Romance.io toolbar button. The plugin sea
 ### Configuration
 
 You can configure the plugin from the **dropdown arrow next to the plugin's icon > Customize plugin**, or **Preferences > Plugins > Romance.io Fields > Customize plugin**.
+
+Under **Rating tag options**, enable **Add steam rating to calibre Tags** and/or **Add star rating to calibre Tags** to create tags such as `Romance.io steam: 3/5` and `Romance.io stars: 4.25/5`. These options do not require custom columns. Existing tags are preserved, and refreshing replaces only older rating tags created by the plugin.
 
 ## Installation
 

@@ -25,11 +25,14 @@ class _SsrParsedFields:
 
 
 _JSON_REQUEST_TIMEOUT_SECS: int = 10
+INTERNAL_CUSTOM_FIELDS_TO_UPDATE = "__custom_fields_to_update__"
+INTERNAL_TAG_FIELDS_TO_UPDATE = "__tag_fields_to_update__"
 
 
 def prepare_books_for_download(
     book_ids: List[int],
     fields_to_cols_map: Dict[str, str],
+    rating_tag_fields: List[str],
     overwrite_existing: bool,
     db_path: str,
     notification: Callable[[float, str], float] = (lambda x, y: x),
@@ -37,7 +40,8 @@ def prepare_books_for_download(
     """
     Prepare books for downloading by searching for Romance.io IDs if needed.
     Returns (books_to_scan_raw, warnings, errors, saved_identifiers) where:
-    - books_to_scan_raw: List of tuples ready for do_metadata_download
+    - books_to_scan_raw: List of tuples containing the fields to fetch and the
+      custom-column/rating-tag destinations to update
     - warnings: Dict of book_id -> warning message
     - errors: Dict of book_id -> error message
     - saved_identifiers: Dict of book_id -> romanceio_id (newly found IDs that were saved)
@@ -58,6 +62,9 @@ def prepare_books_for_download(
 
     labels_map = dict(
         (col_name, db.field_metadata.key_to_label(col_name)) for col_name in fields_to_cols_map.values() if col_name
+    )
+    from calibre_plugins.romanceio_fields.rating_tags import (  # type: ignore[import-not-found]  # pylint: disable=import-error
+        build_field_update_plan,
     )
 
     def json_search(title, authors, log_func):
@@ -83,14 +90,24 @@ def prepare_books_for_download(
 
         try:
             # Check which fields need to be downloaded
-            fields_to_run = []
+            existing_custom_values = {}
+            existing_tags = (
+                db.tags(book_id, index_is_id=True)  # type: ignore[attr-defined]
+                if rating_tag_fields
+                else None
+            )
             for field, col_name in fields_to_cols_map.items():
-                if not col_name:
-                    continue
-                lbl = labels_map[col_name]
-                existing_val = db.get_custom(book_id, label=lbl, index_is_id=True)
-                if overwrite_existing or existing_val is None or existing_val == 0:
-                    fields_to_run.append(field)
+                if col_name:
+                    lbl = labels_map[col_name]
+                    existing_custom_values[field] = db.get_custom(book_id, label=lbl, index_is_id=True)
+
+            fields_to_run, custom_fields_to_update, tag_fields_to_update = build_field_update_plan(
+                fields_to_cols_map,
+                set(rating_tag_fields),
+                overwrite_existing,
+                existing_custom_values,
+                existing_tags,
+            )
 
             if not overwrite_existing and not fields_to_run:
                 errors[book_id] = "Book already has all fields populated and overwrite is turned off"
@@ -122,7 +139,7 @@ def prepare_books_for_download(
                     warnings[book_id] = f"Could not find Romance.io ID for: {title}"
                     continue
 
-            books_to_scan.append((book_id, romanceio_id, fields_to_run))
+            books_to_scan.append((book_id, romanceio_id, fields_to_run, custom_fields_to_update, tag_fields_to_update))
 
         except Exception:  # pylint: disable=broad-except
             errors[book_id] = traceback.format_exc()
@@ -139,10 +156,14 @@ class BookToScan:
         book_id: int,
         romanceio_id: Optional[str] = None,
         fields_to_run: Optional[List[str]] = None,
+        custom_fields_to_update: Optional[List[str]] = None,
+        tag_fields_to_update: Optional[List[str]] = None,
     ):
         self.book_id = book_id
         self.romanceio_id = romanceio_id
         self.fields_to_run = fields_to_run if fields_to_run is not None else []
+        self.custom_fields_to_update = custom_fields_to_update if custom_fields_to_update is not None else []
+        self.tag_fields_to_update = tag_fields_to_update if tag_fields_to_update is not None else []
 
 
 def call_plugin_callback(plugin_callback: Dict[str, Any], parent: Any, plugin_results: Optional[Any] = None) -> None:
@@ -196,6 +217,8 @@ class CustomMasterParallelJob(ParallelJob):
         # Additional attributes specific to this usage
         self.book_id: int = book_id
         self.fields_to_run: List[str] = []
+        self.custom_fields_to_update: List[str] = []
+        self.tag_fields_to_update: List[str] = []
         self.result: Optional[Dict[str, Any]] = None
 
 
@@ -239,6 +262,8 @@ def do_metadata_download(
             args=args,
         )
         job.fields_to_run = book_to_scan.fields_to_run
+        job.custom_fields_to_update = book_to_scan.custom_fields_to_update
+        job.tag_fields_to_update = book_to_scan.tag_fields_to_update
         server.add_job(job)
 
     # This server is an arbitrary_n job, so there is a notifier available.
@@ -264,6 +289,11 @@ def do_metadata_download(
         # in the calibre job log (child stdout is not captured directly).
         for log_line in results.pop("__log__", []):
             print(log_line)
+        # Empty results indicate a failed fetch. Do not attach update instructions,
+        # otherwise a failure could be mistaken for a successful empty rating.
+        if results:
+            results[INTERNAL_CUSTOM_FIELDS_TO_UPDATE] = job.custom_fields_to_update
+            results[INTERNAL_TAG_FIELDS_TO_UPDATE] = job.tag_fields_to_update
         book_results_map[book_id] = results
         count = count + 1
         notification(float(count) / total, "Downloading metadata from Romance.io")
@@ -497,6 +527,8 @@ def _build_fields(
             value = parsed_fields["steam_rating"]
             if value is not None:
                 results[cfg.FIELD_STEAM_RATING] = int(round(value)) if isinstance(value, float) else int(value)
+            else:
+                results[cfg.FIELD_STEAM_RATING] = value
         elif field == cfg.FIELD_STAR_RATING and "star_rating" in parsed_fields:
             value = parsed_fields["star_rating"]
             if value is not None:

@@ -4,7 +4,7 @@ Romance.io for selected book(s). An InterfaceAction plugin represents
 an "action" that can be taken in Calibre's graphical user interface.
 """
 
-from typing import Any, Dict, List, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, Set, Tuple, TYPE_CHECKING
 from functools import partial
 
 # pylint: disable=duplicate-code  # Standard Calibre plugin import pattern
@@ -33,7 +33,12 @@ from .config import ALL_FIELDS
 from .common_icons import set_plugin_icon_resources, get_icon  # pylint: disable=import-error
 from .common_menus import unregister_menu_actions, create_menu_action_unique  # pylint: disable=import-error
 from .common_dialogs import ProgressBarDialog  # pylint: disable=import-error
-from .jobs import call_plugin_callback
+from .jobs import (
+    INTERNAL_CUSTOM_FIELDS_TO_UPDATE,
+    INTERNAL_TAG_FIELDS_TO_UPDATE,
+    call_plugin_callback,
+)
+from .rating_tags import normalize_calibre_tags, reconcile_rating_tags
 
 
 class CustomActionParallelJob(ParallelJob):
@@ -48,12 +53,14 @@ class CustomActionParallelJob(ParallelJob):
 
     # Additional attributes specific to this usage
     fields_to_cols_map: Dict[str, str]
+    rating_tag_fields: Set[str]
     plugin_callback: Optional[Any]
     result: Optional[Dict[int, Dict[str, Any]]] = None
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields_to_cols_map = {}
+        self.rating_tag_fields = set()
         self.plugin_callback = None
         self.result = None
 
@@ -151,14 +158,15 @@ class RomanceIOFieldsAction(InterfaceAction):
         book_ids: List[int] = self.gui.library_view.get_selected_ids()
 
         fields_to_run = list(ALL_FIELDS.keys())
-        any_valid, fields_to_cols_map = self._get_column_validity(fields_to_run)
+        any_valid, fields_to_cols_map, rating_tag_fields = self._get_column_validity(fields_to_run)
         if not any_valid:
             if not question_dialog(
                 self.gui,
                 _("Configure plugin"),  # type: ignore # pylint: disable=undefined-variable
                 "<p>"
                 + _(  # type: ignore # pylint: disable=undefined-variable
-                    "You must specify custom column(s) first. Do you want to configure this now?"
+                    "You must specify custom column(s) or enable rating tags first. "
+                    "Do you want to configure this now?"
                 ),
                 show_copy_button=False,
             ):
@@ -166,19 +174,26 @@ class RomanceIOFieldsAction(InterfaceAction):
             self.show_configuration()
             return
 
-        self._get_romanceio_fields(book_ids, fields_to_cols_map)
+        self._get_romanceio_fields(book_ids, fields_to_cols_map, rating_tag_fields)
 
-    def _get_column_validity(self, fields_to_run: List[str]) -> Tuple[bool, Dict[str, str]]:
+    def _get_column_validity(self, fields_to_run: List[str]) -> Tuple[bool, Dict[str, str], Set[str]]:
         """
         Given a list of fields requested to retrieve, lookup what custom
-        columns are configured and return a dict for each possible field
-        and its associated custom column (blank if not to be run).
+        columns and rating-tag destinations are configured. Return a dict for
+        each possible custom-column destination plus enabled rating-tag fields.
         """
         db = self.gui.current_db
         all_cols = db.field_metadata.custom_field_metadata()
 
         library_config = cfg.get_library_config(db)
         fields_to_cols_map: Dict[str, str] = {}
+        configured_rating_tag_fields = {
+            cfg.FIELD_STEAM_RATING: library_config.get(cfg.KEY_ADD_STEAM_TO_TAGS, False),
+            cfg.FIELD_STAR_RATING: library_config.get(cfg.KEY_ADD_STAR_RATING_TO_TAGS, False),
+        }
+        rating_tag_fields = {
+            field for field, enabled in configured_rating_tag_fields.items() if enabled and field in fields_to_run
+        }
         any_valid = False
         for value, field_col_key in cfg.ALL_FIELDS.items():
             col = library_config.get(field_col_key, "")
@@ -189,7 +204,7 @@ class RomanceIOFieldsAction(InterfaceAction):
             else:
                 any_valid = True
                 fields_to_cols_map[value] = col
-        return any_valid, fields_to_cols_map
+        return any_valid or bool(rating_tag_fields), fields_to_cols_map, rating_tag_fields
 
     def metadata_download(
         self,
@@ -200,28 +215,29 @@ class RomanceIOFieldsAction(InterfaceAction):
         """
         This function is designed to be called from other plugins
         Note that the download functions can only be used if a
-        custom column has been configured by the user first.
+        custom column or rating-tag destination has been configured by the user first.
 
           book_ids - list of calibre book ids to run the metadata download against
 
           fields_to_run - list of field names to be run. Possible values:
-              'SteamRating', 'RomanceTags'
+              'SteamRating', 'RomanceTags', 'StarRating', 'RatingCount'
 
           plugin_callback - This is a dictionary defining the callback function.
         """
         if fields_to_run is None or len(fields_to_run) == 0:
-            print("Metadata download called but neither SteamRating nor RomanceTags requested")
+            print("Metadata download called without any fields requested")
             return
 
         # Verify we have a custom column configured to store the metadata
-        any_valid, fields_to_cols_map = self._get_column_validity(fields_to_run)
+        any_valid, fields_to_cols_map, rating_tag_fields = self._get_column_validity(fields_to_run)
         if not any_valid:
             if not question_dialog(
                 self.gui,
                 _("Configure plugin"),  # type: ignore # pylint: disable=undefined-variable
                 "<p>"
                 + _(  # type: ignore # pylint: disable=undefined-variable
-                    "You must specify custom column(s) first. Do you want to configure this now?"
+                    "You must specify custom column(s) or enable rating tags first. "
+                    "Do you want to configure this now?"
                 ),
                 show_copy_button=False,
             ):
@@ -231,9 +247,14 @@ class RomanceIOFieldsAction(InterfaceAction):
 
         self.plugin_callback = plugin_callback
 
-        self._get_romanceio_fields(book_ids, fields_to_cols_map)
+        self._get_romanceio_fields(book_ids, fields_to_cols_map, rating_tag_fields)
 
-    def _get_romanceio_fields(self, book_ids: List[int], fields_to_cols_map: Dict[str, str]) -> None:
+    def _get_romanceio_fields(
+        self,
+        book_ids: List[int],
+        fields_to_cols_map: Dict[str, str],
+        rating_tag_fields: Set[str],
+    ) -> None:
         # Queue preparation job to run in background
         c = cfg.plugin_prefs[cfg.STORE_NAME]
         db = self.gui.current_db
@@ -250,7 +271,7 @@ class RomanceIOFieldsAction(InterfaceAction):
         args = [
             "calibre_plugins.romanceio_fields.jobs",
             "prepare_books_for_download",
-            (book_ids, fields_to_cols_map, overwrite_existing, db.library_path),
+            (book_ids, fields_to_cols_map, list(rating_tag_fields), overwrite_existing, db.library_path),
         ]
         desc = _("Finding books on Romance.io")  # type: ignore # pylint: disable=undefined-variable
         job: CustomActionParallelJob = self.gui.job_manager.run_job(
@@ -260,6 +281,7 @@ class RomanceIOFieldsAction(InterfaceAction):
                     max_tags=max_tags,
                     prefer_html=prefer_html,
                     fields_to_cols_map=fields_to_cols_map,
+                    rating_tag_fields=rating_tag_fields,
                 )
             ),
             name=func,
@@ -267,6 +289,7 @@ class RomanceIOFieldsAction(InterfaceAction):
             description=desc,
         )
         job.fields_to_cols_map = fields_to_cols_map
+        job.rating_tag_fields = rating_tag_fields
         job.plugin_callback = self.plugin_callback
         self.gui.status_bar.show_message(_("Finding %d books on Romance.io") % len(book_ids))  # type: ignore # pylint: disable=undefined-variable
 
@@ -276,6 +299,7 @@ class RomanceIOFieldsAction(InterfaceAction):
         max_tags: int,
         prefer_html: bool,
         fields_to_cols_map: Dict[str, str],
+        rating_tag_fields: Set[str],
     ) -> None:
         if job.failed:
             return self.gui.job_exception(job, dialog_title=_("Failed to prepare books"))  # type: ignore # pylint: disable=undefined-variable
@@ -346,7 +370,9 @@ class RomanceIOFieldsAction(InterfaceAction):
 
         # Queue the download job
         if books_to_scan_raw:
-            self._queue_download_job(books_to_scan_raw, fields_to_cols_map, max_tags, prefer_html)
+            self._queue_download_job(
+                books_to_scan_raw, fields_to_cols_map, rating_tag_fields, max_tags, prefer_html
+            )
 
         return None
 
@@ -363,6 +389,7 @@ class RomanceIOFieldsAction(InterfaceAction):
         self,
         books_to_scan_raw: List[Tuple],
         fields_to_cols_map: Dict[str, str],
+        rating_tag_fields: Set[str],
         max_tags: int,
         prefer_html: bool = False,
     ) -> None:
@@ -381,6 +408,7 @@ class RomanceIOFieldsAction(InterfaceAction):
             description=desc,
         )
         job.fields_to_cols_map = fields_to_cols_map
+        job.rating_tag_fields = rating_tag_fields
         job.plugin_callback = self.plugin_callback
         self.gui.status_bar.show_message(_("Downloading metadata for %d books") % len(books_to_scan_raw))  # type: ignore # pylint: disable=undefined-variable
 
@@ -403,7 +431,7 @@ class RomanceIOFieldsAction(InterfaceAction):
             )
             p.show()
         else:
-            payload = (job.fields_to_cols_map, book_fields_map)
+            payload = (job.fields_to_cols_map, job.rating_tag_fields, book_fields_map)
 
             if cfg.plugin_prefs[cfg.STORE_NAME].get(
                 cfg.KEY_ASK_FOR_CONFIRMATION,
@@ -430,12 +458,25 @@ class RomanceIOFieldsAction(InterfaceAction):
                 self._update_database_columns(payload)
 
         if job.plugin_callback:
-            call_plugin_callback(job.plugin_callback, self.gui, plugin_results=book_fields_map)
+            public_results = None
+            if book_fields_map is not None:
+                public_results = {
+                    book_id: {
+                        field: value
+                        for field, value in fields.items()
+                        if field not in (INTERNAL_CUSTOM_FIELDS_TO_UPDATE, INTERNAL_TAG_FIELDS_TO_UPDATE)
+                    }
+                    for book_id, fields in book_fields_map.items()
+                }
+            call_plugin_callback(job.plugin_callback, self.gui, plugin_results=public_results)
 
         return None
 
-    def _update_database_columns(self, payload: Tuple[Dict[str, str], Dict[int, Dict[str, Any]]]) -> None:
-        fields_to_cols_map, book_fields_map = payload
+    def _update_database_columns(
+        self,
+        payload: Tuple[Dict[str, str], Set[str], Dict[int, Dict[str, Any]]],
+    ) -> None:
+        fields_to_cols_map, rating_tag_fields, book_fields_map = payload
 
         self.progressbar(_("Updating fields"), on_top=True)  # type: ignore # pylint: disable=undefined-variable
         total_books = len(book_fields_map)
@@ -450,6 +491,7 @@ class RomanceIOFieldsAction(InterfaceAction):
         col_name_books_map: Dict[str, Dict[int, Any]] = {
             col_name: {} for col_name in fields_to_cols_map.values() if col_name
         }
+        tag_books_map: Dict[int, List[str]] = {}
 
         for book_id, fields in book_fields_map.items():
             if not fields:
@@ -470,10 +512,25 @@ class RomanceIOFieldsAction(InterfaceAction):
                         invalid_id_books.append(title)
                     continue  # Skip processing other fields for this book
 
+                custom_fields_to_update = set(fields.get(INTERNAL_CUSTOM_FIELDS_TO_UPDATE, []))
+                tag_fields_to_update = set(fields.get(INTERNAL_TAG_FIELDS_TO_UPDATE, [])) & rating_tag_fields
+
                 for field, value in fields.items():
+                    if field not in custom_fields_to_update:
+                        continue
                     col_name = fields_to_cols_map.get(field)
-                    if col_name is not None:
+                    if col_name:
                         col_name_books_map[col_name][book_id] = value
+                        book_ids_to_update.add(book_id)
+
+                if tag_fields_to_update:
+                    if hasattr(db_ref, "field_for"):
+                        existing_tags = db_ref.field_for("tags", book_id)
+                    else:
+                        existing_tags = db.tags(book_id, index_is_id=True)
+                    updated_tags = reconcile_rating_tags(existing_tags, fields, tag_fields_to_update)
+                    if set(normalize_calibre_tags(existing_tags)) != set(updated_tags):
+                        tag_books_map[book_id] = updated_tags
                         book_ids_to_update.add(book_id)
             else:
                 print(f"Book with id {book_id} is no longer in the library.")
@@ -481,6 +538,11 @@ class RomanceIOFieldsAction(InterfaceAction):
         for col_name, book_fields_map in col_name_books_map.items():
             db_ref.set_field(col_name, book_fields_map)
             print(f"Updated column {col_name} for {len(book_fields_map)} books")
+
+        if tag_books_map:
+            db_ref.set_field("tags", tag_books_map)
+            print(f"Updated calibre Tags for {len(tag_books_map)} books")
+            self.gui.tags_view.recount()
 
         if book_ids_to_update:
             book_ids_list = list(book_ids_to_update)
