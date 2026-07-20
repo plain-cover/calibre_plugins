@@ -329,7 +329,7 @@ def get_romanceio_fields_for_book(
             # Use orchestrator to try JSON first, then HTML fallback with retries
             from calibre_plugins.romanceio_fields.common_romanceio_search_orchestrator import (  # type: ignore[import-not-found]  # pylint: disable=import-error
                 fetch_details_with_fallback,
-                _BookNotFound,
+                _is_book_not_found,
             )
 
             # Create fetch functions without field-specific logic
@@ -341,7 +341,7 @@ def get_romanceio_fields_for_book(
                 log(f"prefer_html=True: fetching Chrome HTML directly for {romanceio_id}")
                 try:
                     chrome_result = _fetch_html(romanceio_id, log)
-                    if isinstance(chrome_result, _BookNotFound):
+                    if _is_book_not_found(chrome_result):
                         log(f"Romance.io ID {romanceio_id} was not found on the website (404)")
                         return _result({})
                     from calibre_plugins.romanceio_fields.parse_html import parse_fields_from_html  # type: ignore[import-not-found]  # pylint: disable=import-error
@@ -370,7 +370,7 @@ def get_romanceio_fields_for_book(
                 return _result({})
 
             # Parse result to a common fields dict, then map to calibre field constants
-            if isinstance(result, _BookNotFound):
+            if _is_book_not_found(result):
                 log(f"Romance.io ID {romanceio_id} was not found on the website (404)")
                 return _result({})
             if isinstance(result, dict):

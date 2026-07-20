@@ -181,7 +181,7 @@ flatpak override --user --filesystem=/var/lib/flatpak:ro com.calibre_ebook.calib
 - **Plugin version** - go to **Preferences > Plugins**, find the plugin, and note the version number shown
 - **Error logs or tracebacks**:
   - **Romance.io plugin** (metadata download): after the download ends, click the **View log** button and copy the contents.
-  - **Romance.io Fields plugin** (toolbar button): click the **Jobs: 0** button in the bottom-right corner of Calibre after the job finishes running. There may be two jobs — **Finding books on Romance.io** (search) and **Download Romance.io Fields** (download). Select whichever failed (usually the latest one), click **Show job details**, and copy the output.
+  - **Romance.io Fields plugin** (toolbar button): click the **Jobs: 0** button in the bottom-right corner of Calibre after the job finishes running. There may be two jobs - **Finding books on Romance.io** (search) and **Download Romance.io Fields** (download). Select whichever failed (usually the latest one), click **Show job details**, and copy the output.
 
 **For more verbose logs**, start Calibre in debug mode: right-click the **Preferences** button (gear icon in the toolbar) and choose **Restart in debug mode**. Log output will be printed to the terminal that opens.
 
