@@ -273,6 +273,13 @@ jobs:
       run: |
         cd romanceio_fields && calibre-debug -e test_tag_mapping.py
 
+    - name: Test romanceio_fields rating tags
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio_fields && calibre-debug -e test_rating_tags.py
+
     - name: Test romanceio_fields plugin tag slug conversion
       if: steps.changes.outputs.romanceio_fields_changed == 'true'
       env:

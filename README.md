@@ -5,7 +5,7 @@ Two Calibre plugins that link your library with [Romance.io](https://romance.io)
 - Adds a clickable link to the book's Romance.io page in Calibre's book details panel (both plugins)
 - Adds cover art, series, star rating, description, and publication date from Romance.io (Romance.io metadata plugin)
 - Adds Romance.io tags to Calibre's Tags field based on a customizable mapping (Romance.io metadata plugin)
-- Adds steam rating, star rating, and vote count to custom columns (Romance.io Fields plugin)
+- Adds steam rating, star rating, and vote count to custom columns, with optional steam/star tags for e-readers (Romance.io Fields plugin)
 - Adds Romance.io tags to a custom column so you can sort and filter your library by tropes, themes, settings, and more (Romance.io Fields plugin)
 - Optionally copies Romance.io general tags, content warnings, geography, and format tags into separate custom columns without changing the combined tags column (Romance.io Fields plugin)
 
@@ -55,7 +55,7 @@ You can choose which fields you want to populate from [Romance.io](https://roman
 
 **Romance.io tag to Calibre tag mappings** - controls how Romance.io tags are imported into Calibre's Tags field. Use the green "+" and red "-" buttons to add or remove mappings. Create one row for each Romance.io tag you want to map to one or more Calibre tags. The text you enter for the Romance.io tag must match how the tag looks on the website exactly. Any Romance.io tags that are not mapped will be ignored.
 
-  ![Screenshot of the Configure Metadata download dialog with the "Filter and map Romance.io tags to calibre tags" checkbox checked](images/Configure%20Metadata%20download.png)
+  ![Screenshot of the Configure Metadata download dialog with the "Filter and map Romance.io tags to Calibre tags" checkbox checked](images/Configure%20Metadata%20download.png)
 
   To get all Romance.io tags as individual Calibre tags, uncheck **"Filter and map Romance.io tags to Calibre tags"**:
 
@@ -70,7 +70,7 @@ You can choose which fields you want to populate from [Romance.io](https://roman
 
 ## Romance.io Fields - Custom Columns Plugin for Calibre
 
-A toolbar button that fetches steam rating, star rating, vote count, and community tags from [Romance.io](https://romance.io) and writes them into custom columns in your library. Tags can remain in one combined column and can also be copied into separate columns for general tags, content warnings, geography, and format tags. Once set up, you can sort and filter your entire library by any of these fields.
+A toolbar button that fetches steam rating, star rating, vote count, and community tags from [Romance.io](https://romance.io) and writes them into custom columns in your library. Tags can remain in one combined column and can also be copied into separate columns for general tags, content warnings, geography, and format tags. It can also add steam and star ratings to Calibre's standard Tags field for display on an e-reader. Once set up, you can sort and filter your entire library by any of these fields.
 
 ![Screenshot of Calibre showing each feature of the Romance.io plugins emphasized with red boxes and arrows](images/Full%20Calibre.png)
 
@@ -78,7 +78,7 @@ A toolbar button that fetches steam rating, star rating, vote count, and communi
 
 **Step 1 - Create custom columns**
 
-The plugin writes data from [Romance.io](https://romance.io) into custom columns in Calibre. You need to create the columns yourself first so we have a place to put the data. Each value you want to store (Romance.io ID, steam rating, star rating, vote count, or tags) needs its own column with the right column type so Calibre knows how to store and sort the data.
+The plugin writes data from [Romance.io](https://romance.io) into custom columns in Calibre. You need to create the columns yourself first so we have a place to put the data. Each value you want to store (Romance.io ID, steam rating, star rating, vote count, or tags) needs its own column with the right column type so Calibre knows how to store and sort the data. If you only want steam and/or star ratings added to Calibre's standard Tags field, those ratings do not require custom columns.
 
 Go to **Preferences > Add your own columns** and add a new column for each field you want. You don't have to create all of them - only the columns you want to be able to sort and filter on. Here's what each column should look like when you're creating it:
 
@@ -171,6 +171,8 @@ With the optional category columns configured, the original combined tags remain
 You can configure the plugin from the **dropdown arrow next to the plugin's icon > Customize plugin**, or **Preferences > Plugins > Romance.io Fields > Customize plugin**.
 
 Under **Romance.io tag options**, **All tags column (combined)** retains the original unprefixed tag list. The four categorized destinations are independent and optional. If both combined and categorized columns are selected, the plugin writes both. The maximum-tags setting continues to limit the combined column; categorized columns receive the complete matching group, including categorized length or series tags that the historical combined output omits.
+
+Under **Rating tag options**, enable **Add steam rating to Calibre Tags** and/or **Add star rating to Calibre Tags** to create tags such as `Romance.io steam: 3` and `Romance.io stars: 4.3`. These options do not require custom columns. Existing tags are preserved, and re-running the plugin replaces only older rating tags created by the plugin.
 
 ## Installation
 

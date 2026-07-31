@@ -2,7 +2,7 @@
 
 > **For user-facing install and usage instructions, see the [main README](../README.md).**
 
-A Calibre interface action plugin that fetches Romance.io-specific data (steam rating, star rating, vote count, tags) and writes them into user-configured custom columns.
+A Calibre interface action plugin that fetches Romance.io-specific data (steam rating, star rating, vote count, tags), writes it into user-configured custom columns, and can add ratings to Calibre's standard Tags field for display on an e-reader.
 
 ## What This Plugin Does
 
@@ -10,7 +10,7 @@ A Calibre interface action plugin that fetches Romance.io-specific data (steam r
 2. Loads each book's Romance.io data to extract steam rating, star rating, vote count, and community tags
 3. Preserves the existing combined tag output and, when configured, copies Romance.io general tags, content warnings, geography, and format tags into separate columns
 4. Filters the combined tags by the maximum count setting; categorized columns receive their complete matching groups
-5. Writes values into the user-configured custom columns
+5. Writes values into the user-configured custom columns and optionally adds steam and star ratings to Calibre's standard Tags field
 6. Optionally prompts before saving
 
 ## Configuration
@@ -22,6 +22,8 @@ A Calibre interface action plugin that fetches Romance.io-specific data (steam r
 | Refresh existing fields | ✓ checked | Re-download all fields even if already set (ID is never overwritten) |
 | Prompt to save | ☐ unchecked | Show confirmation dialog before writing to library |
 | Get tags directly from website (slower but includes additional community tags) | ☐ unchecked | Try the browser first to get the full JS-rendered tag set including community-voted tags; falls back to the normal JSON → lightweight HTTP → Chrome path if the browser is unavailable |
+| Add steam rating to Calibre Tags | ☐ unchecked | Add a tag like `Romance.io steam: 3` |
+| Add star rating to Calibre Tags | ☐ unchecked | Add a tag like `Romance.io stars: 4.3` |
 | Steam column | - | Lookup name of your steam rating column |
 | All tags column (combined) | - | Optional destination for the original combined, unprefixed tag list |
 | Maximum combined tags | 50 | Cap on the combined tag list; categorized columns receive their complete matching groups |
@@ -34,7 +36,7 @@ A Calibre interface action plugin that fetches Romance.io-specific data (steam r
 
 ## Custom Columns Setup
 
-The plugin writes data from [Romance.io](https://romance.io) into custom columns in Calibre. You need to create the columns yourself first so we have a place to put the data. Each value you want to store (Romance.io ID, steam rating, star rating, vote count, or tags) needs its own column with the right column type so Calibre knows how to store and sort the data. Optionally, you can configure tag category columns, which do not replace or modify the combined tags column.
+The plugin writes data from [Romance.io](https://romance.io) into custom columns in Calibre. You need to create the columns yourself first so we have a place to put the data. Each value you want to store (Romance.io ID, steam rating, star rating, vote count, or tags) needs its own column with the right column type so Calibre knows how to store and sort the data. Optionally, you can configure tag category columns, which do not replace or modify the combined tags column. If you only want steam and/or star ratings added to Calibre's standard Tags field, those ratings do not require custom columns.
 
 **Step 1 - Create custom columns**
 
@@ -115,9 +117,11 @@ Leave any field blank if you do not want the plugin to populate that column.
 Additional customization settings:
 - **Refresh existing fields when downloading from Romance.io** - When checked (default), all configured fields are updated with the latest data from Romance.io, even if they already have values. The Romance.io ID is never overwritten to avoid unnecessary searches. To change or re-download the ID, manually delete it from the book's identifiers. Uncheck if you have manually edited field values and don't want them overwritten.
 - **Prompt to save fields after downloading** - At the end of the download process, user can confirm if they would like to add the downloaded metadata for all selected books
+- **Get tags directly from website (slower but includes additional community tags)** - When checked, the plugin tries to open the Romance.io page in a Chrome browser first. This gives you the full community-voted tag set that is only available after JavaScript renders the page. If the browser is unavailable or fails, the plugin resumes the normal JSON → lightweight HTTP → Chrome fallback path. Unchecked (default): the plugin starts with JSON, which is faster and works without Chrome for most users.
+- **Add steam rating to Calibre Tags** - Adds a tag like `Romance.io steam: 3` to Calibre's standard Tags field. This works without a steam-rating custom column. Existing tags are preserved, and re-running the plugin replaces only its own previous steam tag.
+- **Add star rating to Calibre Tags** - Adds a tag like `Romance.io stars: 4.3` to Calibre's standard Tags field. This works without a star-rating custom column. Existing tags are preserved, and re-running the plugin replaces only its own previous star tag.
 - **Maximum combined tags to download** - Maximum number written to the combined tags column (default: 50); categorized columns remain complete
 - **Categorized tag columns** - Optional additional destinations for general tags, content warnings, geography, and format tags. JSON tags are categorized with a taxonomy bundled with the plugin, so these columns do not add a webpage request or require Chrome. The groups do not change the combined tags column and are not truncated by the combined maximum-tags setting. Format tags will contain detailed length and series tags that the combined column omits.
-- **Get tags directly from website (slower but includes additional community tags)** - When checked, the plugin tries to open the Romance.io page in a Chrome browser first. This gives you the full community-voted tag set that is only available after JavaScript renders the page. If the browser is unavailable or fails, the plugin resumes the normal JSON → lightweight HTTP → Chrome fallback path. Unchecked (default): the plugin starts with JSON, which is faster and works without Chrome for most users.
   > **Why do my tags look different from what I see on Romance.io?**
   > Romance.io displays two layers of tags: a core set (tropes, genres, etc.) stored in their database and returned by the API, and additional community-voted tags injected into the page by JavaScript after it loads. The default fast fetch (JSON API / lightweight HTTP) retrieves only the core set. To get the community tags too, enable this option - but be aware it requires Chrome and is slower since a browser window will have to open for each book.
 
@@ -131,7 +135,7 @@ Additional customization settings:
    - Check if the book is already associated with a Romance.io identifier
    - If not found, search Romance.io by title/author
    - Download the selected fields (steam rating, star rating, vote count, combined tags, and any configured category groups)
-   - Update your custom columns with the downloaded values
+   - Update your custom columns and configured rating tags with the downloaded values
 
 With the optional category columns configured, the original combined tags remain available while general tags, content warnings, geography, and format details are also shown separately. This makes it easier to display, sort, or filter by one kind of tag without losing the complete tag list:
 
@@ -172,7 +176,7 @@ This plugin:
 2. Fetches the book's Romance.io detail page - first trying the JSON API, then a lightweight HTTP request, then via Chrome as a final fallback if needed
 3. Parses the response to extract steam rating, star rating, rating count, and tags
 4. Filters and formats tags based on your settings
-5. Updates your custom columns with the downloaded data
+5. Updates your custom columns and configured rating tags with the downloaded data
 
 ## Tag Limiting
 
@@ -198,6 +202,7 @@ calibre-debug -e __init__.py
 **JSON tests** (fast, offline - no browser):
 ```bash
 calibre-debug test_json_parsing.py          # Star rating, steam, vote count, tags from JSON
+calibre-debug -e test_rating_tags.py        # Rating tag formatting and safe replacement
 calibre-debug test_json_search_matching.py  # Best-match selection from JSON search results
 calibre-debug test_tag_mapping.py           # Display-name consistency, topics-page HTML extraction
 calibre-debug test_tag_slug_conversion.py   # Slug-to-display-name conversion (copied from common/)
