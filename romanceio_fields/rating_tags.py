@@ -1,5 +1,7 @@
 """Formatting and reconciliation helpers for calibre rating tags."""
 
+import re
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 
@@ -12,6 +14,17 @@ STAR_TAG_PREFIX = "Romance.io stars: "
 RATING_TAG_PREFIXES = {
     FIELD_STEAM_RATING: STEAM_TAG_PREFIX,
     FIELD_STAR_RATING: STAR_TAG_PREFIX,
+}
+
+RATING_TAG_PATTERNS = {
+    FIELD_STEAM_RATING: re.compile(
+        r"^Romance\.io steam: [1-5](?:/5)?$",
+        re.IGNORECASE,
+    ),
+    FIELD_STAR_RATING: re.compile(
+        r"^Romance\.io stars: (?:[0-4](?:\.\d+)?|5(?:\.0+)?)(?:/5)?$",
+        re.IGNORECASE,
+    ),
 }
 
 
@@ -31,20 +44,32 @@ def format_rating_tag(field: str, value: Any) -> Optional[str]:
     if value is None or field not in RATING_TAG_PREFIXES:
         return None
 
+    try:
+        rating = Decimal(str(value))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+    minimum = Decimal("1") if field == FIELD_STEAM_RATING else Decimal("0")
+    if not rating.is_finite() or not minimum <= rating <= Decimal("5"):
+        return None
+
     if field == FIELD_STEAM_RATING:
-        display_value = str(int(round(float(value))))
+        display_value = format(rating.quantize(Decimal("1"), rounding=ROUND_HALF_UP), "f")
     else:
-        display_value = f"{float(value):.2f}".rstrip("0").rstrip(".")
-    return f"{RATING_TAG_PREFIXES[field]}{display_value}/5"
+        rounded_value = rating.quantize(Decimal("0.1"), rounding=ROUND_HALF_UP)
+        display_value = format(rounded_value, "f")
+    return f"{RATING_TAG_PREFIXES[field]}{display_value}"
+
+
+def is_owned_rating_tag(tag: str, field: str) -> bool:
+    """Return whether ``tag`` is a valid current or legacy plugin rating tag."""
+    pattern = RATING_TAG_PATTERNS.get(field)
+    return pattern is not None and pattern.fullmatch(tag.strip()) is not None
 
 
 def has_rating_tag(tags: Any, field: str) -> bool:
     """Return whether a tag list contains a plugin-owned tag for ``field``."""
-    prefix = RATING_TAG_PREFIXES.get(field)
-    if prefix is None:
-        return False
-    folded_prefix = prefix.casefold()
-    return any(tag.casefold().startswith(folded_prefix) for tag in normalize_calibre_tags(tags))
+    return any(is_owned_rating_tag(tag, field) for tag in normalize_calibre_tags(tags))
 
 
 def build_field_update_plan(
@@ -79,21 +104,26 @@ def build_field_update_plan(
 
 def reconcile_rating_tags(tags: Any, values: Dict[str, Any], fields_to_update: Set[str]) -> List[str]:
     """Replace selected plugin-owned rating tags while preserving all other tags."""
-    prefixes = tuple(
-        RATING_TAG_PREFIXES[field].casefold()
-        for field in fields_to_update
-        if field in RATING_TAG_PREFIXES
-    )
+    replacement_tags: Dict[str, Optional[str]] = {}
+    for field in (FIELD_STEAM_RATING, FIELD_STAR_RATING):
+        if field not in fields_to_update or field not in values:
+            continue
+
+        value = values[field]
+        new_tag = format_rating_tag(field, value)
+        if value is not None and new_tag is None:
+            # An invalid remote value must not remove a previously stored rating.
+            continue
+        replacement_tags[field] = new_tag
+
     updated = [
         tag
         for tag in normalize_calibre_tags(tags)
-        if not any(tag.casefold().startswith(prefix) for prefix in prefixes)
+        if not any(is_owned_rating_tag(tag, field) for field in replacement_tags)
     ]
 
     for field in (FIELD_STEAM_RATING, FIELD_STAR_RATING):
-        if field not in fields_to_update:
-            continue
-        new_tag = format_rating_tag(field, values.get(field))
+        new_tag = replacement_tags.get(field)
         if new_tag is not None:
             updated.append(new_tag)
 

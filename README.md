@@ -139,7 +139,7 @@ Select one or more books and click the Romance.io toolbar button. The plugin sea
 
 You can configure the plugin from the **dropdown arrow next to the plugin's icon > Customize plugin**, or **Preferences > Plugins > Romance.io Fields > Customize plugin**.
 
-Under **Rating tag options**, enable **Add steam rating to calibre Tags** and/or **Add star rating to calibre Tags** to create tags such as `Romance.io steam: 3/5` and `Romance.io stars: 4.25/5`. These options do not require custom columns. Existing tags are preserved, and refreshing replaces only older rating tags created by the plugin.
+Under **Rating tag options**, enable **Add steam rating to calibre Tags** and/or **Add star rating to calibre Tags** to create tags such as `Romance.io steam: 3` and `Romance.io stars: 4.3`. These options do not require custom columns. Existing tags are preserved, and refreshing replaces only older rating tags created by the plugin.
 
 ## Installation
 

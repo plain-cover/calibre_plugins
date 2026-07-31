@@ -2,7 +2,7 @@
 
 > **For user-facing install and usage instructions, see the [main README](../README.md).**
 
-A Calibre interface action plugin that fetches Romance.io-specific data (steam rating, star rating, vote count, tags), writes it into user-configured custom columns, and can add ratings to calibre's standard Tags field for display on an e-reader.
+A Calibre interface action plugin that fetches Romance.io-specific data (steam rating, star rating, vote count, tags), writes it into user-configured custom columns, and can add ratings to Calibre's standard Tags field for display on an e-reader.
 
 ## What This Plugin Does
 
@@ -21,8 +21,8 @@ A Calibre interface action plugin that fetches Romance.io-specific data (steam r
 | Refresh existing fields | ✓ checked | Re-download all fields even if already set (ID is never overwritten) |
 | Prompt to save | ☐ unchecked | Show confirmation dialog before writing to library |
 | Get tags directly from website (slower but includes additional community tags) | ☐ unchecked | Try the browser first to get the full JS-rendered tag set including community-voted tags; falls back to the JSON API and lightweight HTTP fetch if the browser is unavailable |
-| Add steam rating to calibre Tags | ☐ unchecked | Add a tag such as `Romance.io steam: 3/5`, replacing the plugin's older steam tag while preserving all other tags |
-| Add star rating to calibre Tags | ☐ unchecked | Add a tag such as `Romance.io stars: 4.25/5`, replacing the plugin's older star tag while preserving all other tags |
+| Add steam rating to Calibre Tags | ☐ unchecked | Add a tag like `Romance.io steam: 3` |
+| Add star rating to Calibre Tags | ☐ unchecked | Add a tag like `Romance.io stars: 4.3` |
 | Steam column | - | Lookup name of your steam rating column |
 | Tags column | - | Lookup name of your tags column |
 | Maximum tags | 50 | Cap on number of tags downloaded per book |
@@ -82,8 +82,8 @@ In the customization menu, map each field to the lookup name of the column you c
 Additional customization settings:
 - **Refresh existing fields when downloading from Romance.io** - When checked (default), all configured fields are updated with the latest data from Romance.io, even if they already have values. The Romance.io ID is never overwritten to avoid unnecessary searches. To change or re-download the ID, manually delete it from the book's identifiers. Uncheck if you have manually edited field values and don't want them overwritten.
 - **Prompt to save fields after downloading** - At the end of the download process, user can confirm if they would like to add the downloaded metadata for all selected books
-- **Add steam rating to calibre Tags** - Adds a tag such as `Romance.io steam: 3/5` to calibre's standard Tags field. This works without a Steam custom column. Existing tags are preserved, and the plugin replaces only its own previous steam tag when refreshing.
-- **Add star rating to calibre Tags** - Adds a tag such as `Romance.io stars: 4.25/5` to calibre's standard Tags field. This works without a star-rating custom column. Existing tags are preserved, and the plugin replaces only its own previous star tag when refreshing.
+- **Add steam rating to Calibre Tags** - Adds a tag like `Romance.io steam: 3` to Calibre's standard Tags field. This works without a Steam custom column. Existing tags are preserved, and the plugin replaces only its own previous steam tag when refreshing.
+- **Add star rating to Calibre Tags** - Adds a tag like `Romance.io stars: 4.3` to Calibre's standard Tags field. This works without a star-rating custom column. Existing tags are preserved, and the plugin replaces only its own previous star tag when refreshing.
 - **Maximum tags to download** - Maximum number of tags to download (default: 50)
 - **Get tags directly from website (slower but includes additional community tags)** - When checked, the plugin tries to open the Romance.io page in a browser first. This gives you the full community-voted tag set that is only available after JavaScript renders the page. If the browser is unavailable or fails, the plugin automatically falls back to the JSON API and then to a lightweight HTTP fetch, so you still get metadata even without Chrome. Unchecked (default): the plugin goes straight to the JSON API, then lightweight HTTP, then browser - which is faster and works without Chrome for most users.
   > **Why do my tags look different from what I see on Romance.io?**

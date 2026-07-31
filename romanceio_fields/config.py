@@ -309,26 +309,26 @@ class SetupTab(QWidget):
         rating_tags_group_box.setLayout(rating_tags_group_box_layout)
 
         self.add_steam_to_tags_checkbox = QCheckBox(
-            _("Add stea&m rating to calibre Tags"), self  # type: ignore # pylint: disable=undefined-variable
+            _("Add stea&m rating to Calibre Tags"), self  # type: ignore # pylint: disable=undefined-variable
         )
         self.add_steam_to_tags_checkbox.setToolTip(
             _(  # type: ignore[name-defined]  # pylint: disable=undefined-variable
-                "Add the fetched steam rating to calibre's standard Tags field, for example\n"
-                "'Romance.io steam: 3/5'. Existing tags are preserved, and an older\n"
-                "Romance.io steam tag is replaced when the rating changes."
+                "Add the fetched steam rating to Calibre's standard Tags field, for example\n"
+                "'Romance.io steam: 3'. Existing tags are preserved, and an older\n"
+                "Romance.io steam tag will be replaced if the rating changes."
             )
         )
         self.add_steam_to_tags_checkbox.setChecked(add_steam_to_tags)
         rating_tags_group_box_layout.addWidget(self.add_steam_to_tags_checkbox, 0, 0, 1, -1)
 
         self.add_star_rating_to_tags_checkbox = QCheckBox(
-            _("Add star rating to calibre T&ags"), self  # type: ignore # pylint: disable=undefined-variable
+            _("Add star rating to Calibre T&ags"), self  # type: ignore # pylint: disable=undefined-variable
         )
         self.add_star_rating_to_tags_checkbox.setToolTip(
             _(  # type: ignore[name-defined]  # pylint: disable=undefined-variable
-                "Add the fetched star rating to calibre's standard Tags field, for example\n"
-                "'Romance.io stars: 4.25/5'. Existing tags are preserved, and an older\n"
-                "Romance.io stars tag is replaced when the rating changes."
+                "Add the fetched star rating to Calibre's standard Tags field, for example\n"
+                "'Romance.io stars: 4.3'. Existing tags are preserved, and an older\n"
+                "Romance.io stars tag will be replaced if the rating changes."
             )
         )
         self.add_star_rating_to_tags_checkbox.setChecked(add_star_rating_to_tags)
