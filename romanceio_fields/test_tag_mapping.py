@@ -18,7 +18,7 @@ parent_dir = os.path.dirname(plugin_dir)
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from update_tag_mappings import extract_tag_mappings_from_html  # type: ignore[import-not-found]  # pylint: disable=import-error
+from common.update_tag_mappings import extract_tag_mappings_from_html  # type: ignore[import-not-found]  # pylint: disable=import-error
 from common.common_romanceio_tag_mappings import (  # pylint: disable=import-error
     JSON_TO_UI_TAG_MAP,
     TAGS_TO_IGNORE,

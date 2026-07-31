@@ -144,6 +144,14 @@ jobs:
       run: |
         python common/test_tag_slug_conversion.py
 
+    - name: Test bundled tag taxonomy against captured Romance.io pages
+      if: steps.changes.outputs.substantive_changes == 'true'
+      run: |
+        python -m pytest common/test_romanceio_tag_taxonomy.py -v
+        python common/check_romanceio_tag_taxonomy.py \
+          --book-html-file romanceio_fields/test_data/funny_story_source.html \
+          --topics-html-file romanceio_fields/test_data/romanceio_topics_page.html
+
     - name: Test HTML sanitizer (common)
       if: steps.changes.outputs.substantive_changes == 'true'
       run: |
@@ -299,6 +307,13 @@ jobs:
         PYTHONPATH: ${{ github.workspace }}/..
       run: |
         cd romanceio_fields && calibre-debug -e test_html_fields_parsing.py
+
+    - name: Test romanceio_fields field mapping
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio_fields && calibre-debug -e test_field_building.py
 
     - name: Test romanceio_fields plugin SSR HTTP field parsing
       if: steps.changes.outputs.romanceio_fields_changed == 'true'

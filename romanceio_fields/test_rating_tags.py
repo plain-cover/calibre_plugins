@@ -46,7 +46,11 @@ def _load_action_module():
 
     _module("qt")
     _module("qt.core", QToolButton=DummyToolButton, QMenu=object, QObject=object)
-    _module("calibre.gui2", question_dialog=lambda *args, **kwargs: False)
+    _module(
+        "calibre.gui2",
+        error_dialog=lambda *args, **kwargs: None,
+        question_dialog=lambda *args, **kwargs: False,
+    )
     _module("calibre.gui2.actions", InterfaceAction=object)
     _module("calibre.gui2.dialogs")
     _module("calibre.gui2.dialogs.message_box", ErrorNotification=object)
@@ -79,16 +83,16 @@ def _load_action_module():
     sys.modules["romanceio_fields.rating_tags"] = rating_tags
 
     previous_translation = getattr(builtins, "_", None)
-    builtins._ = lambda value: value
+    builtins._ = lambda value: value  # type: ignore[attr-defined]
     try:
         action_module = load_plugin_module("romanceio_fields.action", "action.py", plugin_dir)
     finally:
         if previous_translation is None:
-            del builtins._
+            del builtins._  # type: ignore[attr-defined]
         else:
-            builtins._ = previous_translation
+            builtins._ = previous_translation  # type: ignore[attr-defined]
 
-    action_module.cfg = config
+    action_module.cfg = config  # type: ignore[attr-defined]
     return action_module
 
 
@@ -285,7 +289,7 @@ def test_database_bridge_applies_planned_tag_update_and_recounts():
         def model(self):
             return FakeModel()
 
-        def currentIndex(self):
+        def currentIndex(self):  # pylint: disable=invalid-name
             return FakeIndex()
 
     class FakeTagsView:
@@ -334,14 +338,16 @@ def test_database_bridge_applies_planned_tag_update_and_recounts():
     )
 
     previous_translation = getattr(builtins, "_", None)
-    builtins._ = lambda value: value
+    builtins._ = lambda value: value  # type: ignore[attr-defined]
     try:
-        action_module.RomanceIOFieldsAction._update_database_columns(fake_action, payload)
+        action_module.RomanceIOFieldsAction._update_database_columns(  # pylint: disable=protected-access
+            fake_action, payload
+        )
     finally:
         if previous_translation is None:
-            del builtins._
+            del builtins._  # type: ignore[attr-defined]
         else:
-            builtins._ = previous_translation
+            builtins._ = previous_translation  # type: ignore[attr-defined]
 
     assert fake_action.gui.current_db.new_api.writes == [
         (

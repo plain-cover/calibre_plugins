@@ -9,6 +9,15 @@ import zipfile
 from glob import glob
 
 
+MAINTAINER_ONLY_COMMON_FILES = frozenset(
+    {
+        "check_romanceio_tag_taxonomy.py",
+        "test_romanceio_tag_taxonomy.py",
+        "update_tag_mappings.py",
+    }
+)
+
+
 def add_folder_to_zip(my_zip_file, folder, exclude=None):
     """Recursively add a folder to a zip file, excluding specified patterns."""
     if exclude is None:
@@ -76,7 +85,7 @@ def copy_common_files():
 
     for filename in os.listdir(common_folder):
         # Skip __init__.py - it's only for mypy, not for copying to plugins
-        if filename.endswith(".py") and filename != "__init__.py":
+        if filename.endswith(".py") and filename != "__init__.py" and filename not in MAINTAINER_ONLY_COMMON_FILES:
             src_path = os.path.join(common_folder, filename)
             dst_path = os.path.join(os.getcwd(), filename)
             with open(src_path, "r", encoding="utf-8") as src_file:
@@ -233,6 +242,7 @@ def build_plugin(adjust_imports_func):
         "headless_ie_selenium.exe",
         "undetected_chromedriver",
         "undetected_chromedriver.exe",
+        *MAINTAINER_ONLY_COMMON_FILES,
     ]
     files.extend(glob("*.py"))
     files.extend(glob("*.md"))
@@ -247,50 +257,48 @@ def build_plugin(adjust_imports_func):
 
 
 def pre_build_setup():
-    """Run pre-build tasks before creating the plugin zip.
+    """Validate committed tag-taxonomy data without changing the build inputs.
 
-    Checks if the tag mappings file is more than 30 days old and updates it if needed.
-    Safe to call from any plugin's build.py - uses the root-level update_tag_mappings module.
+    Live taxonomy refreshes are an explicit maintainer task. Builds must remain
+    reproducible and must never write unreviewed network data into a plugin zip.
     """
     from datetime import datetime
 
-    tag_mappings_file = os.path.join(
-        os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "common", "common_romanceio_tag_mappings.py"
-    )
+    common_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "common")
+    taxonomy_files = [
+        (
+            os.path.join(common_dir, "common_romanceio_tag_mappings.py"),
+            r"# Last tag mapping update: (\d{4}-\d{2}-\d{2})",
+        ),
+        (
+            os.path.join(common_dir, "common_romanceio_tag_categories.py"),
+            r"# Last category mapping update: (\d{4}-\d{2}-\d{2})",
+        ),
+    ]
 
-    should_update = False
-    try:
-        with open(tag_mappings_file, "r", encoding="utf-8") as f:
-            content = f.read()
-            match = re.search(r"# Last tag mapping update: (\d{4}-\d{2}-\d{2})", content)
-            if match:
-                last_update = datetime.strptime(match.group(1), "%Y-%m-%d")
-                days_old = (datetime.now() - last_update).days
-                if days_old > 30:
-                    should_update = True
-                    print(f"\n[build] Tag mappings are {days_old} days old, updating...")
-                else:
-                    print(f"[build] Tag mappings are current ({days_old} days old)")
-            else:
-                should_update = True
-                print("\n[build] No last update date found, updating tag mappings...")
-    except OSError:
-        pass
-
-    if should_update:
-        print("=" * 60)
-        print("Pre-build: Updating tag mappings from Romance.io")
-        print("=" * 60)
+    oldest_days = 0
+    for taxonomy_file, date_pattern in taxonomy_files:
+        try:
+            with open(taxonomy_file, "r", encoding="utf-8") as f:
+                content = f.read()
+        except OSError as error:
+            raise RuntimeError(f"Required bundled taxonomy file is unavailable: {taxonomy_file}") from error
 
         try:
-            from update_tag_mappings import update_tag_mappings
+            compile(content, taxonomy_file, "exec")
+        except SyntaxError as error:
+            raise RuntimeError(f"Bundled taxonomy file is not valid Python: {taxonomy_file}") from error
 
-            success = update_tag_mappings()
-            if not success:
-                print("Warning: Tag mapping update failed, but continuing with build")
-        except (ImportError, OSError, RuntimeError) as e:
-            print(f"Warning: Could not update tag mappings: {e}")
-            print("Continuing with build using existing mappings...")
+        match = re.search(date_pattern, content)
+        if not match:
+            raise RuntimeError(f"No last-update date found in bundled taxonomy file: {taxonomy_file}")
+        last_update = datetime.strptime(match.group(1), "%Y-%m-%d")
+        oldest_days = max(oldest_days, (datetime.now() - last_update).days)
 
-        print("=" * 60)
-        print()
+    if oldest_days > 30:
+        print(
+            f"[build] Bundled tag taxonomy is {oldest_days} days old. "
+            "Run python common/update_tag_mappings.py separately and review its changes."
+        )
+    else:
+        print(f"[build] Bundled tag taxonomy validated ({oldest_days} days old)")

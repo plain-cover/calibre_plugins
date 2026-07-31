@@ -3,9 +3,12 @@ JSON parsing functions specific to the romanceio_fields plugin.
 This plugin needs: steam_rating, star_rating, rating_count, tags.
 """
 
-from typing import Dict, Any
+from typing import Any, Dict
 
-from calibre_plugins.romanceio_fields.common_romanceio_tag_mappings import convert_json_tags_to_display_names  # type: ignore[import-not-found]  # pylint: disable=import-error
+from calibre_plugins.romanceio_fields.common_romanceio_tag_mappings import (  # type: ignore[import-not-found]  # pylint: disable=import-error
+    categorize_json_tags,
+    convert_json_tags_to_display_names,
+)
 
 
 def parse_fields_from_json(book_json: Dict[str, Any]) -> Dict[str, Any]:
@@ -20,6 +23,8 @@ def parse_fields_from_json(book_json: Dict[str, Any]) -> Dict[str, Any]:
         - star_rating: Star rating (0-5 float) or None
         - rating_count: Number of ratings (int) or None
         - tags: List of tag strings
+        - general_tags, content_warnings, geography_tags, format_tags:
+          Category copies derived from the bundled Romance.io taxonomy
     """
     info = book_json.get("info", {})
 
@@ -41,11 +46,14 @@ def parse_fields_from_json(book_json: Dict[str, Any]) -> Dict[str, Any]:
     if rating_count == 0:
         star_rating = None
 
-    converted_tags = convert_json_tags_to_display_names(book_json.get("tropes", []))
+    raw_tags = book_json.get("tropes", [])
+    converted_tags = convert_json_tags_to_display_names(raw_tags)
+    categorized_tags = categorize_json_tags(raw_tags)
 
     return {
         "steam_rating": steam_rating,
         "star_rating": star_rating,
         "rating_count": rating_count,
         "tags": converted_tags,
+        **categorized_tags,
     }

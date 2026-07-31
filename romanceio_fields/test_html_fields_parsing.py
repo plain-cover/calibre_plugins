@@ -20,13 +20,13 @@ romanceio_fields = types.ModuleType("romanceio_fields")
 romanceio_fields.__path__ = [plugin_dir]
 sys.modules["romanceio_fields"] = romanceio_fields
 
-# Load config and parse_html modules using helper
-config_module = load_plugin_module("romanceio_fields.config", "config.py", plugin_dir)
+# Load the parser without importing the Qt-dependent plugin configuration.
 parse_html = load_plugin_module("romanceio_fields.parse_html", "parse_html.py", plugin_dir)
 
 parse_steam_rating = parse_html.parse_steam_rating
 parse_star_rating = parse_html.parse_star_rating
 parse_rating_count = parse_html.parse_rating_count
+parse_tag_categories_from_html = parse_html.parse_tag_categories_from_html
 parse_tags_from_js_html = parse_html.parse_tags_from_js_html
 
 
@@ -108,6 +108,43 @@ def verify_tags(root: HtmlElement, expected_count: Optional[int], expected_tags:
     print(f"✓ Found {len(tags)} tags with all expected tags present")
 
 
+def verify_tag_categories(root: HtmlElement, book_data: StaticTestBook) -> None:
+    """Verify category extraction and the unchanged legacy combined output."""
+    categories = parse_tag_categories_from_html(root)
+    assert set(categories) == {
+        "general_tags",
+        "content_warnings",
+        "geography_tags",
+        "format_tags",
+    }
+
+    expected_combined = (
+        categories["general_tags"]
+        + categories["geography_tags"]
+        + categories["content_warnings"]
+        + categories["format_tags"]
+    )
+    assert parse_tags_from_js_html(root) == expected_combined, "Categorization changed the combined tag output"
+
+    if book_data.romanceio_id == "5484ecd47a5936fb0405756c":
+        assert "historical" in categories["general_tags"]
+        assert "england" in categories["geography_tags"]
+        assert "third person pov" in categories["format_tags"]
+    elif book_data.romanceio_id == "65b604fa00d361e53f20ecfb":
+        assert "fake relationship" in categories["general_tags"]
+        assert "past child abuse" in categories["content_warnings"]
+        assert "michigan" in categories["geography_tags"]
+        assert "first person pov" in categories["format_tags"]
+
+    print(
+        "Categories: "
+        f"general={len(categories['general_tags'])}, "
+        f"warnings={len(categories['content_warnings'])}, "
+        f"geography={len(categories['geography_tags'])}, "
+        f"format={len(categories['format_tags'])}"
+    )
+
+
 def verify_max_tags(root: HtmlElement) -> None:
     """Verify that max_tags limiting works correctly."""
     # Simulate what happens in get_romanceio_fields_for_book
@@ -129,6 +166,7 @@ def test_parse_book(book_data: StaticTestBook) -> None:
     def test_logic(root: HtmlElement) -> None:
         verify_common_fields(root, expected_steam=book_data.steam_rating)
         verify_tags(root, expected_count=book_data.expected_tag_count, expected_tags=book_data.sample_tags)
+        verify_tag_categories(root, book_data)
         verify_max_tags(root)
 
     run_test(book_data.name, book_data.html_filename, test_logic)

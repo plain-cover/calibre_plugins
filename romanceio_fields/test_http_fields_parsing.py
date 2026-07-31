@@ -6,15 +6,15 @@ rendered HTML without Chrome. This file verifies:
 1. parse_tags_from_description() - extracts tags from the <meta name="description">
    attribute; these match the JSON API 'tropes' field exactly.
 2. parse_fields_from_ssr_html() - combines book-stats-based rating parsers (same as
-   Chrome) with description-based tag parsing.
+   Chrome) with description-based combined tags and embedded categorized tags.
 3. SSR vs JSON API parity - tags from SSR == tags from JSON API (same underlying source).
 4. SSR vs Chrome comparison - ratings are identical; SSR tags are a subset of Chrome tags.
 
 Static HTML test data files were captured via Chrome and contain BOTH:
   - The <meta name="description"> SSR content (server-side, same as plain HTTP response)
-  - The JS-rendered tagged-topic elements (Chrome-only)
+  - The server-provided tagged_topics category data and rendered tagged-topic elements
 This makes them the correct ground truth for SSR tests: the description text is SSR,
-and the tagged-topic count gives the Chrome upper bound.
+the embedded object preserves categories, and the rendered count gives the Chrome upper bound.
 
 To run:
     calibre-debug -e test_http_fields_parsing.py
@@ -57,6 +57,8 @@ parse_html_module = load_plugin_module("romanceio_fields.parse_html", "parse_htm
 parse_json_module = load_plugin_module("romanceio_fields.parse_json", "parse_json.py", plugin_dir)
 
 parse_tags_from_description = parse_html_module.parse_tags_from_description
+parse_tag_categories_from_html = parse_html_module.parse_tag_categories_from_html
+has_tag_category_data = parse_html_module.has_tag_category_data
 parse_fields_from_ssr_html = parse_html_module.parse_fields_from_ssr_html
 parse_tags_from_js_html = parse_html_module.parse_tags_from_js_html
 parse_steam_rating = parse_html_module.parse_steam_rating
@@ -210,7 +212,16 @@ def _test_ssr_returns_dict(book: StaticTestBook) -> None:
     root = _load_html(book.html_filename)
     result = parse_fields_from_ssr_html(root)
     assert isinstance(result, dict), f"Expected dict, got {type(result)}"
-    required_keys = {"steam_rating", "star_rating", "rating_count", "tags"}
+    required_keys = {
+        "steam_rating",
+        "star_rating",
+        "rating_count",
+        "tags",
+        "general_tags",
+        "content_warnings",
+        "geography_tags",
+        "format_tags",
+    }
     assert required_keys.issubset(result.keys()), f"Missing keys: {required_keys - result.keys()}"
 
 
@@ -313,6 +324,8 @@ def _test_ssr_max_tags_limiting(book: StaticTestBook) -> None:
     assert len(result_1["tags"]) == 1, f"Expected 1 tag, got {len(result_1['tags'])}"
     # Order should be stable and consistent with unlimited
     assert result_5["tags"] == all_tags[:5], "max_tags slicing should preserve order from front"
+    for key in ("general_tags", "content_warnings", "geography_tags", "format_tags"):
+        assert result_1[key] == result_10[key], f"max_tags must not truncate optional {key}"
 
 
 def _test_ssr_no_steam_text_in_tags(book: StaticTestBook) -> None:
@@ -349,6 +362,34 @@ def _test_ssr_tags_are_strings(book: StaticTestBook) -> None:
     ssr = parse_fields_from_ssr_html(root)
     for tag in ssr["tags"]:
         assert isinstance(tag, str) and tag, f"Tag should be non-empty string, got {tag!r}"
+
+
+def _test_ssr_categories_cover_combined_tags(book: StaticTestBook) -> None:
+    """Complete categories must cover every untruncated legacy combined tag."""
+    root = _load_html(book.html_filename)
+    result = parse_fields_from_ssr_html(root, max_tags=1000)
+    categorized_tags = set().union(
+        result["general_tags"],
+        result["content_warnings"],
+        result["geography_tags"],
+        result["format_tags"],
+    )
+    assert set(result["tags"]) <= categorized_tags, (
+        f"Combined tags missing from category columns: " f"{set(result['tags']) - categorized_tags}"
+    )
+
+
+def _test_ssr_categories_include_page_categories(book: StaticTestBook) -> None:
+    """SSR categories preserve page groups before appending taxonomy fallbacks."""
+    root = _load_html(book.html_filename)
+    ssr_fields = parse_fields_from_ssr_html(root, max_tags=1000)
+    page_categories = parse_tag_categories_from_html(root)
+    for key in ("general_tags", "content_warnings", "geography_tags", "format_tags"):
+        page_values = page_categories[key]
+        assert ssr_fields[key][: len(page_values)] == page_values, f"{key} does not preserve the page category group"
+
+    if book.romanceio_id == "5484ecd47a5936fb0405756c":
+        assert "Long: 400-599" in ssr_fields["format_tags"]
 
 
 def _load_local_html(filename: str) -> HtmlElement:
@@ -409,6 +450,120 @@ def _test_edge_description_whitespace_slugs() -> None:
     ), f"Tags contain whitespace or empty strings: {result!r}"
 
 
+def _test_edge_embedded_categories_without_rendered_lists() -> None:
+    """The lightweight path can classify tags from tagged_topics without rendered lists."""
+    root = fromstring(
+        "<html><body><script>"
+        'var tagged_topics = {"list":[{"title":"slow burn"}],'
+        '"content warnings":[{"title":"grief"}],'
+        '"geography":[{"title":"england"}],'
+        '"Format":[{"title":"dual pov"}]};'
+        "</script></body></html>"
+    )
+    assert has_tag_category_data(root)
+    categories = parse_tag_categories_from_html(root)
+    assert categories == {
+        "general_tags": ["slow burn"],
+        "content_warnings": ["grief"],
+        "geography_tags": ["england"],
+        "format_tags": ["dual pov"],
+    }
+
+
+def _test_edge_embedded_parser_handles_delimiters_and_invalid_values() -> None:
+    """Embedded JSON parsing is not confused by delimiters inside tag titles."""
+    root = fromstring(
+        "<html><body><script>"
+        'var tagged_topics = {"list":['
+        '{"title":"contains }; delimiter"},{"title":"   "},{"title":123}],'
+        '"content warnings":[],"geography":[],"Format":[]};'
+        "</script></body></html>"
+    )
+    categories = parse_tag_categories_from_html(root)
+    assert categories["general_tags"] == ["contains }; delimiter"]
+
+    rendered_root = fromstring(
+        '<html><body><ul id="valid-topics-list">'
+        '<li class="tagged-topic"><a class="topic">   </a></li>'
+        '<li class="tagged-topic"><a class="topic"> slow burn </a></li>'
+        "</ul></body></html>"
+    )
+    rendered_categories = parse_tag_categories_from_html(rendered_root)
+    assert rendered_categories["general_tags"] == ["slow burn"]
+
+
+def _test_edge_empty_embedded_categories_fall_back_to_description() -> None:
+    """An empty initialization object must not suppress description categorization."""
+    root = fromstring(
+        "<html><head>"
+        '<meta name="description" content="\'A Book\' is tagged as slow burn, death, england.">'
+        "</head><body><script>var tagged_topics = {};</script></body></html>"
+    )
+    fields = parse_fields_from_ssr_html(root)
+    categorized = set().union(
+        fields["general_tags"],
+        fields["content_warnings"],
+        fields["geography_tags"],
+        fields["format_tags"],
+    )
+    assert set(fields["tags"]) <= categorized
+    assert "slow burn" in fields["general_tags"]
+    assert "death / grief" in fields["content_warnings"]
+    assert "england" in fields["geography_tags"]
+
+
+def _test_edge_partial_categories_merge_description_fallback() -> None:
+    """A populated general group must not suppress a missing format fallback."""
+    root = fromstring(
+        "<html><head>"
+        '<meta name="description" content="\'A Book\' is tagged as slow burn, length-short.">'
+        "</head><body><script>"
+        'var tagged_topics = {"list":[{"title":"slow burn"}],'
+        '"content warnings":[],"geography":[],"Format":[]};'
+        "</script></body></html>"
+    )
+
+    fields = parse_fields_from_ssr_html(root)
+
+    assert fields["general_tags"] == ["slow burn"]
+    assert fields["format_tags"] == ["Short: 150-249"]
+
+
+def _test_ssr_category_columns_match_visible_page_groups() -> None:
+    """SSR category copies use page groups without changing combined tags."""
+    root = fromstring(
+        "<html><head>"
+        '<meta name="description" content="\'A Book\' is tagged as slow burn.">'
+        "</head><body>"
+        '<ul id="valid-topics-list">'
+        '<li class="tagged-topic"><a class="topic">slow burn</a></li>'
+        '<li class="tagged-topic"><a class="topic">community favorite</a></li>'
+        "</ul>"
+        "<script>"
+        'var tagged_topics = {"list":['
+        '{"title":"slow burn"},{"title":"community favorite"}],'
+        '"content warnings":[],"geography":[],"Format":[]};'
+        "</script></body></html>"
+    )
+
+    fields = parse_fields_from_ssr_html(root)
+
+    assert fields["tags"] == ["slow burn"]
+    assert fields["general_tags"] == ["slow burn", "community favorite"]
+
+
+def _test_edge_format_category_order_is_stable() -> None:
+    """Overlapping rendered selectors must deduplicate without reordering tags."""
+    root = fromstring(
+        '<html><body><ul id="valid-topics-Format">'
+        '<li class="tagged-topic"><a class="topic">audiobook</a></li>'
+        '<li class="tagged-topic"><a class="topic">dual pov</a></li>'
+        "</ul></body></html>"
+    )
+    categories = parse_tag_categories_from_html(root)
+    assert categories["format_tags"] == ["audiobook", "dual pov"]
+
+
 # ---------------------------------------------------------------------------
 # parse_fields_from_ssr_html edge case tests (using local test_data/ files)
 # ---------------------------------------------------------------------------
@@ -455,6 +610,21 @@ def run_edge_case_tests() -> None:
     _run("description without 'is tagged as' -> []", _test_edge_description_without_tagged_as)
     _run("description with single slug -> 1 tag", _test_edge_description_single_slug)
     _run("description with padded whitespace -> stripped tags", _test_edge_description_whitespace_slugs)
+    _run("embedded tagged_topics -> categorized tags", _test_edge_embedded_categories_without_rendered_lists)
+    _run(
+        "embedded parser handles delimiters and invalid values",
+        _test_edge_embedded_parser_handles_delimiters_and_invalid_values,
+    )
+    _run(
+        "empty embedded categories fall back to description",
+        _test_edge_empty_embedded_categories_fall_back_to_description,
+    )
+    _run(
+        "partial categories merge description fallback",
+        _test_edge_partial_categories_merge_description_fallback,
+    )
+    _run("SSR categories mirror visible page groups", _test_ssr_category_columns_match_visible_page_groups)
+    _run("format tags retain rendered order", _test_edge_format_category_order_is_stable)
     _run("no-ratings page: star_rating is None", _test_edge_no_ratings_star_is_none)
     _run("no-ratings page: rating_count is 0", _test_edge_no_ratings_count_is_zero)
     _run("no-ratings page: tags still returned from description", _test_edge_no_ratings_tags_still_work)
@@ -502,6 +672,14 @@ def run_all_tests() -> None:
         _run(f"{book.name}: steam in range 1-5 or None", lambda b=book: _test_ssr_valid_steam_range(b))
         _run(f"{book.name}: star in range 0-5 or None", lambda b=book: _test_ssr_valid_star_range(b))
         _run(f"{book.name}: all tags are non-empty strings", lambda b=book: _test_ssr_tags_are_strings(b))
+        _run(
+            f"{book.name}: categories cover combined tags",
+            lambda b=book: _test_ssr_categories_cover_combined_tags(b),
+        )
+        _run(
+            f"{book.name}: SSR categories include page categories",
+            lambda b=book: _test_ssr_categories_include_page_categories(b),
+        )
 
     run_edge_case_tests()
 

@@ -3,9 +3,9 @@ Allow the user to configure the plugin.
 """
 
 import copy
-from typing import Any, Dict, List
+from typing import Any, Dict, List, TYPE_CHECKING
 
-from six import text_type as unicode
+from six import text_type as unicode  # type: ignore[import-untyped]
 
 # pylint: disable=duplicate-code  # Standard Calibre plugin import pattern
 try:
@@ -20,6 +20,7 @@ try:
         QCheckBox,
         QLineEdit,
         QHBoxLayout,
+        QScrollArea,
     )
 except ImportError:
     from PyQt5.QtCore import QUrl
@@ -33,14 +34,22 @@ except ImportError:
         QCheckBox,
         QLineEdit,
         QHBoxLayout,
+        QScrollArea,
     )
 
-from calibre.gui2 import open_url
+from calibre.gui2 import error_dialog, open_url
 from calibre.utils.config import JSONConfig
 
 from .common_dialogs import KeyboardConfigDialog, PrefsViewerDialog  # pylint: disable=import-error
 from .common_compatibility import PREFER_HTML_TOOLTIP  # pylint: disable=import-error
 from .common_widgets import CustomColumnComboBox  # pylint: disable=import-error
+
+if TYPE_CHECKING:
+
+    def _(text: str) -> str:
+        """Type-checking declaration for Calibre's runtime translation function."""
+        return text
+
 
 # Pull in translation files for _() strings
 try:
@@ -58,6 +67,10 @@ PREFS_KEY_SETTINGS = "settings"
 
 KEY_STEAM_CUSTOM_COLUMN = "customColumnSteam"
 KEY_TAGS_CUSTOM_COLUMN = "customColumnRomanceTags"
+KEY_GENERAL_TAGS_CUSTOM_COLUMN = "customColumnGeneralTags"
+KEY_CONTENT_WARNINGS_CUSTOM_COLUMN = "customColumnContentWarnings"
+KEY_GEOGRAPHY_CUSTOM_COLUMN = "customColumnGeography"
+KEY_FORMAT_TAGS_CUSTOM_COLUMN = "customColumnFormatTags"
 KEY_STAR_RATING_CUSTOM_COLUMN = "customColumnStarRating"
 KEY_RATING_COUNT_CUSTOM_COLUMN = "customColumnRatingCount"
 KEY_ADD_STEAM_TO_TAGS = "addSteamToTags"
@@ -71,14 +84,29 @@ KEY_PREFER_HTML = "preferHtmlParsing"
 
 FIELD_STEAM_RATING = "SteamRating"
 FIELD_ROMANCE_TAGS = "RomanceTags"
+FIELD_GENERAL_TAGS = "GeneralTags"
+FIELD_CONTENT_WARNINGS = "ContentWarnings"
+FIELD_GEOGRAPHY = "GeographyTags"
+FIELD_FORMAT_TAGS = "FormatTags"
 FIELD_STAR_RATING = "StarRating"
 FIELD_RATING_COUNT = "RatingCount"
 ALL_FIELDS: Dict[str, str] = {
     FIELD_STEAM_RATING: KEY_STEAM_CUSTOM_COLUMN,
     FIELD_ROMANCE_TAGS: KEY_TAGS_CUSTOM_COLUMN,
+    FIELD_GENERAL_TAGS: KEY_GENERAL_TAGS_CUSTOM_COLUMN,
+    FIELD_CONTENT_WARNINGS: KEY_CONTENT_WARNINGS_CUSTOM_COLUMN,
+    FIELD_GEOGRAPHY: KEY_GEOGRAPHY_CUSTOM_COLUMN,
+    FIELD_FORMAT_TAGS: KEY_FORMAT_TAGS_CUSTOM_COLUMN,
     FIELD_STAR_RATING: KEY_STAR_RATING_CUSTOM_COLUMN,
     FIELD_RATING_COUNT: KEY_RATING_COUNT_CUSTOM_COLUMN,
 }
+CATEGORY_FIELD_TO_PARSED_KEY = {
+    FIELD_GENERAL_TAGS: "general_tags",
+    FIELD_CONTENT_WARNINGS: "content_warnings",
+    FIELD_GEOGRAPHY: "geography_tags",
+    FIELD_FORMAT_TAGS: "format_tags",
+}
+CATEGORY_FIELDS = frozenset(CATEGORY_FIELD_TO_PARSED_KEY)
 
 DEFAULT_STORE_VALUES = {
     KEY_ASK_FOR_CONFIRMATION: False,
@@ -89,6 +117,10 @@ DEFAULT_LIBRARY_VALUES: Dict[str, Any] = {
     KEY_MAX_TAGS: 50,
     KEY_STEAM_CUSTOM_COLUMN: "",
     KEY_TAGS_CUSTOM_COLUMN: "",
+    KEY_GENERAL_TAGS_CUSTOM_COLUMN: "",
+    KEY_CONTENT_WARNINGS_CUSTOM_COLUMN: "",
+    KEY_GEOGRAPHY_CUSTOM_COLUMN: "",
+    KEY_FORMAT_TAGS_CUSTOM_COLUMN: "",
     KEY_STAR_RATING_CUSTOM_COLUMN: "",
     KEY_RATING_COUNT_CUSTOM_COLUMN: "",
     KEY_ADD_STEAM_TO_TAGS: False,
@@ -101,13 +133,22 @@ PLUGIN_ICONS: List[str] = [
 ]
 
 KEY_SCHEMA_VERSION = "SchemaVersion"
-DEFAULT_SCHEMA_VERSION = 1.62
+DEFAULT_SCHEMA_VERSION = 1.63
 
 
 # This is where all preferences for this plugin will be stored
 plugin_prefs = JSONConfig("plugins/RomanceIOFields")
 
 plugin_prefs.defaults[STORE_NAME] = DEFAULT_STORE_VALUES
+
+
+def find_duplicate_column_mappings(field_to_column: Dict[str, str]) -> Dict[str, List[str]]:
+    """Return destination columns selected by more than one plugin field."""
+    fields_by_column: Dict[str, List[str]] = {}
+    for field, column in field_to_column.items():
+        if column:
+            fields_by_column.setdefault(column, []).append(field)
+    return {column: fields for column, fields in fields_by_column.items() if len(fields) > 1}
 
 
 def migrate_library_config_if_required(db, library_config):
@@ -122,6 +163,12 @@ def migrate_library_config_if_required(db, library_config):
         if "customColumn" in library_config:
             library_config[KEY_STEAM_CUSTOM_COLUMN] = library_config["customColumn"]
             del library_config["customColumn"]
+
+    if schema_version < 1.63:
+        library_config.setdefault(KEY_GENERAL_TAGS_CUSTOM_COLUMN, "")
+        library_config.setdefault(KEY_CONTENT_WARNINGS_CUSTOM_COLUMN, "")
+        library_config.setdefault(KEY_GEOGRAPHY_CUSTOM_COLUMN, "")
+        library_config.setdefault(KEY_FORMAT_TAGS_CUSTOM_COLUMN, "")
 
     set_library_config(db, library_config)
 
@@ -165,7 +212,60 @@ class ConfigWidget(QWidget):
         self.setLayout(layout)
 
         self.setup_tab = SetupTab(self)
-        layout.addWidget(self.setup_tab)
+        scroll_area = QScrollArea(self)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setWidget(self.setup_tab)
+        layout.addWidget(scroll_area)
+
+    def _selected_columns(self) -> Dict[str, str]:
+        """Return the current field-to-column selections from the form."""
+
+        def selected_column(combo: Any) -> str:
+            value = combo.get_selected_column()
+            return value if isinstance(value, str) else ""
+
+        return {
+            FIELD_STEAM_RATING: selected_column(self.setup_tab.steam_column_combo),
+            FIELD_ROMANCE_TAGS: selected_column(self.setup_tab.tags_column_combo),
+            FIELD_GENERAL_TAGS: selected_column(self.setup_tab.general_tags_column_combo),
+            FIELD_CONTENT_WARNINGS: selected_column(self.setup_tab.content_warnings_column_combo),
+            FIELD_GEOGRAPHY: selected_column(self.setup_tab.geography_column_combo),
+            FIELD_FORMAT_TAGS: selected_column(self.setup_tab.format_tags_column_combo),
+            FIELD_STAR_RATING: selected_column(self.setup_tab.star_rating_column_combo),
+            FIELD_RATING_COUNT: selected_column(self.setup_tab.rating_count_column_combo),
+        }
+
+    def validate(self):
+        """Prevent two downloaded values from silently overwriting one column."""
+        duplicate_columns = find_duplicate_column_mappings(self._selected_columns())
+        if not duplicate_columns:
+            return True
+
+        field_labels = {
+            FIELD_STEAM_RATING: _("Steam rating"),  # type: ignore[name-defined]  # pylint: disable=undefined-variable
+            FIELD_ROMANCE_TAGS: _("All tags (combined)"),  # type: ignore[name-defined]  # pylint: disable=undefined-variable
+            FIELD_GENERAL_TAGS: _("General tags"),  # type: ignore[name-defined]  # pylint: disable=undefined-variable
+            FIELD_CONTENT_WARNINGS: _("Content warnings"),  # type: ignore[name-defined]  # pylint: disable=undefined-variable
+            FIELD_GEOGRAPHY: _("Geography"),  # type: ignore[name-defined]  # pylint: disable=undefined-variable
+            FIELD_FORMAT_TAGS: _("Format tags"),  # type: ignore[name-defined]  # pylint: disable=undefined-variable
+            FIELD_STAR_RATING: _("Star rating"),  # type: ignore[name-defined]  # pylint: disable=undefined-variable
+            FIELD_RATING_COUNT: _("Rating count"),  # type: ignore[name-defined]  # pylint: disable=undefined-variable
+        }
+        details = "\n".join(
+            f"{column}: {', '.join(field_labels[field] for field in fields)}"
+            for column, fields in sorted(duplicate_columns.items())
+        )
+        error_dialog(
+            self,
+            _("Duplicate custom columns"),  # type: ignore[name-defined]  # pylint: disable=undefined-variable
+            _(  # type: ignore[name-defined]  # pylint: disable=undefined-variable
+                "Each Romance.io field must use a different custom column. "
+                "Choose a different column for the following selections:\n\n"
+            )
+            + details,
+            show=True,
+        )
+        return False
 
     def save_settings(self):
         new_prefs = {}
@@ -185,10 +285,9 @@ class ConfigWidget(QWidget):
             raise ValueError(_(f"Invalid maximum number of tags specified: {max_tags_str}")) from exc  # type: ignore # pylint: disable=undefined-variable
         library_config[KEY_MAX_TAGS] = max_tags
 
-        library_config[KEY_STEAM_CUSTOM_COLUMN] = self.setup_tab.steam_column_combo.get_selected_column()
-        library_config[KEY_TAGS_CUSTOM_COLUMN] = self.setup_tab.tags_column_combo.get_selected_column()
-        library_config[KEY_STAR_RATING_CUSTOM_COLUMN] = self.setup_tab.star_rating_column_combo.get_selected_column()
-        library_config[KEY_RATING_COUNT_CUSTOM_COLUMN] = self.setup_tab.rating_count_column_combo.get_selected_column()
+        selected_columns = self._selected_columns()
+        for field, preference_key in ALL_FIELDS.items():
+            library_config[preference_key] = selected_columns[field]
         library_config[KEY_ADD_STEAM_TO_TAGS] = self.setup_tab.add_steam_to_tags_checkbox.isChecked()
         library_config[KEY_ADD_STAR_RATING_TO_TAGS] = self.setup_tab.add_star_rating_to_tags_checkbox.isChecked()
         set_library_config(db, library_config)
@@ -362,10 +461,17 @@ class SetupTab(QWidget):
         tags_group_box_layout = QGridLayout()
         tags_group_box.setLayout(tags_group_box_layout)
 
-        tags_column_label = QLabel(_("&Tags column:"), self)  # type: ignore # pylint: disable=undefined-variable
+        tags_column_label = QLabel(
+            _("All &tags column (combined):"),  # type: ignore # pylint: disable=undefined-variable
+            self,
+        )
         tool_tip = _(  # type: ignore # pylint: disable=undefined-variable
             'Choose a custom column you have created with the type "Comma separated text".\n'
-            "Leave this blank if you do not want to download tags from Romance.io."
+            "Stores every Romance.io tag group together without category prefixes, including\n"
+            "general tags, content warnings, geography, and format. For example, a book might\n"
+            "include 'slow burn', 'past child abuse', 'michigan', and 'first person pov'.\n"
+            "This preserves the existing behavior; category columns below are additional copies.\n"
+            "Leave this blank if you do not want the combined tag list."
         )
         tags_column_label.setToolTip(tool_tip)
         tags_col = library_config.get(KEY_TAGS_CUSTOM_COLUMN, "")
@@ -376,18 +482,98 @@ class SetupTab(QWidget):
         tags_group_box_layout.addWidget(tags_column_label, 0, 0, 1, 1)
         tags_group_box_layout.addWidget(self.tags_column_combo, 0, 1, 1, 3)
 
-        self.max_tags_label = QLabel(_("Ma&ximum tags to download:"), self)  # type: ignore # pylint: disable=undefined-variable
+        self.max_tags_label = QLabel(
+            _("Ma&ximum combined tags:"),  # type: ignore # pylint: disable=undefined-variable
+            self,
+        )
         tool_tip = _(  # type: ignore # pylint: disable=undefined-variable
-            "Specify the maximum number of tags to\n"
-            "download (e.g. the top 10 most upvoted).\n"
-            "Leaving this blank will download all tags."
+            "Specify the maximum number of tags written to the combined tags column\n"
+            "(e.g. keep the first 10 tags returned by Romance.io).\n"
+            "Optional category columns always receive their complete matching groups."
         )
         self.max_tags_label.setToolTip(tool_tip)
         self.max_tags_ledit = QLineEdit(str(max_tags), self)
         self.max_tags_ledit.setToolTip(tool_tip)
         self.max_tags_label.setBuddy(self.max_tags_ledit)
-        tags_group_box_layout.addWidget(self.max_tags_label, 1, 0, 1, 1)
-        tags_group_box_layout.addWidget(self.max_tags_ledit, 1, 1, 1, 3)
+        max_tags_layout = QHBoxLayout()
+        max_tags_layout.setContentsMargins(20, 0, 0, 0)
+        max_tags_layout.addWidget(self.max_tags_label)
+        max_tags_layout.addWidget(self.max_tags_ledit)
+        max_tags_layout.addStretch(1)
+        tags_group_box_layout.addLayout(max_tags_layout, 1, 0, 1, 4)
+
+        general_tags_column_label = QLabel(
+            _("General tags c&olumn:"),  # type: ignore # pylint: disable=undefined-variable
+            self,
+        )
+        general_tags_tool_tip = _(  # type: ignore # pylint: disable=undefined-variable
+            'Choose an optional custom column with the type "Comma separated text".\n'
+            "General tags are Romance.io's ordinary book descriptors, such as\n"
+            "'enemies to lovers', 'slow burn', or 'small town'. They exclude content\n"
+            "warnings, geography, and format tags. This is an additional copy and\n"
+            "does not change the combined tags column."
+        )
+        general_tags_column_label.setToolTip(general_tags_tool_tip)
+        general_tags_col = library_config.get(KEY_GENERAL_TAGS_CUSTOM_COLUMN, "")
+        self.general_tags_column_combo = CustomColumnComboBox(self, avail_tag_columns, general_tags_col)
+        self.general_tags_column_combo.setToolTip(general_tags_tool_tip)
+        general_tags_column_label.setBuddy(self.general_tags_column_combo)
+        tags_group_box_layout.addWidget(general_tags_column_label, 2, 0, 1, 1)
+        tags_group_box_layout.addWidget(self.general_tags_column_combo, 2, 1, 1, 3)
+
+        content_warnings_column_label = QLabel(
+            _("Content &warnings column:"),  # type: ignore # pylint: disable=undefined-variable
+            self,
+        )
+        content_warnings_tool_tip = _(  # type: ignore # pylint: disable=undefined-variable
+            'Choose an optional custom column with the type "Comma separated text".\n'
+            "Content warnings describe potentially sensitive material, such as 'past child\n"
+            "abuse', 'mental trauma', or 'gambling'. This is an additional copy and does not\n"
+            "change the combined tags column."
+        )
+        content_warnings_column_label.setToolTip(content_warnings_tool_tip)
+        content_warnings_col = library_config.get(KEY_CONTENT_WARNINGS_CUSTOM_COLUMN, "")
+        self.content_warnings_column_combo = CustomColumnComboBox(self, avail_tag_columns, content_warnings_col)
+        self.content_warnings_column_combo.setToolTip(content_warnings_tool_tip)
+        content_warnings_column_label.setBuddy(self.content_warnings_column_combo)
+        tags_group_box_layout.addWidget(content_warnings_column_label, 3, 0, 1, 1)
+        tags_group_box_layout.addWidget(self.content_warnings_column_combo, 3, 1, 1, 3)
+
+        geography_column_label = QLabel(
+            _("Geograph&y column:"),  # type: ignore # pylint: disable=undefined-variable
+            self,
+        )
+        geography_tool_tip = _(  # type: ignore # pylint: disable=undefined-variable
+            'Choose an optional custom column with the type "Comma separated text".\n'
+            "Geography tags describe where a story takes place, such as 'michigan', 'usa',\n"
+            "or 'england'. This is an additional copy and does not change the combined tags column."
+        )
+        geography_column_label.setToolTip(geography_tool_tip)
+        geography_col = library_config.get(KEY_GEOGRAPHY_CUSTOM_COLUMN, "")
+        self.geography_column_combo = CustomColumnComboBox(self, avail_tag_columns, geography_col)
+        self.geography_column_combo.setToolTip(geography_tool_tip)
+        geography_column_label.setBuddy(self.geography_column_combo)
+        tags_group_box_layout.addWidget(geography_column_label, 4, 0, 1, 1)
+        tags_group_box_layout.addWidget(self.geography_column_combo, 4, 1, 1, 3)
+
+        format_tags_column_label = QLabel(
+            _("&Format tags column:"),  # type: ignore # pylint: disable=undefined-variable
+            self,
+        )
+        format_tags_tool_tip = _(  # type: ignore # pylint: disable=undefined-variable
+            'Choose an optional custom column with the type "Comma separated text".\n'
+            "Format tags describe the book's presentation or structure, such as 'audiobook',\n"
+            "'first person pov', 'Long: 400-599', or 'standalone or first in series'. Some\n"
+            "length and series tags were historically omitted from the combined list, but are\n"
+            "retained here. This additional column does not change the combined tags column."
+        )
+        format_tags_column_label.setToolTip(format_tags_tool_tip)
+        format_tags_col = library_config.get(KEY_FORMAT_TAGS_CUSTOM_COLUMN, "")
+        self.format_tags_column_combo = CustomColumnComboBox(self, avail_tag_columns, format_tags_col)
+        self.format_tags_column_combo.setToolTip(format_tags_tool_tip)
+        format_tags_column_label.setBuddy(self.format_tags_column_combo)
+        tags_group_box_layout.addWidget(format_tags_column_label, 5, 0, 1, 1)
+        tags_group_box_layout.addWidget(self.format_tags_column_combo, 5, 1, 1, 3)
 
         # --- Star Rating ---
         layout.addSpacing(5)
