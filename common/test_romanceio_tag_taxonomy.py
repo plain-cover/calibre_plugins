@@ -54,7 +54,7 @@ def test_captured_fixture_comparison_allows_older_subset():
         bundled_topic_count=387,
         strict=False,
     )
-    assert lines == []
+    assert lines == []  # pylint: disable=use-implicit-booleaness-not-comparison
 
 
 def test_strict_live_comparison_detects_mapping_that_became_identity():

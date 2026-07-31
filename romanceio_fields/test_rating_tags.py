@@ -289,7 +289,7 @@ def test_database_bridge_applies_planned_tag_update_and_recounts():
         def model(self):
             return FakeModel()
 
-        def currentIndex(self):
+        def currentIndex(self):  # pylint: disable=invalid-name
             return FakeIndex()
 
     class FakeTagsView:
@@ -340,7 +340,9 @@ def test_database_bridge_applies_planned_tag_update_and_recounts():
     previous_translation = getattr(builtins, "_", None)
     builtins._ = lambda value: value  # type: ignore[attr-defined]
     try:
-        action_module.RomanceIOFieldsAction._update_database_columns(fake_action, payload)
+        action_module.RomanceIOFieldsAction._update_database_columns(  # pylint: disable=protected-access
+            fake_action, payload
+        )
     finally:
         if previous_translation is None:
             del builtins._  # type: ignore[attr-defined]

@@ -110,7 +110,7 @@ def test_mixed_input():
 def test_ignored_categorized_tags_stay_out_of_combined_only():
     """Legacy omissions remain omitted while optional categories are complete."""
     inputs = ["length-long", "standalone-first", "clean"]
-    assert convert_json_tags_to_display_names(inputs) == []
+    assert convert_json_tags_to_display_names(inputs) == []  # pylint: disable=use-implicit-booleaness-not-comparison
 
     categories = categorize_json_tags(inputs)
     assert categories["format_tags"] == [
@@ -123,6 +123,7 @@ def test_ignored_categorized_tags_stay_out_of_combined_only():
 
 def test_structural_page_count_control_is_not_a_tag():
     """Romance.io's internal page-count key must not reach any tag column."""
+    # pylint: disable-next=use-implicit-booleaness-not-comparison
     assert convert_json_tags_to_display_names(["undefined"]) == []
     categories = categorize_json_tags(["undefined"])
     assert all(not values for values in categories.values())

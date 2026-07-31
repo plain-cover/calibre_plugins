@@ -379,13 +379,17 @@ def _test_ssr_categories_cover_combined_tags(book: StaticTestBook) -> None:
     )
 
 
-def _test_ssr_categories_match_page_categories(book: StaticTestBook) -> None:
-    """SSR category columns must mirror Romance.io's visible page groups."""
+def _test_ssr_categories_include_page_categories(book: StaticTestBook) -> None:
+    """SSR categories preserve page groups before appending taxonomy fallbacks."""
     root = _load_html(book.html_filename)
     ssr_fields = parse_fields_from_ssr_html(root, max_tags=1000)
     page_categories = parse_tag_categories_from_html(root)
     for key in ("general_tags", "content_warnings", "geography_tags", "format_tags"):
-        assert ssr_fields[key] == page_categories[key], f"{key} differs from the page category group"
+        page_values = page_categories[key]
+        assert ssr_fields[key][: len(page_values)] == page_values, f"{key} does not preserve the page category group"
+
+    if book.romanceio_id == "5484ecd47a5936fb0405756c":
+        assert "Long: 400-599" in ssr_fields["format_tags"]
 
 
 def _load_local_html(filename: str) -> HtmlElement:
@@ -492,7 +496,7 @@ def _test_edge_empty_embedded_categories_fall_back_to_description() -> None:
     """An empty initialization object must not suppress description categorization."""
     root = fromstring(
         "<html><head>"
-        '<meta name="description" content="\'A Book\' is tagged as slow burn, grief, england.">'
+        '<meta name="description" content="\'A Book\' is tagged as slow burn, death, england.">'
         "</head><body><script>var tagged_topics = {};</script></body></html>"
     )
     fields = parse_fields_from_ssr_html(root)
@@ -504,7 +508,7 @@ def _test_edge_empty_embedded_categories_fall_back_to_description() -> None:
     )
     assert set(fields["tags"]) <= categorized
     assert "slow burn" in fields["general_tags"]
-    assert "grief" in fields["content_warnings"]
+    assert "death / grief" in fields["content_warnings"]
     assert "england" in fields["geography_tags"]
 
 
@@ -673,8 +677,8 @@ def run_all_tests() -> None:
             lambda b=book: _test_ssr_categories_cover_combined_tags(b),
         )
         _run(
-            f"{book.name}: SSR categories match page categories",
-            lambda b=book: _test_ssr_categories_match_page_categories(b),
+            f"{book.name}: SSR categories include page categories",
+            lambda b=book: _test_ssr_categories_include_page_categories(b),
         )
 
     run_edge_case_tests()

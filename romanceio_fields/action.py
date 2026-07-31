@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 
     def _(text: str) -> str:
         """Type-checking declaration for Calibre's runtime translation function."""
-        ...
+        return text
 
 else:
     try:

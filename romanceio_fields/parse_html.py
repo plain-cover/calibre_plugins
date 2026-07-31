@@ -77,6 +77,25 @@ def parse_rating_count(root: HtmlElement) -> Optional[int]:
     return None
 
 
+def _extract_embedded_tag_group(tagged_topics: Dict[str, Any], source_key: str) -> List[str]:
+    """Extract and normalize one group from Romance.io's ``tagged_topics`` object."""
+    values: List[str] = []
+    group = tagged_topics.get(source_key, [])
+    if not isinstance(group, list):
+        return values
+    for item in group:
+        if isinstance(item, dict):
+            value = item.get("title") or item.get("topic")
+        else:
+            value = item
+        if not isinstance(value, str):
+            continue
+        value = value.strip()
+        if value:
+            values.append(value)
+    return values
+
+
 def _parse_embedded_tag_categories(root: HtmlElement) -> Optional[Dict[str, List[str]]]:
     """Parse Romance.io's server-provided ``tagged_topics`` JavaScript object."""
     for script_text in root.xpath("//script/text()"):
@@ -90,28 +109,11 @@ def _parse_embedded_tag_categories(root: HtmlElement) -> Optional[Dict[str, List
         if not isinstance(tagged_topics, dict):
             continue
 
-        def extract_group(source_key: str) -> List[str]:
-            values: List[str] = []
-            group = tagged_topics.get(source_key, [])
-            if not isinstance(group, list):
-                return values
-            for item in group:
-                if isinstance(item, dict):
-                    value = item.get("title") or item.get("topic")
-                else:
-                    value = item
-                if not isinstance(value, str):
-                    continue
-                value = value.strip()
-                if value:
-                    values.append(value)
-            return values
-
         return {
-            "general_tags": extract_group("list"),
-            "content_warnings": extract_group("content warnings"),
-            "geography_tags": extract_group("geography"),
-            "format_tags": extract_group("Format"),
+            "general_tags": _extract_embedded_tag_group(tagged_topics, "list"),
+            "content_warnings": _extract_embedded_tag_group(tagged_topics, "content warnings"),
+            "geography_tags": _extract_embedded_tag_group(tagged_topics, "geography"),
+            "format_tags": _extract_embedded_tag_group(tagged_topics, "Format"),
         }
     return None
 
