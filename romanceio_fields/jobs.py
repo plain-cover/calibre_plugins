@@ -325,7 +325,9 @@ def get_romanceio_fields_for_book(
             result = fetch_details_with_fallback(
                 romanceio_id=romanceio_id,
                 json_fetch_func=_fetch_json,
-                lightweight_html_fetch_func=_fetch_html_lightweight,
+                lightweight_html_fetch_func=lambda book_id, log_func: _fetch_html_lightweight(
+                    book_id, log_func, max_tags=max_tags
+                ),
                 html_fetch_func=_fetch_html,
                 log_func=log,
                 max_retries=3,
@@ -387,13 +389,20 @@ def _fetch_json(
 def _fetch_html_lightweight(
     romanceio_id: str,
     log_func: Callable,
+    max_tags: int,
 ) -> Optional[Any]:
     """Fetch and parse book fields using a lightweight HTTP GET (no Chrome).
 
     Romance.io renders pages server-side. Ratings come from the book-stats
-    element (same as Chrome). Tags come from the meta description attribute,
-    which contains the same slug set as the JSON API 'tropes' field -
-    so this method produces tag results equivalent to the JSON API.
+    element (same as Chrome). The legacy combined tags come from the meta
+    description attribute, which contains the same slug set as the JSON API
+    'tropes' field. Categorized tag copies come from the page's embedded
+    rendered and embedded tag groups without changing that legacy combined output.
+
+    Args:
+        romanceio_id: Romance.io book identifier.
+        log_func: Callback for job-log messages.
+        max_tags: Maximum size of the legacy combined tag list.
 
     Returns:
         _SsrParsedFields with pre-parsed fields, or _BookNotFound if the book was not found (404)
@@ -422,7 +431,7 @@ def _fetch_html_lightweight(
             log_func(f"Lightweight HTTP fetch: got search results page for {romanceio_id}")
             return _BookNotFound()
 
-    parsed = parse_fields_from_ssr_html(root)
+    parsed = parse_fields_from_ssr_html(root, max_tags=max_tags)
     return _SsrParsedFields(fields=parsed)
 
 
@@ -482,7 +491,8 @@ def _build_fields(
     """Map pre-parsed fields to calibre field constants.
 
     Args:
-        parsed_fields: Dict with keys steam_rating, star_rating, rating_count, tags
+        parsed_fields: Dict with rating keys, the legacy combined tags key,
+            and optional categorized tag-list keys
         fields_to_run: List of field constants to include
         max_tags: Maximum number of tags to return
 
@@ -513,5 +523,12 @@ def _build_fields(
                 filtered_tags = [str(tag) for tag in tags[:max_tags]]
                 tag_string: str = cfg.TAG_DELIMITER.join(filtered_tags)
                 results[cfg.FIELD_ROMANCE_TAGS] = tag_string
+        elif field in cfg.CATEGORY_FIELDS:
+            parsed_key = cfg.CATEGORY_FIELD_TO_PARSED_KEY[field]
+            category_tags = parsed_fields.get(parsed_key)
+            if isinstance(category_tags, list):
+                # Category columns are complete copies and do not consume or alter
+                # the maximum-limited legacy combined tag output.
+                results[field] = cfg.TAG_DELIMITER.join(str(tag) for tag in category_tags)
 
     return results

@@ -23,7 +23,10 @@ if _parent_dir not in sys.path:
 
 from common.common_romanceio_tag_mappings import (  # pylint: disable=import-error
     JSON_TO_UI_TAG_MAP,
+    SPECIAL_TAG_CATEGORIES,
+    TAG_CATEGORY_KEYS,
     TAGS_TO_IGNORE,
+    categorize_json_tags,
     convert_json_tags_to_display_names,
 )
 
@@ -41,6 +44,8 @@ def test_convert_known_slugs():
         ("m-m", "gay romance"),
         ("humor", "funny"),
         ("fated-mates", "fated mates"),
+        ("south-sudan", "south sudan"),
+        ("washington", "washington state"),
     ]
 
     for slug, expected in cases:
@@ -102,6 +107,29 @@ def test_mixed_input():
     return True
 
 
+def test_ignored_categorized_tags_stay_out_of_combined_only():
+    """Legacy omissions remain omitted while optional categories are complete."""
+    inputs = ["length-long", "standalone-first", "clean"]
+    assert convert_json_tags_to_display_names(inputs) == []
+
+    categories = categorize_json_tags(inputs)
+    assert categories["format_tags"] == [
+        "Long: 400-599",
+        "standalone or first in series",
+    ]
+    assert all("clean" not in values for values in categories.values())
+    return True
+
+
+def test_structural_page_count_control_is_not_a_tag():
+    """Romance.io's internal page-count key must not reach any tag column."""
+    assert convert_json_tags_to_display_names(["undefined"]) == []
+    categories = categorize_json_tags(["undefined"])
+    assert all(not values for values in categories.values())
+    assert "undefined" not in SPECIAL_TAG_CATEGORIES
+    return True
+
+
 def test_map_data_integrity():
     """Sanity checks on the map/ignore data: no empty keys/values.
 
@@ -114,7 +142,13 @@ def test_map_data_integrity():
     print("=" * 60)
 
     assert len(JSON_TO_UI_TAG_MAP) > 0, "Map should not be empty"
+    assert len(SPECIAL_TAG_CATEGORIES) > 300, "Special-tag category map should contain the full taxonomy"
     assert len(TAGS_TO_IGNORE) > 0, "Ignore set should not be empty"
+
+    assert SPECIAL_TAG_CATEGORIES["stalking"] == "content_warnings"
+    assert SPECIAL_TAG_CATEGORIES["south-sudan"] == "geography_tags"
+    assert SPECIAL_TAG_CATEGORIES["standalone"] == "format_tags"
+    assert set(SPECIAL_TAG_CATEGORIES.values()) <= set(TAG_CATEGORY_KEYS)
 
     for key, value in JSON_TO_UI_TAG_MAP.items():
         assert key and isinstance(key, str), f"Empty/non-string key in map: {key!r}"
@@ -140,6 +174,8 @@ if __name__ == "__main__":
     ALL_PASSED &= test_ignored_tags_removed()
     ALL_PASSED &= test_unknown_slugs_pass_through()
     ALL_PASSED &= test_mixed_input()
+    ALL_PASSED &= test_ignored_categorized_tags_stay_out_of_combined_only()
+    ALL_PASSED &= test_structural_page_count_control_is_not_a_tag()
     ALL_PASSED &= test_map_data_integrity()
 
     print("=" * 60)

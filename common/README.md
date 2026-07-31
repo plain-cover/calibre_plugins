@@ -9,11 +9,15 @@ This folder contains shared code between the romanceio and romanceio_fields plug
 - **common_fetch_helper.py** - SeleniumBase page fetching with dynamic plugin imports
 - **common_icons.py** - Icon resource management with `get_icon()` function
 - **common_menus.py** - Menu building helper functions
-- **common_romanceio_tag_mappings.py** - Slug-to-display-name mapping for Romance.io JSON tags (`JSON_TO_UI_TAG_MAP`, `TAGS_TO_IGNORE`, `convert_json_tags_to_display_names`)
+- **common_romanceio_tag_mappings.py** - Shared slug-to-display-name conversion and the public import point for Romance.io tag taxonomy data (`JSON_TO_UI_TAG_MAP`, `SPECIAL_TAG_CATEGORIES`, `TAGS_TO_IGNORE`)
+- **common_romanceio_tag_categories.py** - Generated category mapping for Romance.io content-warning, geography, and format tags
+- **check_romanceio_tag_taxonomy.py** - Weekly maintenance checker that compares the bundled taxonomy with Romance.io
+- **update_tag_mappings.py** - Maintainer command that refreshes both bundled taxonomy files
 - **common_search.py** - Romance.io search and ID extraction logic
 - **common_widgets.py** - Custom Qt controls (ReadOnlyTableWidgetItem, etc.)
 - **test_json_search_matching.py** - Shared test: JSON search result matching
 - **test_tag_slug_conversion.py** - Shared test: slug-to-display-name conversion
+- **test_romanceio_tag_taxonomy.py** - Tests the taxonomy checker and transactional mapping updater
 - **test_html_sanitizer.py** - Shared test: `sanitize_html_for_lxml()` strips XML 1.0 illegal chars from Selenium HTML
 
 ## How it works
@@ -25,6 +29,8 @@ During the build process:
 3. The modified files are included in the plugin zip
 
 This allows both plugins to share code while maintaining proper Calibre plugin namespacing.
+
+The display-name and category mappings are refreshed together with `python common/update_tag_mappings.py`. Builds validate the committed files but never contact Romance.io or rewrite them. The **Romance.io Tag Updates (Weekly Maintenance Check)** GitHub Actions workflow compares both mappings with the live site using plain HTTP. A failure titled **Romance.io tag taxonomy changed** is an expected maintenance alert: run the updater, review the generated mapping changes, and commit them.
 
 ## Why dependencies are vendored
 

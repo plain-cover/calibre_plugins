@@ -7,6 +7,7 @@ Two Calibre plugins that link your library with [Romance.io](https://romance.io)
 - Adds Romance.io tags to Calibre's Tags field based on a customizable mapping (Romance.io metadata plugin)
 - Adds steam rating, star rating, and vote count to custom columns (Romance.io Fields plugin)
 - Adds Romance.io tags to a custom column so you can sort and filter your library by tropes, themes, settings, and more (Romance.io Fields plugin)
+- Optionally copies Romance.io general tags, content warnings, geography, and format tags into separate custom columns without changing the combined tags column (Romance.io Fields plugin)
 
 ![Screenshot of Calibre showing each feature of the Romance.io plugins emphasized with red boxes and arrows](images/Full%20Calibre.png)
 
@@ -69,7 +70,7 @@ You can choose which fields you want to populate from [Romance.io](https://roman
 
 ## Romance.io Fields - Custom Columns Plugin for Calibre
 
-A toolbar button that fetches steam rating, star rating, vote count, and community tags from [Romance.io](https://romance.io) and writes them into custom columns in your library. Once set up, you can sort and filter your entire library by any of these fields.
+A toolbar button that fetches steam rating, star rating, vote count, and community tags from [Romance.io](https://romance.io) and writes them into custom columns in your library. Tags can remain in one combined column and can also be copied into separate columns for general tags, content warnings, geography, and format tags. Once set up, you can sort and filter your entire library by any of these fields.
 
 ![Screenshot of Calibre showing each feature of the Romance.io plugins emphasized with red boxes and arrows](images/Full%20Calibre.png)
 
@@ -77,7 +78,7 @@ A toolbar button that fetches steam rating, star rating, vote count, and communi
 
 **Step 1 - Create custom columns**
 
-The plugin writes data from [Romance.io](https://romance.io) into custom columns in Calibre. You need to create the columns yourself first so we have a place to put the data. Each field (Romance.io ID, steam rating, star rating, vote count, tags) needs its own column with the right column type so Calibre knows how to store and sort the data.
+The plugin writes data from [Romance.io](https://romance.io) into custom columns in Calibre. You need to create the columns yourself first so we have a place to put the data. Each value you want to store (Romance.io ID, steam rating, star rating, vote count, or tags) needs its own column with the right column type so Calibre knows how to store and sort the data.
 
 Go to **Preferences > Add your own columns** and add a new column for each field you want. You don't have to create all of them - only the columns you want to be able to sort and filter on. Here's what each column should look like when you're creating it:
 
@@ -97,13 +98,31 @@ Romance.io Vote Count:
 
 ![Calibre "Create a custom column" menu showing the configuration details for the Romance.io Vote Count column](images/Add%20custom%20column%20-%20votes.png)
 
-Romance.io Tags:
+Romance.io Tags (combined):
 
 ![Calibre "Create a custom column" menu showing the configuration details for the Romance.io Tags column](images/Add%20custom%20column%20-%20tags.png)
 
+The four category columns are optional. Create custom columns only for the categories you want to have a separate column for:
+
+Romance.io General Tags:
+
+![Calibre "Create a custom column" dialog for an optional General Tags column using the lookup name #romiogeneraltags](images/Add%20custom%20column%20-%20general%20tags.png)
+
+Romance.io Content Warnings:
+
+![Calibre "Create a custom column" dialog for an optional Content Warnings column using the lookup name #romiocontent](images/Add%20custom%20column%20-%20content%20warnings.png)
+
+Romance.io Format Tags:
+
+![Calibre "Create a custom column" dialog for an optional Format Tags column using the lookup name #romioformat](images/Add%20custom%20column%20-%20format%20tags.png)
+
+Romance.io Geography Tags:
+
+![Calibre "Create a custom column" dialog for an optional Geography Tags column using the lookup name #romiogeography](images/Add%20custom%20column%20-%20geography%20tags.png)
+
 Once you've created all the columns you want, they'll appear in your preferences like this:
 
-![Calibre preferences menu showing the configuration details for five custom columns: Romance.io ID, Steam, Romance.io Tags, Romance.io Stars, and Romance.io Vote Count](images/Calibre%20preferences%20-%20custom%20columns.png)
+![Calibre Add your own columns preferences showing Romance.io ID, ratings, combined tags, and the four optional tag category columns](images/Calibre%20preferences%20-%20custom%20columns.png)
 
 Here's a table you can use for a reference when creating each column. The lookup names can be anything you choose (examples are provided below), since you'll map them to whatever you chose as a name in the next step.
 
@@ -113,7 +132,13 @@ Here's a table you can use for a reference when creating each column. The lookup
 | Romance.io Steam Rating | `#romiosteam` | Integers | | Values 1-5 based on [Romance.io steam ratings](https://www.romance.io/steamrating) |
 | Romance.io Stars | `#romiostars` | Floating point numbers | With 2 decimals | Star rating from Romance.io user votes |
 | Romance.io Vote Count | `#romiovotes` | Integers | | Total number of star ratings for a book on Romance.io |
-| Romance.io Tags | `#romiotags` | Comma-separated text, like tags | | User-sourced tags from Romance.io |
+| Romance.io Tags (combined) | `#romiotags` | Comma-separated text, like tags | | All user-sourced tags from the Romance.io book detail page |
+| Romance.io General Tags | `#romiogeneraltags` | Comma-separated text, like tags | | Ordinary tropes, themes, genres, and character/story tags copied into their own column |
+| Romance.io Content Warnings | `#romiocontent` | Comma-separated text, like tags | | Content-warning tags copied into their own column |
+| Romance.io Geography | `#romiogeography` | Comma-separated text, like tags | | Countries, regions, and other geography tags copied into their own column |
+| Romance.io Format Tags | `#romioformat` | Comma-separated text, like tags | | Romance.io's format tags, such as audiobook, point of view, length, and series structure copied into their own column |
+
+You can configure the combined column, any category columns, or both. Adding tag category columns will not affect what tags appear in the combined column.
 
 **Step 2 - Map columns in plugin settings**
 
@@ -125,7 +150,9 @@ You can also open **Preferences > Plugins**, find "Romance.io Fields", and click
 
 In the customization menu, map each field to the lookup name of the column you created:
 
-![Calibre "Customize Romance.io Fields" menu showing the mapping of fields to column lookup names](images/Customize%20plugin%20field%20mappings.png)
+![Calibre "Customize Romance.io Fields" dialog mapping the combined tags, four optional tag category columns, and rating fields to custom columns](images/Customize%20plugin%20field%20mappings.png)
+
+Leave any field blank if you do not want the plugin to populate that column.
 
 ### Downloading fields
 
@@ -133,11 +160,17 @@ Select one or more books and click the Romance.io toolbar button. The plugin sea
 
 ![Screenshot of the main toolbar in Calibre with the Romance.io Fields plugin dropdown selected](images/Click%20toolbar%20button.png)
 
+With the optional category columns configured, the original combined tags remain available while general tags, content warnings, format details, and geography are also shown separately. This makes it easier to display, sort, or filter by one kind of tag without losing the complete tag list:
+
+![Populated Calibre library columns showing combined Romance.io Tags alongside separate General Tags, Content Warnings, Format Tags, and Geography Tags](images/Calibre%20optional%20tag%20category%20columns.png)
+
 **To refresh data for books you've already downloaded:** select the books you want to refresh and click the Romance.io toolbar button again. If the Romance.io ID is already stored, it skips the search and goes straight to re-fetching the data, which is faster.
 
 ### Configuration
 
 You can configure the plugin from the **dropdown arrow next to the plugin's icon > Customize plugin**, or **Preferences > Plugins > Romance.io Fields > Customize plugin**.
+
+Under **Romance.io tag options**, **All tags column (combined)** retains the original unprefixed tag list. The four categorized destinations are independent and optional. If both combined and categorized columns are selected, the plugin writes both. The maximum-tags setting continues to limit the combined column; categorized columns receive the complete matching group, including categorized length or series tags that the historical combined output omits.
 
 ## Installation
 
@@ -149,15 +182,15 @@ For the Romance.io Fields plugin, you may have an extra step to ensure the plugi
 
 **To get the latest version** before it's published to the plugin store, download the zip from the [GitHub releases page](https://github.com/plain-cover/calibre_plugins/releases) and install via **Preferences > Plugins > Load plugin from file**.
 - `Romance.io.zip` - metadata source plugin (ID, cover, series, rating, description, tags, date published)
-- `Romance.io Fields.zip` - custom columns plugin (steam, stars, vote count, tags)
+- `Romance.io Fields.zip` - custom columns plugin (steam, stars, vote count, combined tags, and optional categorized tags)
 
 ## Notes
 
 **You can process one book or many at once.** Select any number of books and click the Romance.io plugin button in the main Calibre toolbar to download in bulk. The download will run in the background and alert you when it's done. You can track the job's progress in the bottom-right corner of the Calibre window.
 
-**A browser window may open during downloads.** The plugin tries the Romance.io JSON API first, which is fast and requires no browser. If the API is unavailable, it falls back to opening a Chrome browser window to scrape the page directly - just ignore it, it will close automatically. JSON API lookups are fast; browser-based lookups can take ~5-30 seconds per book.
+**A browser window may open during downloads.** The plugin tries the Romance.io JSON API first, then a lightweight webpage request, and uses Chrome only as a final fallback. Categorized JSON tags use a taxonomy bundled with the plugin, so configuring category columns does not add a webpage request or require Chrome. Browser-based lookups can take ~5-30 seconds per book.
 
-**Chrome is required for the HTML-based metadata download fallback.** If Chrome is not installed, the plugin can only use the JSON API, so if that isn't available, you won't get any field data. Install Chrome from [google.com/chrome](https://www.google.com/chrome/). Chrome doesn't need to be your default browser, it just needs to be installed. On Apple Silicon Macs (M1/M2/M3/M4), Chrome's browser automation also requires Rosetta 2 - if that's missing, the plugin's job log will tell you how to install it.
+**Chrome is required only for the browser-based metadata fallback and the full community-voted tag set.** Without Chrome, the plugin can still use the JSON API and lightweight webpage requests. Install Chrome from [google.com/chrome](https://www.google.com/chrome/) if you want the final fallback or full community tags. Chrome doesn't need to be your default browser, it just needs to be installed. On Apple Silicon Macs (M1/M2/M3/M4), Chrome's browser automation also requires Rosetta 2 - if that's missing, the plugin's job log will tell you how to install it.
 
 **Linux with Chrome installed as a flatpak:** the plugin can find and use a flatpak-installed Chrome automatically. If Calibre is also a flatpak, you need to run this once in a terminal and restart Calibre:
 ```
@@ -194,6 +227,8 @@ calibre-debug -g
 ```
 
 `build.sh` vendors dependencies and copies shared code from `common/` before zipping the plugin. Run it for both plugins before launching. See [romanceio/README.md](romanceio/README.md) and [romanceio_fields/README.md](romanceio_fields/README.md) for per-plugin build details and test commands.
+
+The **Romance.io Tag Updates (Weekly Maintenance Check)** GitHub Actions workflow compares the bundled display-name and category mappings with Romance.io's live taxonomy using plain HTTP. A failure labeled **Romance.io tag taxonomy changed** means the site data changed and the mappings need a routine refresh with `python common/update_tag_mappings.py`; it does not mean the general test pipeline broke.
 
 ### Why are dependencies bundled in the zip?
 

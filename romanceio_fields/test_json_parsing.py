@@ -19,6 +19,16 @@ from common.common_romanceio_test_utils import load_test_json_file
 # Load parse_json module without triggering plugin initialization
 parse_json = load_plugin_module("romanceio_fields.parse_json", "parse_json.py", plugin_dir)
 parse_fields_from_json = parse_json.parse_fields_from_json
+categorize_json_tags = parse_json.categorize_json_tags
+
+
+def test_current_special_tag_categories():
+    """Recently added live special tags must use their bundled categories."""
+    categories = categorize_json_tags(["stalking", "standalone", "south-sudan", "slow burn"])
+    assert categories["content_warnings"] == ["stalking"]
+    assert categories["format_tags"] == ["standalone"]
+    assert categories["geography_tags"] == ["south sudan"]
+    assert categories["general_tags"] == ["slow burn"]
 
 
 def test_json_book(book_data):
@@ -74,12 +84,47 @@ def test_json_book(book_data):
         for expected_tag in book_data.sample_tags:
             assert expected_tag in fields["tags"], f"Expected tag '{expected_tag}' not found in tags"
 
+    # Category columns include all combined tags and may additionally retain
+    # categorized length/series tags omitted by the legacy combined output.
+    category_keys = ("general_tags", "content_warnings", "geography_tags", "format_tags")
+    categorized_tags = set().union(*(fields[key] for key in category_keys))
+    assert set(fields["tags"]) <= categorized_tags, (
+        f"Combined JSON tags are missing from category columns: "
+        f"{set(fields['tags']) - categorized_tags}"
+    )
+
+    if book_data.romanceio_id == "5484ecd47a5936fb0405756c":
+        assert "historical" in fields["general_tags"]
+        assert "england" in fields["geography_tags"]
+        assert "third person pov" in fields["format_tags"]
+        assert "Long: 400-599" in fields["format_tags"]
+        assert "standalone or first in series" in fields["format_tags"]
+        assert "Long: 400-599" not in fields["tags"]
+        assert "standalone or first in series" not in fields["tags"]
+    elif book_data.romanceio_id == "65b604fa00d361e53f20ecfb":
+        assert "fake relationship" in fields["general_tags"]
+        assert "past child abuse" in fields["content_warnings"]
+        assert "michigan" in fields["geography_tags"]
+        assert "first person pov" in fields["format_tags"]
+        assert "standalone or first in series" in fields["format_tags"]
+        assert "standalone or first in series" not in fields["tags"]
+
+    print(
+        "  Categories: "
+        f"general={len(fields['general_tags'])}, "
+        f"warnings={len(fields['content_warnings'])}, "
+        f"geography={len(fields['geography_tags'])}, "
+        f"format={len(fields['format_tags'])}"
+    )
+
     print(f"\n✓ All {book_data.name} JSON assertions passed\n")
 
 
 if __name__ == "__main__":
     print("Starting JSON API parsing tests for romanceio_fields plugin...")
     print()
+
+    test_current_special_tag_categories()
 
     for static_book in STATIC_TEST_BOOKS:
         test_json_book(static_book)

@@ -10,6 +10,10 @@ from functools import partial
 # pylint: disable=duplicate-code  # Standard Calibre plugin import pattern
 if TYPE_CHECKING:
     from qt.core import QToolButton, QMenu, QObject
+
+    def _(text: str) -> str:
+        """Type-checking declaration for Calibre's runtime translation function."""
+        ...
 else:
     try:
         from qt.core import QToolButton, QMenu, QObject
@@ -23,7 +27,7 @@ try:
 except NameError:
     pass  # load_translations() added in calibre 1.9
 
-from calibre.gui2 import question_dialog
+from calibre.gui2 import error_dialog, question_dialog
 from calibre.gui2.actions import InterfaceAction
 from calibre.gui2.dialogs.message_box import ErrorNotification
 from calibre.utils.ipc.job import ParallelJob
@@ -67,7 +71,7 @@ class RomanceIOFieldsAction(InterfaceAction):
         None,
         _(  # type: ignore # pylint: disable=undefined-variable
             "Download Romance.io metadata fields "  # fmt: skip
-            "(steam rating, star rating, rating count, tags)"
+            "(steam rating, star rating, rating count, and tags)"
         ),
         (),
     )
@@ -165,6 +169,8 @@ class RomanceIOFieldsAction(InterfaceAction):
                 return
             self.show_configuration()
             return
+        if self._reject_duplicate_columns(fields_to_cols_map):
+            return
 
         self._get_romanceio_fields(book_ids, fields_to_cols_map)
 
@@ -191,6 +197,26 @@ class RomanceIOFieldsAction(InterfaceAction):
                 fields_to_cols_map[value] = col
         return any_valid, fields_to_cols_map
 
+    def _reject_duplicate_columns(self, fields_to_cols_map: Dict[str, str]) -> bool:
+        """Stop downloads from legacy or externally edited duplicate mappings."""
+        duplicates = cfg.find_duplicate_column_mappings(fields_to_cols_map)
+        if not duplicates:
+            return False
+        details = "\n".join(
+            f"{column}: {', '.join(fields)}" for column, fields in sorted(duplicates.items())
+        )
+        error_dialog(
+            self.gui,
+            _("Duplicate custom columns"),  # type: ignore[name-defined]  # pylint: disable=undefined-variable
+            _(  # type: ignore[name-defined]  # pylint: disable=undefined-variable
+                "Two or more Romance.io fields are mapped to the same custom column. "
+                "Open Customize plugin and choose a different column for each field:\n\n"
+            )
+            + details,
+            show=True,
+        )
+        return True
+
     def metadata_download(
         self,
         book_ids: List[int],
@@ -205,12 +231,13 @@ class RomanceIOFieldsAction(InterfaceAction):
           book_ids - list of calibre book ids to run the metadata download against
 
           fields_to_run - list of field names to be run. Possible values:
-              'SteamRating', 'RomanceTags'
+              'SteamRating', 'RomanceTags', 'GeneralTags', 'ContentWarnings',
+              'GeographyTags', 'FormatTags', 'StarRating', 'RatingCount'
 
           plugin_callback - This is a dictionary defining the callback function.
         """
         if fields_to_run is None or len(fields_to_run) == 0:
-            print("Metadata download called but neither SteamRating nor RomanceTags requested")
+            print("Metadata download called without any fields requested")
             return
 
         # Verify we have a custom column configured to store the metadata
@@ -227,6 +254,8 @@ class RomanceIOFieldsAction(InterfaceAction):
             ):
                 return
             self.show_configuration()
+            return
+        if self._reject_duplicate_columns(fields_to_cols_map):
             return
 
         self.plugin_callback = plugin_callback

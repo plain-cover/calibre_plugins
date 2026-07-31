@@ -3,10 +3,14 @@ HTML parsing functions specific to the romanceio_fields plugin.
 Extracts field data from Romance.io book pages.
 """
 
+import json
 import re
 from typing import List, Optional, Dict, Any
 from lxml.html import HtmlElement
-from .common_romanceio_tag_mappings import convert_json_tags_to_display_names  # pylint: disable=import-error
+from .common_romanceio_tag_mappings import (  # pylint: disable=import-error
+    categorize_json_tags,
+    convert_json_tags_to_display_names,
+)
 
 
 def parse_steam_rating(root: HtmlElement) -> Optional[int]:
@@ -73,11 +77,73 @@ def parse_rating_count(root: HtmlElement) -> Optional[int]:
     return None
 
 
-def parse_tags_from_js_html(root: HtmlElement) -> List[str]:
-    """
-    Extract all tags from Romance.io book page.
-    """
+def _parse_embedded_tag_categories(root: HtmlElement) -> Optional[Dict[str, List[str]]]:
+    """Parse Romance.io's server-provided ``tagged_topics`` JavaScript object."""
+    for script_text in root.xpath("//script/text()"):
+        assignment = re.search(r"\b(?:var|let|const)\s+tagged_topics\s*=\s*", script_text)
+        if not assignment:
+            continue
+        try:
+            tagged_topics, _ = json.JSONDecoder().raw_decode(script_text[assignment.end() :].lstrip())
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(tagged_topics, dict):
+            continue
 
+        def extract_group(source_key: str) -> List[str]:
+            values: List[str] = []
+            group = tagged_topics.get(source_key, [])
+            if not isinstance(group, list):
+                return values
+            for item in group:
+                if isinstance(item, dict):
+                    value = item.get("title") or item.get("topic")
+                else:
+                    value = item
+                if not isinstance(value, str):
+                    continue
+                value = value.strip()
+                if value:
+                    values.append(value)
+            return values
+
+        return {
+            "general_tags": extract_group("list"),
+            "content_warnings": extract_group("content warnings"),
+            "geography_tags": extract_group("geography"),
+            "format_tags": extract_group("Format"),
+        }
+    return None
+
+
+def _merge_unique(primary: List[str], additional: List[str]) -> List[str]:
+    """Append missing values without changing the existing rendered-page order."""
+    merged = list(primary)
+    seen = set(primary)
+    for value in additional:
+        if value not in seen:
+            merged.append(value)
+            seen.add(value)
+    return merged
+
+
+def _has_rendered_tag_category_lists(root: HtmlElement) -> bool:
+    """Return whether the page contains the rendered category containers."""
+    return bool(
+        root.xpath(
+            '//ul[@id="valid-topics-list" or @id="valid-topics-content-warnings" '
+            'or @id="valid-topics-geography" or @id="valid-topics-Format"]'
+        )
+    )
+
+
+def has_tag_category_data(root: HtmlElement) -> bool:
+    """Return whether the page exposes either embedded or rendered category data."""
+    return _has_rendered_tag_category_lists(root) or _parse_embedded_tag_categories(root) is not None
+
+
+def _parse_rendered_tag_categories(root: HtmlElement) -> Dict[str, List[str]]:
+    """Extract categories from the rendered lists used by the legacy parser."""
     def extract_tags(xpath_expr: str) -> List[str]:
         """Extract tags from elements matching xpath."""
         tags_list = []
@@ -86,20 +152,81 @@ def parse_tags_from_js_html(root: HtmlElement) -> List[str]:
             if not tag_elem:
                 continue
             tag_name = tag_elem[0].text_content().strip()
-            tags_list.append(tag_name)
+            if tag_name:
+                tags_list.append(tag_name)
         return tags_list
 
-    tags: List[str] = extract_tags('//ul[@id="valid-topics-list"]//li[@class="tagged-topic"]')
-    geo_tags: List[str] = extract_tags('//ul[@id="valid-topics-geography"]//li[@class="tagged-topic"]')
-    cw_tags: List[str] = extract_tags('//ul[@id="valid-topics-content-warnings"]//li[@class="tagged-topic"]')
+    general_tags: List[str] = extract_tags('//ul[@id="valid-topics-list"]//li[@class="tagged-topic"]')
+    geography_tags: List[str] = extract_tags('//ul[@id="valid-topics-geography"]//li[@class="tagged-topic"]')
+    content_warnings: List[str] = extract_tags(
+        '//ul[@id="valid-topics-content-warnings"]//li[@class="tagged-topic"]'
+    )
     format_tags: List[str] = extract_tags('//ul[@id="valid-topics-Format"]//li[@class="tagged-topic"]')
     # Also get Format tags without the tagged-topic class (like "audiobook")
-    format_tags_simple: List[str] = [
-        elem.text_content() for elem in root.xpath('//ul[@id="valid-topics-Format"]//li/a[@class="topic"]')
-    ]
+    format_tags_simple: List[str] = []
+    for elem in root.xpath('//ul[@id="valid-topics-Format"]//li/a[@class="topic"]'):
+        tag_name = elem.text_content().strip()
+        if tag_name:
+            format_tags_simple.append(tag_name)
     # Combine and deduplicate
-    all_format_tags = list(set(format_tags + format_tags_simple))
-    return tags + geo_tags + cw_tags + all_format_tags
+    all_format_tags = list(dict.fromkeys(format_tags + format_tags_simple))
+    rendered_categories = {
+        "general_tags": general_tags,
+        "content_warnings": content_warnings,
+        "geography_tags": geography_tags,
+        "format_tags": all_format_tags,
+    }
+    return rendered_categories
+
+
+def _merge_tag_categories(
+    rendered_categories: Dict[str, List[str]],
+    embedded_categories: Optional[Dict[str, List[str]]],
+) -> Dict[str, List[str]]:
+    """Merge rendered and embedded category values without changing their order."""
+    if embedded_categories is None:
+        return rendered_categories
+
+    return {
+        key: _merge_unique(rendered_categories[key], embedded_categories[key])
+        for key in rendered_categories
+    }
+
+
+def _supplement_categories_from_slugs(
+    categories: Dict[str, List[str]],
+    raw_slugs: List[str],
+) -> Dict[str, List[str]]:
+    """Fill partial page categories from description/API-equivalent slugs."""
+    if not raw_slugs:
+        return categories
+
+    return _merge_tag_categories(categories, categorize_json_tags(raw_slugs))
+
+
+def parse_tag_categories_from_html(root: HtmlElement) -> Dict[str, List[str]]:
+    """Extract Romance.io tags in the categories used on the book page."""
+    return _merge_tag_categories(
+        _parse_rendered_tag_categories(root),
+        _parse_embedded_tag_categories(root),
+    )
+
+
+def _combine_rendered_tag_categories(categories: Dict[str, List[str]]) -> List[str]:
+    """Flatten rendered categories in the legacy combined-column order."""
+    return (
+        categories["general_tags"]
+        + categories["geography_tags"]
+        + categories["content_warnings"]
+        + categories["format_tags"]
+    )
+
+
+def parse_tags_from_js_html(root: HtmlElement) -> List[str]:
+    """Extract the legacy combined tag list from a Romance.io book page."""
+    # Keep this function on the exact rendered-list path it used before category
+    # columns were introduced. Embedded data supplements only the optional copies.
+    return _combine_rendered_tag_categories(_parse_rendered_tag_categories(root))
 
 
 def _parse_ratings(root: HtmlElement) -> Dict[str, Any]:
@@ -126,13 +253,44 @@ def parse_fields_from_html(
         - steam_rating: Steam/spice rating (1-5 int) or None
         - star_rating: Star rating (0-5 float) or None
         - rating_count: Number of ratings (int) or None
-        - tags: List of tag strings
+        - tags: Legacy combined list of tag strings
+        - general_tags, content_warnings, geography_tags, format_tags:
+          Separate category lists copied from the website
     """
-    return {**_parse_ratings(root), "tags": parse_tags_from_js_html(root)[:max_tags]}
+    rendered_categories = _parse_rendered_tag_categories(root)
+    combined_tags = _combine_rendered_tag_categories(rendered_categories)
+    result = {**_parse_ratings(root), "tags": combined_tags[:max_tags]}
+    rendered_categories_present = _has_rendered_tag_category_lists(root)
+    embedded_categories = _parse_embedded_tag_categories(root)
+    raw_slugs = _parse_tag_slugs_from_description(root)
+    if rendered_categories_present or embedded_categories is not None:
+        # Category columns are complete copies of the website groups. Keep the
+        # longstanding rendered-list behavior of the combined column separate.
+        result.update(
+            _supplement_categories_from_slugs(
+                _merge_tag_categories(rendered_categories, embedded_categories),
+                raw_slugs,
+            )
+        )
+    elif raw_slugs:
+        result.update(categorize_json_tags(raw_slugs))
+    return result
+
+
+def _parse_tag_slugs_from_description(root: HtmlElement) -> List[str]:
+    """Extract raw tag slugs from the page's description metadata."""
+    meta_nodes = root.xpath('//meta[@name="description"]/@content')
+    if not meta_nodes:
+        return []
+
+    tag_match = re.search(r"is tagged as ([^.]+)\.", meta_nodes[0])
+    if not tag_match:
+        return []
+    return [slug.strip() for slug in tag_match.group(1).split(", ") if slug.strip()]
 
 
 def parse_tags_from_description(root: HtmlElement) -> List[str]:
-    """Extract tags from the page's <meta name="description"> attribute.
+    """Extract and display-map tags from the description metadata.
 
     Romance.io's description text lists tag slugs in the format:
     "'BookTitle' is tagged as slug1, slug2, slug3."
@@ -149,17 +307,7 @@ def parse_tags_from_description(root: HtmlElement) -> List[str]:
     Returns:
         List of display name strings (slug -> display mapped)
     """
-    meta_nodes = root.xpath('//meta[@name="description"]/@content')
-    if not meta_nodes:
-        return []
-
-    description = meta_nodes[0]
-    tag_match = re.search(r"is tagged as ([^.]+)\.", description)
-    if not tag_match:
-        return []
-
-    slugs = [s.strip() for s in tag_match.group(1).split(", ") if s.strip()]
-    return convert_json_tags_to_display_names(slugs)
+    return convert_json_tags_to_display_names(_parse_tag_slugs_from_description(root))
 
 
 def parse_fields_from_ssr_html(root: HtmlElement, max_tags: int = 100) -> Dict[str, Any]:
@@ -182,6 +330,30 @@ def parse_fields_from_ssr_html(root: HtmlElement, max_tags: int = 100) -> Dict[s
         - steam_rating: Steam/spice rating (1-5 int) or None
         - star_rating: Star rating (0-5 float) or None
         - rating_count: Number of ratings (int) or None
-        - tags: List of display name strings
+        - tags: List of display name strings, preserving the existing JSON-equivalent output
+        - general_tags, content_warnings, geography_tags, format_tags:
+          Separate category lists copied from the server-rendered page sections
     """
-    return {**_parse_ratings(root), "tags": parse_tags_from_description(root)[:max_tags]}
+    combined_tags = parse_tags_from_description(root)
+    result = {
+        **_parse_ratings(root),
+        "tags": combined_tags[:max_tags],
+    }
+    rendered_categories = _parse_rendered_tag_categories(root)
+    rendered_categories_present = _has_rendered_tag_category_lists(root)
+    embedded_categories = _parse_embedded_tag_categories(root)
+    raw_slugs = _parse_tag_slugs_from_description(root)
+    if rendered_categories_present or embedded_categories is not None:
+        # Category columns mirror the groups visible on the website, while the
+        # legacy combined column remains API-equivalent and maximum-limited.
+        result.update(
+            _supplement_categories_from_slugs(
+                _merge_tag_categories(rendered_categories, embedded_categories),
+                raw_slugs,
+            )
+        )
+    elif raw_slugs:
+        # Older/minimal pages may not expose category groups. Classify their
+        # API-equivalent description slugs as a compatibility fallback.
+        result.update(categorize_json_tags(raw_slugs))
+    return result

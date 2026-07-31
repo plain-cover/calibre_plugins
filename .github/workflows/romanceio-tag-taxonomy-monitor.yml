@@ -1,0 +1,22 @@
+name: Romance.io Tag Updates (Weekly Maintenance Check)
+
+on:
+  schedule:
+    - cron: "17 13 * * 1"  # Weekly on Monday; two plain HTTP requests, no browser.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  detect-romanceio-tag-changes:
+    name: Detect Romance.io tag taxonomy changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Compare live Romance.io tags with bundled plugin mappings
+        run: python common/check_romanceio_tag_taxonomy.py --live

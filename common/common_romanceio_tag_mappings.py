@@ -6,11 +6,16 @@ while the website displays friendlier names (e.g. "enemies to lovers").
 This module centralises that mapping so both plugins use the same conversion logic.
 """
 
-from typing import List
+from typing import Dict, List
+
+from .common_romanceio_tag_categories import SPECIAL_TAG_CATEGORIES
 
 # Mapping from JSON API tag slugs to UI/display names.
-# To update: python update_tag_mappings.py
-# Last tag mapping update: 2026-03-29
+# To update both display names and categories: python common/update_tag_mappings.py
+# Last tag mapping update: 2026-07-20
+# Number of topic tags seen during the same update. This includes identity
+# mappings, which are intentionally omitted from JSON_TO_UI_TAG_MAP.
+TOPIC_TAG_COUNT = 387
 JSON_TO_UI_TAG_MAP = {
     "100-plus-years-fmc": "100+ years old fmc",
     "100-plus-years-mmc": "100+ years old mmc",
@@ -24,9 +29,11 @@ JSON_TO_UI_TAG_MAP = {
     "afab": "afab mc",
     "age difference": "age gap",
     "agender": "agender mc",
+    "alien-planet": "alien planet",
     "amab": "amab mc",
     "animal-abuse": "animal abuse",
     "animal-death": "animal death",
+    "antigua-and-barbuda": "antigua and barbuda",
     "aristocratic heroine": "aristo/royal heroine",
     "arranged marriage": "arranged/forced marriage",
     "asexual-hero": "asexual hero",
@@ -44,11 +51,16 @@ JSON_TO_UI_TAG_MAP = {
     "bodyguard-hero": "bodyguard/protector hero",
     "bodyguard-heroine": "bodyguard/protector heroine",
     "bodyguard-nbi-mc": "bodyguard/protector nbi-mc",
+    "bosnia-and-herzegovina": "bosnia and herzegovina",
     "boss & employee": "boss & employee",
     "british-isles": "british isles",
+    "burkina-faso": "burkina faso",
     "bwwm": "bw/wm",
+    "cabo-verde": "cabo verde",
     "career professional": "white collar heroine",
     "career-professional-nbi-mc": "white collar nbi-mc",
+    "central-african-republic": "central african republic",
+    "central-america": "central america",
     "central-asia": "central asia",
     "cheerful heroine": "cheerful/happy heroine",
     "child-death": "child death",
@@ -60,6 +72,7 @@ JSON_TO_UI_TAG_MAP = {
     "cold-nbi-mc": "grumpy/cold nbi-mc",
     "commander": "warlord/commander hero",
     "consensual-non-con": "consensual non-consent",
+    "costa-rica": "costa rica",
     "cowboys": "cowboy hero",
     "creative-anatomy": "creative anatomy",
     "cruel hero": "cruel hero/bully",
@@ -73,7 +86,9 @@ JSON_TO_UI_TAG_MAP = {
     "demi-sexual-heroine": "demisexual heroine",
     "demi-sexual-nbi-mc": "demisexual nbi-mc",
     "disabilities and marks": "disabilities & scars",
+    "dominican-republic": "dominican republic",
     "double-penetration": "double penetration",
+    "drc": "democratic republic of the congo",
     "drug-abuse": "drug abuse",
     "dual-pov": "dual pov",
     "dub-con": "dubious consent",
@@ -86,6 +101,9 @@ JSON_TO_UI_TAG_MAP = {
     "east-europe": "eastern europe",
     "eastern-africa": "eastern africa",
     "eating disorder": "eating disorders",
+    "el-salvador": "el salvador",
+    "equatorial-guinea": "equatorial guinea",
+    "eu-georgia": "georgia",
     "explicit-open-door": "explicit open door",
     "explicit-plentiful": "explicit and plentiful",
     "f-f": "lesbian romance",
@@ -94,6 +112,7 @@ JSON_TO_UI_TAG_MAP = {
     "fated-mates": "fated mates",
     "female-rake": "female rake",
     "fighters": "fighter hero",
+    "first-in-series": "first in series",
     "first-person-pov": "first person pov",
     "forced-pregnancy": "forced pregnancy",
     "found-family": "found family",
@@ -112,6 +131,7 @@ JSON_TO_UI_TAG_MAP = {
     "high-school": "high school",
     "highlander": "highlander hero",
     "historical western": "western frontier",
+    "human-colony": "human colony",
     "human-trafficking": "human trafficking",
     "humor": "funny",
     "hurt-comfort": "hurt/comfort",
@@ -127,6 +147,7 @@ JSON_TO_UI_TAG_MAP = {
     "in-their-30s": "in their 30s",
     "in-their-40s-50s": "in their 40s/50s",
     "indigenous-mc": "indigenous mc",
+    "ivory-coast": "ivory coast",
     "late-20s-fmc": "late 20s fmc",
     "late-20s-mmc": "late 20s mmc",
     "late-20s-nbi-mc": "late 20s nbi-mc",
@@ -145,28 +166,41 @@ JSON_TO_UI_TAG_MAP = {
     "m-m-f": "mmf",
     "m-m-m": "mmm+",
     "male-pov": "male pov",
+    "marshall-islands": "marshall islands",
     "mature couple": "older/mature",
     "mental-trauma": "mental trauma",
     "middle-africa": "middle africa",
     "miscarriage": "miscarriage / infertility",
     "mma-boxing": "fighting/mma/boxing",
     "muscular-nbi-mc": "muscular nbi-mc",
+    "myanmar": "myanmar (burma)",
     "nerdy-hero": "nerdy hero",
     "nerdy-nbi-mc": "nerdy nbi-mc",
     "neurodivergent": "neurodivergent mc",
+    "new-hampshire": "new hampshire",
+    "new-jersey": "new jersey",
+    "new-mexico": "new mexico",
     "new-york-state": "new york state",
+    "new-zealand": "new zealand",
+    "no-3rd-act-breakup": "no 3rd act break-up",
     "non-hea": "no hea",
     "non-human-hero": "non-human hero",
     "non-human-heroine": "non-human heroine",
     "non-human-nbi-mc": "non-human nbi-mc",
     "non-trad-hea": "nontraditional hea",
     "north-america": "north america",
+    "north-carolina": "north carolina",
+    "north-dakota": "north dakota",
+    "north-korea": "north korea",
+    "north-macedonia": "north macedonia",
     "northern-africa": "northern africa",
+    "northern-ireland": "northern ireland",
     "office": "workplace/office",
     "open-door": "open door",
     "other-man-woman": "other man/woman",
     "outlaw-heroine": "criminal heroine",
     "outlaw-nbi-mc": "criminal nbi-mc",
+    "papua-new-guinea": "papua new guinea",
     "parents-bff": "parent's best friend",
     "past-abuse": "past abuse",
     "past-child-abuse": "past child abuse",
@@ -186,10 +220,18 @@ JSON_TO_UI_TAG_MAP = {
     "rape-mc": "non-consent between mcs",
     "rape-non-mc": "third party sexual assault",
     "religious-trauma": "religious trauma",
+    "republic-of-congo": "republic of the congo",
+    "rhode-island": "rhode island",
     "rich-nbi-mc": "rich nbi-mc",
     "rockstars": "rockstar hero",
     "royal-nbi-mc": "aristo/royal nbi-mc",
     "royalty": "royal hero",
+    "saint-kitts-and-nevis": "saint kitts and nevis",
+    "saint-lucia": "saint lucia",
+    "saint-vincent-and-the-grenadines": "saint vincent and the grenadines",
+    "san-marino": "san marino",
+    "sao-tome-and-principe": "sao tome and principe",
+    "saudi-arabia": "saudi arabia",
     "secret-relationship": "secret relationship",
     "sheiks": "sheik",
     "short-king": "short king",
@@ -197,20 +239,34 @@ JSON_TO_UI_TAG_MAP = {
     "shy-hero": "shy hero",
     "shy-nbi-mc": "shy nbi-mc",
     "siblings-bff": "sibling's best friend",
+    "sierra-leone": "sierra leone",
     "silver-fox": "silver fox",
     "single-father": "single father",
     "single-mother": "single mother",
     "single-parent-nbi-mc": "single parent nbi-mc",
+    "sint-maarten": "sint maarten",
     "slim-nbi-mc": "slim nbi-mc",
     "slut-shaming": "slut shaming",
+    "solomon-islands": "solomon islands",
     "south asian": "south asian/desi",
+    "south-africa": "south africa",
     "south-america": "south america",
     "south-asia": "south asia",
+    "south-carolina": "south carolina",
+    "south-dakota": "south dakota",
     "south-east-europe": "south-east europe",
     "south-europe": "southern europe",
+    "south-korea": "south korea",
+    "south-sudan": "south sudan",
     "southeast-asia": "southeast asia",
     "southeast-asian-mc": "southeast asian mc",
     "southern-africa": "southern africa",
+    "space-station": "space station",
+    "sri-lanka": "sri lanka",
+    "stalker-hero": "stalker hero",
+    "stalker-heroine": "stalker heroine",
+    "stalker-nbi-mc": "stalker nbi-mc",
+    "standalone-first": "standalone or first in series",
     "stepsibling": "step siblings",
     "strong heroine": "take-charge heroine",
     "suicide": "suicide / ideation",
@@ -240,14 +296,19 @@ JSON_TO_UI_TAG_MAP = {
     "trans-heroine": "trans heroine",
     "transfemme": "transfemme mc",
     "transmasc": "transmasc mc",
+    "trinidad-and-tobago": "trinidad and tobago",
     "tudors": "tudors & stuarts",
     "tycoon": "ceo/tycoon hero",
+    "united-arab-emirates": "united arab emirates",
     "united-kingdom": "united kingdom",
+    "vatican": "vatican city (holy see)",
     "victim-blaming": "victim blaming",
     "vikings": "viking hero",
     "virgin-nbi-mc": "virgin nbi-mc",
     "warrior-heroine": "warrior heroine",
     "warrior-nbi-mc": "warrior nbi-mc",
+    "washington": "washington state",
+    "washington-dc": "washington d.c.",
     "west-asia": "western asia",
     "west-virginia": "west virginia",
     "western-africa": "western africa",
@@ -255,8 +316,9 @@ JSON_TO_UI_TAG_MAP = {
     "working-class-nbi-mc": "working class nbi-mc",
 }
 
-# Tags present in the JSON that have no corresponding UI display entry.
-# These are filtered out rather than passed through unchanged.
+# Slugs intentionally omitted from the legacy combined Tags output. Most are
+# structural values Romance.io displays elsewhere rather than ordinary tags.
+# Categorized length and series slugs are still retained in optional Format Tags.
 TAGS_TO_IGNORE = {
     "anthologies",
     "behind-doors",
@@ -274,7 +336,34 @@ TAGS_TO_IGNORE = {
     "length-short",
     "open-door",
     "standalone-first",
+    "undefined",
 }
+
+TAG_CATEGORY_KEYS = (
+    "general_tags",
+    "content_warnings",
+    "geography_tags",
+    "format_tags",
+)
+
+
+def categorize_json_tags(tags: List[str]) -> Dict[str, List[str]]:
+    """Categorize raw tag slugs without changing the legacy combined list.
+
+    Some tags that were historically omitted from the combined list are still
+    real Romance.io format tags (for example, page-length and series tags).
+    Those tags belong in the optional category columns, while uncategorized
+    ignored values remain omitted everywhere.
+    """
+    categories: Dict[str, List[str]] = {key: [] for key in TAG_CATEGORY_KEYS}
+    for tag in tags:
+        category = SPECIAL_TAG_CATEGORIES.get(tag)
+        if category is None:
+            if tag in TAGS_TO_IGNORE:
+                continue
+            category = "general_tags"
+        categories[category].append(JSON_TO_UI_TAG_MAP.get(tag, tag))
+    return categories
 
 
 def convert_json_tags_to_display_names(tags: List[str]) -> List[str]:
