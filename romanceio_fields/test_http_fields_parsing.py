@@ -375,8 +375,7 @@ def _test_ssr_categories_cover_combined_tags(book: StaticTestBook) -> None:
         result["format_tags"],
     )
     assert set(result["tags"]) <= categorized_tags, (
-        f"Combined tags missing from category columns: "
-        f"{set(result['tags']) - categorized_tags}"
+        f"Combined tags missing from category columns: " f"{set(result['tags']) - categorized_tags}"
     )
 
 

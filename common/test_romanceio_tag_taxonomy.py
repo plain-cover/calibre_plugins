@@ -101,7 +101,7 @@ def test_mapping_renderer_escapes_unicode_and_punctuation_round_trip(tmp_path):
         encoding="utf-8",
     )
     mappings = {
-        'reader\'s-choice': 'Reader\'s choice — surprise, joy & tears!',
+        "reader's-choice": "Reader's choice — surprise, joy & tears!",
         'quoted-"tag"': 'A "quoted" title',
     }
 

@@ -144,6 +144,7 @@ def has_tag_category_data(root: HtmlElement) -> bool:
 
 def _parse_rendered_tag_categories(root: HtmlElement) -> Dict[str, List[str]]:
     """Extract categories from the rendered lists used by the legacy parser."""
+
     def extract_tags(xpath_expr: str) -> List[str]:
         """Extract tags from elements matching xpath."""
         tags_list = []
@@ -158,9 +159,7 @@ def _parse_rendered_tag_categories(root: HtmlElement) -> Dict[str, List[str]]:
 
     general_tags: List[str] = extract_tags('//ul[@id="valid-topics-list"]//li[@class="tagged-topic"]')
     geography_tags: List[str] = extract_tags('//ul[@id="valid-topics-geography"]//li[@class="tagged-topic"]')
-    content_warnings: List[str] = extract_tags(
-        '//ul[@id="valid-topics-content-warnings"]//li[@class="tagged-topic"]'
-    )
+    content_warnings: List[str] = extract_tags('//ul[@id="valid-topics-content-warnings"]//li[@class="tagged-topic"]')
     format_tags: List[str] = extract_tags('//ul[@id="valid-topics-Format"]//li[@class="tagged-topic"]')
     # Also get Format tags without the tagged-topic class (like "audiobook")
     format_tags_simple: List[str] = []
@@ -187,10 +186,7 @@ def _merge_tag_categories(
     if embedded_categories is None:
         return rendered_categories
 
-    return {
-        key: _merge_unique(rendered_categories[key], embedded_categories[key])
-        for key in rendered_categories
-    }
+    return {key: _merge_unique(rendered_categories[key], embedded_categories[key]) for key in rendered_categories}
 
 
 def _supplement_categories_from_slugs(

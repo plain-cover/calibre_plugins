@@ -57,7 +57,7 @@ def is_safe_tag_value(value: str) -> bool:
 
 def extract_tag_mappings_from_html(html_content):
     """Extract topic slugs and titles from rendered or JSON-escaped HTML."""
-    html_content = html_content.replace(r'\"', '"')
+    html_content = html_content.replace(r"\"", '"')
     pattern = r'<a class="topic-link" data-href="([^"]+)"[^>]*data-title="([^"]+)"'
     matches = re.findall(pattern, html_content)
 
@@ -144,9 +144,7 @@ def render_tag_mapping_module(parse_json_file, mappings, topic_tag_count):
     section_start, section_end = _mapping_section_bounds(content, assignment)
 
     invalid = [
-        (key, value)
-        for key, value in mappings.items()
-        if not (is_safe_tag_value(key) and is_safe_tag_value(value))
+        (key, value) for key, value in mappings.items() if not (is_safe_tag_value(key) and is_safe_tag_value(value))
     ]
     if invalid:
         print("[update_tag_mappings] ERROR: Invalid tag mappings detected:")
@@ -240,13 +238,10 @@ def _write_generated_files_transactionally(generated_files: Dict[Path, str]) -> 
             except OSError as rollback_error:
                 backup_path = staged_backups[path]
                 preserved_backups.add(backup_path)
-                rollback_errors.append(
-                    f"{path}: {rollback_error}; original preserved at {backup_path}"
-                )
+                rollback_errors.append(f"{path}: {rollback_error}; original preserved at {backup_path}")
         if rollback_errors:
             raise RuntimeError(
-                "Generated taxonomy update failed and rollback was incomplete: "
-                + "; ".join(rollback_errors)
+                "Generated taxonomy update failed and rollback was incomplete: " + "; ".join(rollback_errors)
             ) from error
         raise
     finally:

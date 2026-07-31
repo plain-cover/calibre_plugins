@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     def _(text: str) -> str:
         """Type-checking declaration for Calibre's runtime translation function."""
         ...
+
 else:
     try:
         from qt.core import QToolButton, QMenu, QObject
@@ -217,9 +218,7 @@ class RomanceIOFieldsAction(InterfaceAction):
         duplicates = cfg.find_duplicate_column_mappings(fields_to_cols_map)
         if not duplicates:
             return False
-        details = "\n".join(
-            f"{column}: {', '.join(fields)}" for column, fields in sorted(duplicates.items())
-        )
+        details = "\n".join(f"{column}: {', '.join(fields)}" for column, fields in sorted(duplicates.items()))
         error_dialog(
             self.gui,
             _("Duplicate custom columns"),  # type: ignore[name-defined]  # pylint: disable=undefined-variable
@@ -399,9 +398,7 @@ class RomanceIOFieldsAction(InterfaceAction):
 
         # Queue the download job
         if books_to_scan_raw:
-            self._queue_download_job(
-                books_to_scan_raw, fields_to_cols_map, rating_tag_fields, max_tags, prefer_html
-            )
+            self._queue_download_job(books_to_scan_raw, fields_to_cols_map, rating_tag_fields, max_tags, prefer_html)
 
         return None
 

@@ -219,6 +219,7 @@ class ConfigWidget(QWidget):
 
     def _selected_columns(self) -> Dict[str, str]:
         """Return the current field-to-column selections from the form."""
+
         def selected_column(combo: Any) -> str:
             value = combo.get_selected_column()
             return value if isinstance(value, str) else ""

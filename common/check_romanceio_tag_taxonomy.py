@@ -69,12 +69,9 @@ def extract_special_tag_categories(html_content: str) -> Dict[str, str]:
 
 def extract_topic_display_names(html_content: str) -> Dict[str, str]:
     """Extract slug-to-title mappings from rendered or JSON-escaped topic links."""
-    normalized = html_content.replace(r'\"', '"')
+    normalized = html_content.replace(r"\"", '"')
     pattern = r'<a class="topic-link" data-href="([^"]+)"[^>]*data-title="([^"]+)"'
-    mappings = {
-        html.unescape(slug): html.unescape(title)
-        for slug, title in re.findall(pattern, normalized)
-    }
+    mappings = {html.unescape(slug): html.unescape(title) for slug, title in re.findall(pattern, normalized)}
     if len(mappings) < 300:
         raise ValueError(f"Only found {len(mappings)} topic tags; refusing a likely incomplete taxonomy")
     return mappings
@@ -167,8 +164,7 @@ def _difference_lines(
     if changed_categories:
         lines.append("Tags moved to a different category:")
         lines.extend(
-            f"  {slug!r}: {bundled_categories[slug]!r} -> {live_categories[slug]!r}"
-            for slug in changed_categories
+            f"  {slug!r}: {bundled_categories[slug]!r} -> {live_categories[slug]!r}" for slug in changed_categories
         )
     if removed_categories:
         lines.append("Categorized tags removed from the live taxonomy:")
@@ -179,18 +175,14 @@ def _difference_lines(
         and bundled_topic_count is not None
         and live_topic_count != bundled_topic_count
     ):
-        lines.append(
-            "Topic-tag count changed: "
-            f"bundled={bundled_topic_count}, live={live_topic_count}"
-        )
+        lines.append("Topic-tag count changed: " f"bundled={bundled_topic_count}, live={live_topic_count}")
     if new_names:
         lines.append("New slug-to-display-name mappings:")
         lines.extend(f"  {slug!r}: {required_names[slug]!r}" for slug in new_names)
     if changed_names:
         lines.append("Changed display names:")
         lines.extend(
-            f"  {slug!r}: {bundled_display_names[slug]!r} -> {required_names[slug]!r}"
-            for slug in changed_names
+            f"  {slug!r}: {bundled_display_names[slug]!r} -> {required_names[slug]!r}" for slug in changed_names
         )
     if removed_names:
         lines.append("Obsolete slug-to-display-name mappings:")

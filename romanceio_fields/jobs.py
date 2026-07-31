@@ -92,9 +92,7 @@ def prepare_books_for_download(
             # Check which fields need to be downloaded
             existing_custom_values = {}
             existing_tags = (
-                db.tags(book_id, index_is_id=True)  # type: ignore[attr-defined]
-                if rating_tag_fields
-                else None
+                db.tags(book_id, index_is_id=True) if rating_tag_fields else None  # type: ignore[attr-defined]
             )
             for field, col_name in fields_to_cols_map.items():
                 if col_name:

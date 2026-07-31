@@ -92,7 +92,7 @@ def _load_action_module():
         else:
             builtins._ = previous_translation  # type: ignore[attr-defined]
 
-    action_module.cfg = config
+    action_module.cfg = config  # type: ignore[attr-defined]
     return action_module
 
 

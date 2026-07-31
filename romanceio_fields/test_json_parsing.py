@@ -89,8 +89,7 @@ def test_json_book(book_data):
     category_keys = ("general_tags", "content_warnings", "geography_tags", "format_tags")
     categorized_tags = set().union(*(fields[key] for key in category_keys))
     assert set(fields["tags"]) <= categorized_tags, (
-        f"Combined JSON tags are missing from category columns: "
-        f"{set(fields['tags']) - categorized_tags}"
+        f"Combined JSON tags are missing from category columns: " f"{set(fields['tags']) - categorized_tags}"
     )
 
     if book_data.romanceio_id == "5484ecd47a5936fb0405756c":

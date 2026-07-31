@@ -85,11 +85,7 @@ def copy_common_files():
 
     for filename in os.listdir(common_folder):
         # Skip __init__.py - it's only for mypy, not for copying to plugins
-        if (
-            filename.endswith(".py")
-            and filename != "__init__.py"
-            and filename not in MAINTAINER_ONLY_COMMON_FILES
-        ):
+        if filename.endswith(".py") and filename != "__init__.py" and filename not in MAINTAINER_ONLY_COMMON_FILES:
             src_path = os.path.join(common_folder, filename)
             dst_path = os.path.join(os.getcwd(), filename)
             with open(src_path, "r", encoding="utf-8") as src_file:

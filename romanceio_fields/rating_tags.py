@@ -4,7 +4,6 @@ import re
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
-
 FIELD_STEAM_RATING = "SteamRating"
 FIELD_STAR_RATING = "StarRating"
 
@@ -89,15 +88,11 @@ def build_field_update_plan(
             if overwrite_existing or existing_value is None or existing_value == 0:
                 custom_fields_to_update.append(field)
 
-        if field in rating_tag_fields and (
-            overwrite_existing or not has_rating_tag(existing_tags, field)
-        ):
+        if field in rating_tag_fields and (overwrite_existing or not has_rating_tag(existing_tags, field)):
             tag_fields_to_update.append(field)
 
     fields_to_run = [
-        field
-        for field in fields_to_cols_map
-        if field in custom_fields_to_update or field in tag_fields_to_update
+        field for field in fields_to_cols_map if field in custom_fields_to_update or field in tag_fields_to_update
     ]
     return fields_to_run, custom_fields_to_update, tag_fields_to_update
 
