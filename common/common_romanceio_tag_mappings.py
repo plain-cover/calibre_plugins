@@ -12,7 +12,7 @@ from .common_romanceio_tag_categories import SPECIAL_TAG_CATEGORIES
 
 # Mapping from JSON API tag slugs to UI/display names.
 # To update both display names and categories: python common/update_tag_mappings.py
-# Last tag mapping update: 2026-07-20
+# Last tag mapping update: 2026-08-03
 # Number of topic tags seen during the same update. This includes identity
 # mappings, which are intentionally omitted from JSON_TO_UI_TAG_MAP.
 TOPIC_TAG_COUNT = 387
@@ -41,7 +41,6 @@ JSON_TO_UI_TAG_MAP = {
     "asexual-nbi-mc": "asexual nbi-mc",
     "athlete-nbi-mc": "athlete nbi-mc",
     "athletes": "athlete hero",
-    "behind-doors": "behind closed doors",
     "bff-parent": "best friend's parent",
     "bikers": "biker hero",
     "birth-control-non-con": "birth-control non-consent",
@@ -52,7 +51,6 @@ JSON_TO_UI_TAG_MAP = {
     "bodyguard-heroine": "bodyguard/protector heroine",
     "bodyguard-nbi-mc": "bodyguard/protector nbi-mc",
     "bosnia-and-herzegovina": "bosnia and herzegovina",
-    "boss & employee": "boss & employee",
     "british-isles": "british isles",
     "burkina-faso": "burkina faso",
     "bwwm": "bw/wm",
@@ -104,8 +102,6 @@ JSON_TO_UI_TAG_MAP = {
     "el-salvador": "el salvador",
     "equatorial-guinea": "equatorial guinea",
     "eu-georgia": "georgia",
-    "explicit-open-door": "explicit open door",
-    "explicit-plentiful": "explicit and plentiful",
     "f-f": "lesbian romance",
     "f-f-f": "fff+",
     "famous-nbi-mc": "famous nbi-mc",
@@ -120,7 +116,6 @@ JSON_TO_UI_TAG_MAP = {
     "from hate to love": "enemies to lovers",
     "genderfluid": "genderfluid mc",
     "gifted heroine": "gifted/super-heroine",
-    "glimpses-kisses": "glimpses and kisses",
     "graphic-violence": "graphic violence",
     "grovel": "good grovel",
     "grumpy sunshine": "grumpy & sunshine",
@@ -196,7 +191,6 @@ JSON_TO_UI_TAG_MAP = {
     "northern-africa": "northern africa",
     "northern-ireland": "northern ireland",
     "office": "workplace/office",
-    "open-door": "open door",
     "other-man-woman": "other man/woman",
     "outlaw-heroine": "criminal heroine",
     "outlaw-nbi-mc": "criminal nbi-mc",
@@ -273,10 +267,8 @@ JSON_TO_UI_TAG_MAP = {
     "sunny hero": "sunny/happy hero",
     "sunny-nbi-mc": "sunny/happy nbi-mc",
     "super rich hero": "rich hero",
-    "sweet hero": "sweet/gentle hero",
     "sweet heroine": "sweet/gentle heroine",
     "sweet-hero": "sweet/gentle hero",
-    "sweet-heroine": "sweet/gentle heroine",
     "sweet-nbi-mc": "sweet/gentle nbi-mc",
     "switch": "role switching",
     "tall-heroine": "tall heroine",
