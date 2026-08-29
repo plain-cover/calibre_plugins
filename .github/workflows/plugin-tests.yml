@@ -1,6 +1,7 @@
 name: Calibre Plugin Tests
 
 on:
+  workflow_dispatch:
   push:
     branches: [ "main" ]  # Only run on main; feature branches are covered by pull_request
   pull_request:
@@ -25,7 +26,7 @@ jobs:
       run: |
         # Check if previous workflow run failed (to catch lingering test failures)
         FORCE_ALL_TESTS=false
-        if [ "${{ github.event_name }}" != "schedule" ]; then
+        if [ "${{ github.event_name }}" != "schedule" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
           echo "Checking previous workflow run status..."
 
           # Get the most recent completed workflow run before this one
@@ -44,9 +45,9 @@ jobs:
         fi
 
         # Determine which files changed
-        if [ "${{ github.event_name }}" == "schedule" ]; then
-          # For scheduled runs, run all tests
-          echo "Scheduled run - will run all tests"
+        if [ "${{ github.event_name }}" == "schedule" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          # For scheduled and manually dispatched runs, run all tests
+          echo "Scheduled/manual run - will run all tests"
           CHANGED_FILES="all"
         elif [ "${{ github.event_name }}" == "pull_request" ]; then
           # For PRs, compare against the base branch
@@ -343,16 +344,60 @@ jobs:
       run: |
         cd romanceio_fields && calibre-debug -e __init__.py
 
-    - name: Test romanceio_fields plugin JSON API download
+    # Live endpoint checks are intentionally non-blocking. Each access method is
+    # reported separately, but third-party availability, Cloudflare challenges,
+    # and retired endpoints are not treated as repository regressions.
+    # Deterministic parsing, matching, and fallback tests above remain required.
+    - name: Live smoke - JSON search
       if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      continue-on-error: true
+      timeout-minutes: 2
       env:
         PYTHONPATH: ${{ github.workspace }}/..
       run: |
-        cd romanceio_fields && calibre-debug -e test_json_download.py
+        cd romanceio_fields && calibre-debug -e test_live_fetch_paths.py -- json-search
 
-    - name: Test romanceio_fields plugin HTML field download
+    - name: Live smoke - JSON book details
       if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      continue-on-error: true
+      timeout-minutes: 2
       env:
         PYTHONPATH: ${{ github.workspace }}/..
       run: |
-        cd romanceio_fields && xvfb-run -a calibre-debug -e test_html_fields_download.py
+        cd romanceio_fields && calibre-debug -e test_live_fetch_paths.py -- json-details
+
+    - name: Live smoke - lightweight SSR book details
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      continue-on-error: true
+      timeout-minutes: 2
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio_fields && calibre-debug -e test_live_fetch_paths.py -- ssr-details
+
+    - name: Live smoke - Chrome search
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      continue-on-error: true
+      timeout-minutes: 2
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio_fields && xvfb-run -a calibre-debug -e test_live_fetch_paths.py -- chrome-search
+
+    - name: Live smoke - Chrome book details
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      continue-on-error: true
+      timeout-minutes: 2
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio_fields && xvfb-run -a calibre-debug -e test_live_fetch_paths.py -- chrome-details
+
+    - name: Live smoke - default fallback path
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      continue-on-error: true
+      timeout-minutes: 2
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        cd romanceio_fields && xvfb-run -a calibre-debug -e test_live_fetch_paths.py -- default

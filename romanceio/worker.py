@@ -41,7 +41,7 @@ class Worker(Thread):
             self.log.exception(f"get_details failed for url: {self.url!r}")
 
     def get_details(self):
-        """Fetch book details, trying JSON API first, then falling back to HTML scraping."""
+        """Fetch book details, preferring HTML and retaining JSON as a final fallback."""
         try:
             romanceio_id = parse_romanceio_id(self.url)
             if not romanceio_id:
@@ -51,7 +51,8 @@ class Worker(Thread):
             self.log.exception(f"Error parsing Romance.io id from url: {self.url!r}")
             return
 
-        # Use orchestrator to try JSON first, then HTML fallback with retries
+        # Prefer lightweight SSR details, with Chrome and the legacy JSON
+        # book-details endpoint retained as later fallbacks.
         from calibre_plugins.romanceio.common_romanceio_search_orchestrator import (  # type: ignore[import-not-found]  # pylint: disable=import-error
             fetch_details_with_fallback,
             _is_book_not_found,
@@ -63,7 +64,7 @@ class Worker(Thread):
 
         if prefer_html:
             # Try Chrome first for the full JS-rendered tag set.
-            # On technical failure fall through to the normal JSON -> SSR orchestrator.
+            # On technical failure fall through to the normal SSR -> Chrome -> JSON orchestrator.
             # On a genuine 404 stop immediately.
             if self.abort is not None and self.abort.is_set():
                 return
@@ -76,7 +77,7 @@ class Worker(Thread):
                 self._build_metadata_from_html(chrome_root)
                 return
             except Exception as e:  # pylint: disable=broad-except
-                self.log.info(f"Chrome fetch failed ({type(e).__name__}: {e}), falling back to JSON/SSR")
+                self.log.info(f"Chrome fetch failed ({type(e).__name__}: {e}), falling back to SSR/JSON")
 
         result = fetch_details_with_fallback(
             romanceio_id=romanceio_id,

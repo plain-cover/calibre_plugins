@@ -324,7 +324,8 @@ def get_romanceio_fields_for_book(
 
     try:
         with quick_metadata:
-            # Use orchestrator to try JSON first, then HTML fallback with retries
+            # Prefer lightweight SSR details, with Chrome and the legacy JSON
+            # book-details endpoint retained as later fallbacks.
             from calibre_plugins.romanceio_fields.common_romanceio_search_orchestrator import (  # type: ignore[import-not-found]  # pylint: disable=import-error
                 fetch_details_with_fallback,
                 _is_book_not_found,
@@ -334,7 +335,7 @@ def get_romanceio_fields_for_book(
             if prefer_html:
                 # Try Chrome first for the full JS-rendered tag set.
                 # On technical failure (Chrome unavailable, driver crash, etc.) fall back
-                # to the normal JSON -> SSR orchestrator so the user still gets metadata.
+                # to the normal SSR -> Chrome -> JSON orchestrator so the user still gets metadata.
                 # On a genuine 404 (book not found), stop immediately.
                 log(f"prefer_html=True: fetching Chrome HTML directly for {romanceio_id}")
                 try:
@@ -348,7 +349,7 @@ def get_romanceio_fields_for_book(
                         _build_fields(parse_fields_from_html(chrome_result, max_tags), fields_to_run, max_tags)
                     )
                 except Exception as e:  # pylint: disable=broad-except
-                    log(f"Chrome fetch failed ({type(e).__name__}: {e}), falling back to JSON/SSR")
+                    log(f"Chrome fetch failed ({type(e).__name__}: {e}), falling back to SSR/JSON")
 
             result = fetch_details_with_fallback(
                 romanceio_id=romanceio_id,

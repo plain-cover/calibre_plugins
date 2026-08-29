@@ -88,7 +88,7 @@ calibre-debug test_search_parity.py -- --live=all               # JSON search vs
 ![Calibre "Edit metadata" menu emphasizing the "Ids" field where users can manually enter the Romance.io ID](../images/Edit%20metadata%20-%20set%20ID.png)
 
 **Chrome is not installed ("Chrome is not installed - HTML metadata fallback is unavailable"):**
-- The plugin tries the JSON API first, then a lightweight HTTP fetch, and only uses Chrome as a final fallback
+- The plugin uses JSON search first. For book details it tries lightweight HTTP, then Chrome, with the legacy JSON details route last
 - Without Chrome, most books still download fine via the JSON API or lightweight HTTP fetch
 - Install Chrome from [google.com/chrome](https://www.google.com/chrome/) if you see this warning or downloads are failing
 - **Linux with Chrome installed as a flatpak:** the plugin can find Chrome automatically, but if Calibre is also a flatpak you need to run this once in a terminal and restart Calibre:
