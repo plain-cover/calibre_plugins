@@ -5,7 +5,7 @@ Shared across romanceio and romanceio_fields plugins.
 
 import re
 
-from typing import List, Optional
+from typing import Any, List, Optional
 
 
 def is_valid_romanceio_id(romanceio_id: Optional[str]) -> bool:
@@ -40,6 +40,39 @@ def is_valid_romanceio_id(romanceio_id: Optional[str]) -> bool:
         return False
 
     return True
+
+
+def is_usable_book_detail_json(book_json: Any, expected_romanceio_id: str) -> bool:
+    """Return whether a JSON detail response contains a usable book identity."""
+    if not isinstance(book_json, dict):
+        return False
+    romanceio_id = book_json.get("_id")
+    if romanceio_id != expected_romanceio_id or not is_valid_romanceio_id(romanceio_id):
+        return False
+    info = book_json.get("info")
+    if not isinstance(info, dict) or not str(info.get("title") or "").strip():
+        return False
+    authors = book_json.get("authors")
+    return isinstance(authors, list) and bool(authors)
+
+
+def is_usable_book_detail_html(root: Any) -> bool:
+    """Return whether a parsed page has the identity and stats needed downstream."""
+    try:
+        title_nodes = root.xpath('//div[@id="main"]//div[contains(@class, "book-info")]/h1')
+        author_nodes = root.xpath(
+            '//div[@id="main"]//div[contains(@class, "book-info")]/h2[contains(@class, "author")]'
+        )
+        stats_nodes = root.xpath('//div[@id="main"]//div[@id="book-stats"]')
+    except (AttributeError, TypeError, ValueError):
+        return False
+    return bool(
+        title_nodes
+        and str(title_nodes[0].text_content() or "").strip()
+        and author_nodes
+        and str(author_nodes[0].text_content() or "").strip()
+        and stats_nodes
+    )
 
 
 def normalize_author_initials(author_name: str) -> str:

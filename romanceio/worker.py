@@ -62,23 +62,6 @@ class Worker(Thread):
             cfg.KEY_PREFER_HTML, cfg.DEFAULT_STORE_VALUES[cfg.KEY_PREFER_HTML]
         )
 
-        if prefer_html:
-            # Try Chrome first for the full JS-rendered tag set.
-            # On technical failure fall through to the normal SSR -> Chrome -> JSON orchestrator.
-            # On a genuine 404 stop immediately.
-            if self.abort is not None and self.abort.is_set():
-                return
-            self.log.info(f"prefer_html=True: fetching Chrome HTML directly for {romanceio_id}")
-            try:
-                chrome_root = self._fetch_html(romanceio_id, self.log.info)
-                if _is_book_not_found(chrome_root):
-                    self.log.info(f"Romance.io ID {romanceio_id} was not found on the website (404)")
-                    return
-                self._build_metadata_from_html(chrome_root)
-                return
-            except Exception as e:  # pylint: disable=broad-except
-                self.log.info(f"Chrome fetch failed ({type(e).__name__}: {e}), falling back to SSR/JSON")
-
         result = fetch_details_with_fallback(
             romanceio_id=romanceio_id,
             json_fetch_func=self._fetch_json,
@@ -88,6 +71,7 @@ class Worker(Thread):
             max_retries=3,
             retry_delay=2.0,
             abort=self.abort,
+            prefer_chrome=prefer_html,
         )
 
         if result is None:
@@ -129,10 +113,13 @@ class Worker(Thread):
             Exception on technical failure (network, parsing, etc.)
         """
         from calibre_plugins.romanceio.common_romanceio_json_api import get_book_details_json  # type: ignore[import-not-found]  # pylint: disable=import-error
+        from calibre_plugins.romanceio.common_romanceio_validation import is_usable_book_detail_json  # type: ignore[import-not-found]  # pylint: disable=import-error
 
         book_json = get_book_details_json(
             romanceio_id, log_func=log_func, timeout=min(self.timeout, _JSON_TIMEOUT_SECS)
         )
+        if book_json is not None and not is_usable_book_detail_json(book_json, romanceio_id):
+            raise ValueError(f"JSON API returned an unusable detail payload for {romanceio_id}")
         return book_json
 
     def _fetch_html_lightweight(self, romanceio_id, log_func):
@@ -151,6 +138,7 @@ class Worker(Thread):
             fetch_book_page_http,
             parse_html_from_selenium,
         )
+        from calibre_plugins.romanceio.common_romanceio_validation import is_usable_book_detail_html  # type: ignore[import-not-found]  # pylint: disable=import-error
 
         log_func(f"Lightweight HTTP fetch: requesting book page for {romanceio_id}")
         raw_html, is_valid = fetch_book_page_http(
@@ -170,6 +158,9 @@ class Worker(Thread):
                 log_func(f"Lightweight HTTP fetch: got search results page for {romanceio_id}")
                 return _BookNotFound()
 
+        if not is_usable_book_detail_html(root):
+            raise ValueError(f"Lightweight HTTP returned an unusable detail page for {romanceio_id}")
+
         return root
 
     def _fetch_html(self, romanceio_id, log_func):
@@ -185,6 +176,7 @@ class Worker(Thread):
             fetch_romanceio_book_page,
             parse_html_from_selenium,
         )
+        from calibre_plugins.romanceio.common_romanceio_validation import is_usable_book_detail_html  # type: ignore[import-not-found]  # pylint: disable=import-error
 
         log_func(f"HTML fetch: requesting book page for {romanceio_id}")
         page_html, is_valid = fetch_romanceio_book_page(self.url, plugin_name="romanceio", log=log_func)
@@ -209,6 +201,9 @@ class Worker(Thread):
         if errmsg:
             msg = tostring(errmsg, method="text", encoding="unicode").strip()
             raise RuntimeError(f"Page contains error: {msg}")
+
+        if not is_usable_book_detail_html(root):
+            raise ValueError(f"Chrome returned an unusable detail page for {romanceio_id}")
 
         log_func(f"HTML fetch: page validated, extracting metadata for {romanceio_id}")
         return root

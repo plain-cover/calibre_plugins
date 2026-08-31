@@ -4,41 +4,515 @@ Used by both romanceio and romanceio_fields plugins.
 """
 
 import glob
+import hashlib
 import importlib
 import importlib.abc
+from importlib import metadata as importlib_metadata
 import os
 import platform
 import random
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
+import threading
 import time
 import types
-from typing import Callable, Optional, Sequence
+import zipfile
+from typing import Any, Callable, Dict, List, Optional, Sequence
+from urllib.parse import urlparse
 
 # List of vendored packages that need import redirection
 VENDORED_PACKAGES = [
+    "attr",
+    "attrs",
     "certifi",
     "charset_normalizer",
     "colorama",
     "cssselect",
+    "exceptiongroup",
     "fake_useragent",
     "fasteners",
+    "filelock",
+    "h11",
     "idna",
-    "lxml",
     "mycdp",
+    "outcome",
+    "packaging",
+    "platformdirs",
     "requests",
     "sbvirtualdisplay",
     "selenium",
     "seleniumbase",
     "six",
+    "sniffio",
+    "socks",
+    "sortedcontainers",
+    "trio",
+    "trio_websocket",
     "typing_extensions",
     "urllib3",
     "websocket",
     "websocket_client",
     "websockets",
+    "wsproto",
 ]
+
+_BROWSER_IMPORT_STATE_MODULE = "_calibre_romanceio_browser_import_state"
+
+
+def _new_browser_import_state() -> types.ModuleType:
+    """Create process-wide state shared by both installed Romance.io plugins."""
+    state = types.ModuleType(_BROWSER_IMPORT_STATE_MODULE)
+    state.import_lock = threading.RLock()  # type: ignore[attr-defined]
+    return state
+
+
+# This helper is copied into two separately-namespaced plugin ZIPs. A normal
+# module global would therefore create one lock per plugin even though both
+# copies mutate the same process-wide import tables. sys.modules is shared by
+# the whole Calibre interpreter, so it provides a stable rendezvous point.
+_BROWSER_IMPORT_STATE = sys.modules.setdefault(
+    _BROWSER_IMPORT_STATE_MODULE,
+    _new_browser_import_state(),
+)
+_BROWSER_IMPORT_LOCK = _BROWSER_IMPORT_STATE.import_lock  # type: ignore[attr-defined]
+
+_ALLOWED_DRIVER_DOWNLOAD_HOSTS = frozenset(
+    {
+        "chromedriver.storage.googleapis.com",
+        "googlechromelabs.github.io",
+        "storage.googleapis.com",
+    }
+)
+_SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+_EXECUTABLE_VERSION_PATTERN = re.compile(
+    r"\b(?:chromedriver|chrome|chromium)(?:\s+(?:for\s+testing|beta|dev|canary))?\s+(\d+)",
+    re.IGNORECASE,
+)
+_DRIVER_CACHE_LOCK_TIMEOUT_SECONDS = 120
+
+
+def validate_driver_download_url(url: str) -> str:
+    """Reject non-TLS or non-Google origins used during ChromeDriver setup."""
+    parsed = urlparse(url)
+    hostname = (parsed.hostname or "").lower()
+    if parsed.scheme.lower() != "https":
+        raise RuntimeError(f"Refusing non-HTTPS ChromeDriver download URL: {url}")
+    if hostname not in _ALLOWED_DRIVER_DOWNLOAD_HOSTS:
+        raise RuntimeError(f"Refusing unapproved ChromeDriver download host {hostname!r}: {url}")
+    if parsed.username or parsed.password or parsed.port not in (None, 443):
+        raise RuntimeError(f"Refusing unusual ChromeDriver download URL: {url}")
+    return url
+
+
+def _secure_seleniumbase_request(sb_install: Any, url: str, timeouts: Sequence[float]) -> Any:
+    """Perform SeleniumBase's metadata/artifact request without HTTP downgrade."""
+    validate_driver_download_url(url)
+    use_proxy, protocol, proxy_string = sb_install.get_proxy_info()
+    proxies = {protocol: proxy_string} if use_proxy else None
+    last_error = None
+    for timeout in timeouts:
+        try:
+            response = sb_install.requests.get(url, proxies=proxies, timeout=timeout)
+            validate_driver_download_url(getattr(response, "url", url))
+            response.raise_for_status()
+            return response
+        except Exception as error:  # pylint: disable=broad-except
+            last_error = error
+    raise RuntimeError(f"Secure ChromeDriver request failed for {url}: {last_error}") from last_error
+
+
+def configure_secure_driver_downloads(sb_install: Any) -> None:
+    """Replace SeleniumBase download helpers with strict HTTPS/host validation."""
+    sb_install.requests_get = lambda url: _secure_seleniumbase_request(sb_install, url, (1.25, 2.75))
+    sb_install.requests_get_with_retry = lambda url: _secure_seleniumbase_request(
+        sb_install,
+        url,
+        (1.35, 2.45, 3.55),
+    )
+
+
+def _sha256_file(path: str, chunk_size: int = 1024 * 1024) -> str:
+    digest = hashlib.sha256()
+    with open(path, "rb") as source:
+        for chunk in iter(lambda: source.read(chunk_size), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def record_driver_integrity(path: str) -> str:
+    """Atomically record a checksum for later corruption/race detection.
+
+    The adjacent checksum is not an independent provenance or authenticity
+    guarantee: a process that can replace the driver can usually replace the
+    checksum too. Download provenance is instead constrained by
+    ``validate_driver_download_url()``.
+    """
+    digest = _sha256_file(path)
+    record_path = path + ".sha256"
+    record_directory = os.path.dirname(os.path.abspath(record_path))
+    descriptor, temporary_record = tempfile.mkstemp(
+        prefix=os.path.basename(record_path) + ".",
+        suffix=".tmp",
+        dir=record_directory,
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="ascii") as record:
+            record.write(digest + "\n")
+        os.replace(temporary_record, record_path)
+    finally:
+        if os.path.exists(temporary_record):
+            os.remove(temporary_record)
+    return digest
+
+
+def verify_driver_integrity(path: str) -> Optional[str]:
+    """Check ChromeDriver against its local baseline, if one is available."""
+    record_path = path + ".sha256"
+    if not os.path.exists(record_path):
+        return None
+    with open(record_path, "r", encoding="ascii") as record:
+        expected = record.read().strip().lower()
+    if not _SHA256_PATTERN.fullmatch(expected):
+        raise RuntimeError(f"ChromeDriver integrity record is malformed: {record_path}")
+    actual = _sha256_file(path)
+    if actual != expected:
+        raise RuntimeError(f"ChromeDriver integrity check failed for {path}.")
+    return actual
+
+
+def _executable_major_version(path: str) -> Optional[int]:
+    """Return a Chrome-family executable's major version, if it can run."""
+    try:
+        completed = subprocess.run(
+            [path, "--version"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+            timeout=5,
+            universal_newlines=True,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if completed.returncode != 0:
+        return None
+    match = _EXECUTABLE_VERSION_PATTERN.search(completed.stdout or "")
+    return int(match.group(1)) if match else None
+
+
+def _remove_driver_cache_entry(path: str) -> None:
+    """Remove a managed driver and its adjacent local checksum."""
+    for cache_path in (path, path + ".sha256"):
+        try:
+            os.remove(cache_path)
+        except FileNotFoundError:
+            pass
+
+
+def prepare_cached_chromedriver(
+    sb_install: Any,
+    interprocess_lock_class: Any,
+    stable_base: str,
+    chromedriver_path: str,
+    runtime_chromedriver_path: str,
+    log_func: Callable[[str], None],
+    browser_major_version: Optional[int] = None,
+) -> str:
+    """Install/check/copy ChromeDriver while serializing the shared cache.
+
+    Installed plugin calls run in separate Calibre worker processes. A
+    ``threading.RLock`` cannot protect the persistent cache across those
+    processes, so all cache inspection and mutation happens under SeleniumBase's
+    cross-platform ``fasteners.InterProcessLock`` implementation.
+    """
+    lock_path = os.path.abspath(os.path.join(stable_base, "chromedriver-install.lock"))
+    cache_lock = interprocess_lock_class(lock_path)
+    acquired = cache_lock.acquire(blocking=True, timeout=_DRIVER_CACHE_LOCK_TIMEOUT_SECONDS)
+    if not acquired:
+        raise RuntimeError("Timed out waiting for another Calibre job to finish preparing ChromeDriver")
+
+    digest: Optional[str] = None
+    try:
+        install_reason: Optional[str] = None
+        if os.path.exists(chromedriver_path):
+            try:
+                digest = verify_driver_integrity(chromedriver_path)
+            except (OSError, RuntimeError) as error:
+                log_func(
+                    "chromedriver cache failed its local integrity check; "
+                    f"removing it and downloading a clean copy: {error}"
+                )
+                _remove_driver_cache_entry(chromedriver_path)
+                install_reason = "cache recovery"
+            else:
+                if digest is None:
+                    # Preserve upgrades for users with a driver installed by an older
+                    # plugin version. This baseline detects later corruption and cache
+                    # races; it does not retroactively establish download provenance.
+                    digest = record_driver_integrity(chromedriver_path)
+                    log_func(
+                        "chromedriver found; recorded a local SHA-256 baseline for the legacy cache "
+                        f"(corruption detection only): {digest}"
+                    )
+                else:
+                    log_func(f"chromedriver checksum verified (SHA-256: {digest})")
+
+                if browser_major_version is not None:
+                    driver_major_version = _executable_major_version(chromedriver_path)
+                    if driver_major_version is None:
+                        log_func(
+                            "cached chromedriver cannot execute or report its version; " "refreshing the shared cache"
+                        )
+                        _remove_driver_cache_entry(chromedriver_path)
+                        digest = None
+                        install_reason = "unusable cached executable"
+                    elif driver_major_version != browser_major_version:
+                        log_func(
+                            f"cached chromedriver {driver_major_version} does not match "
+                            f"installed Chrome {browser_major_version}; refreshing the shared cache"
+                        )
+                        _remove_driver_cache_entry(chromedriver_path)
+                        digest = None
+                        install_reason = "Chrome version change"
+        else:
+            install_reason = "first use"
+
+        if install_reason is not None:
+            requested_version = str(browser_major_version) if browser_major_version is not None else "latest"
+            log_func(
+                "chromedriver is not usable in the managed driver directory; "
+                f"downloading version {requested_version} ({install_reason})..."
+            )
+            sb_install.main(f"chromedriver {requested_version}")
+            if not os.path.exists(chromedriver_path):
+                raise RuntimeError(
+                    "chromedriver download failed - file missing after install attempt.\n"
+                    "  This is often caused by antivirus software quarantining the file.\n"
+                    "  Check your antivirus quarantine and the managed Calibre Selenium directory."
+                )
+            if browser_major_version is not None:
+                downloaded_major_version = _executable_major_version(chromedriver_path)
+                if downloaded_major_version != browser_major_version:
+                    _remove_driver_cache_entry(chromedriver_path)
+                    reported_version = (
+                        "could not execute" if downloaded_major_version is None else str(downloaded_major_version)
+                    )
+                    raise RuntimeError(
+                        "Downloaded ChromeDriver is unusable for the installed browser: "
+                        f"expected major {browser_major_version}, driver {reported_version}."
+                    )
+            digest = record_driver_integrity(chromedriver_path)
+            log_func(f"chromedriver downloaded successfully (SHA-256 baseline: {digest})")
+
+        cached_driver_digest = verify_driver_integrity(chromedriver_path)
+        if cached_driver_digest is None:
+            raise RuntimeError("Managed chromedriver has no checksum record")
+
+        shutil.copy2(chromedriver_path, runtime_chromedriver_path)
+        if _sha256_file(runtime_chromedriver_path) != cached_driver_digest:
+            raise RuntimeError("chromedriver changed while creating the private worker copy")
+    finally:
+        cache_lock.release()
+
+    record_driver_integrity(runtime_chromedriver_path)
+    verify_driver_integrity(runtime_chromedriver_path)
+    return cached_driver_digest
+
+
+def prepare_uc_driver(chromedriver_path: str, uc_driver_path: str, patcher_class: Any) -> str:
+    """Rebuild and verify the exact UC executable that SeleniumBase will launch.
+
+    ``chromedriver`` is the locally checksummed source. The patched UC
+    binary is created at a random sibling path and atomically replaces any stale
+    or locally modified copy. Installed-plugin callers use a per-worker directory,
+    so concurrent Calibre jobs never share the executable being launched.
+    """
+    source_digest = verify_driver_integrity(chromedriver_path)
+    if source_digest is None:
+        raise RuntimeError("Refusing to build uc_driver from an unverified chromedriver")
+
+    driver_directory = os.path.dirname(os.path.abspath(uc_driver_path))
+    temporary_suffix = ".tmp.exe" if uc_driver_path.lower().endswith(".exe") else ".tmp"
+    descriptor, temporary_driver = tempfile.mkstemp(
+        prefix=os.path.basename(uc_driver_path) + ".",
+        suffix=temporary_suffix,
+        dir=driver_directory,
+    )
+    os.close(descriptor)
+    try:
+        shutil.copy2(chromedriver_path, temporary_driver)
+        if _sha256_file(temporary_driver) != source_digest:
+            raise RuntimeError("chromedriver changed while preparing the UC executable")
+        uc_patcher = patcher_class(executable_path=temporary_driver)
+        if not uc_patcher.is_binary_patched():
+            uc_patcher.patch_exe()
+        os.replace(temporary_driver, uc_driver_path)
+        digest = record_driver_integrity(uc_driver_path)
+        if verify_driver_integrity(uc_driver_path) != digest:
+            raise RuntimeError("uc_driver integrity verification failed after installation")
+        return digest
+    finally:
+        if os.path.exists(temporary_driver):
+            os.remove(temporary_driver)
+
+
+def _redact_log_text(message: Any) -> str:
+    """Hide user-home and temporary-directory prefixes from shareable job logs."""
+    redacted = str(message)
+    replacements = (
+        (os.path.abspath(tempfile.gettempdir()), "<temp>"),
+        (os.path.abspath(os.path.expanduser("~")), "~"),
+    )
+    for path, label in replacements:
+        windows_path = path.replace("/", "\\")
+        posix_path = path.replace("\\", "/")
+        variants = {
+            path,
+            windows_path,
+            posix_path,
+            windows_path.replace("\\", "\\\\"),
+            posix_path.replace("/", "//"),
+        }
+        for variant in sorted(variants, key=len, reverse=True):
+            if variant:
+                redacted = re.sub(re.escape(variant), label, redacted, flags=re.IGNORECASE)
+    return redacted
+
+
+def browser_vendor_branch(version_info: Optional[Sequence[int]] = None) -> str:
+    """Return SeleniumBase's dependency branch for a Python runtime."""
+    version = version_info or sys.version_info
+    major_minor = tuple(version[:2])
+    if major_minor < (3, 8):
+        raise RuntimeError(f"Python 3.8 or newer is required, found {major_minor!r}")
+    if major_minor == (3, 8):
+        return "py38"
+    if major_minor == (3, 9):
+        return "py39"
+    return "current"
+
+
+def configure_browser_vendor_path(
+    plugin_dir: str,
+    version_info: Optional[Sequence[int]] = None,
+) -> List[str]:
+    """Put the matching runtime branch and shared browser packages on sys.path."""
+    vendor_root = plugin_dir.rstrip("/\\") + "/browser_vendor"
+    shared_path = vendor_root + "/shared"
+    branch_path = vendor_root + "/" + browser_vendor_branch(version_info)
+
+    # Insert shared first so the runtime-specific branch ends up at higher
+    # priority and wins for dependencies present in both locations.
+    for path in (shared_path, branch_path):
+        if path in sys.path:
+            sys.path.remove(path)
+        sys.path.insert(0, path)
+    return [branch_path, shared_path]
+
+
+def _normalized_distribution_name(name: str) -> str:
+    """Normalize a distribution name using the PyPA name-matching rules."""
+    return re.sub(r"[-_.]+", "-", name).lower()
+
+
+class BrowserVendorDistribution(importlib_metadata.Distribution):
+    """Distribution metadata stored below a vendor root inside a plugin ZIP."""
+
+    def __init__(self, archive_path: str, vendor_prefix: str, metadata_prefix: str):
+        self.archive_path = archive_path
+        self.vendor_prefix = vendor_prefix.rstrip("/") + "/"
+        self.metadata_prefix = metadata_prefix.rstrip("/") + "/"
+
+    def read_text(self, filename):
+        try:
+            with zipfile.ZipFile(self.archive_path) as plugin_zip:
+                return plugin_zip.read(self.metadata_prefix + filename).decode("utf-8")
+        except (KeyError, OSError, UnicodeDecodeError):
+            return None
+
+    def locate_file(self, path):
+        relative = str(path).replace("\\", "/").lstrip("/")
+        return zipfile.Path(self.archive_path, at=self.vendor_prefix + relative)
+
+
+class BrowserVendorDistributionFinder(importlib.abc.MetaPathFinder):
+    """Expose nested ZIP distribution metadata to importlib.metadata."""
+
+    def __init__(self, archive_path: str, vendor_paths: Sequence[str]):
+        self.archive_path = archive_path
+        self.distributions = []
+        with zipfile.ZipFile(archive_path) as plugin_zip:
+            names = plugin_zip.namelist()
+        for vendor_path in vendor_paths:
+            vendor_prefix = vendor_path[len(archive_path) :].strip("/\\").replace("\\", "/")
+            metadata_suffix = ".dist-info/METADATA"
+            for name in names:
+                if not name.startswith(vendor_prefix + "/") or not name.endswith(metadata_suffix):
+                    continue
+                relative = name[len(vendor_prefix) + 1 :]
+                if relative.count("/") != 1:
+                    continue
+                metadata_prefix = name[: -len("METADATA")]
+                self.distributions.append(BrowserVendorDistribution(archive_path, vendor_prefix, metadata_prefix))
+
+    def find_spec(self, fullname, path=None, target=None):  # pylint: disable=unused-argument
+        return None
+
+    def find_distributions(self, context=None):
+        if context is None:
+            context = importlib_metadata.DistributionFinder.Context()
+        requested = _normalized_distribution_name(context.name) if context.name else None
+        if requested is None:
+            return list(self.distributions)
+        return [
+            distribution
+            for distribution in self.distributions
+            if _normalized_distribution_name(distribution.metadata["Name"]) == requested
+        ]
+
+
+def configure_browser_vendor_metadata(
+    plugin_dir: str,
+    vendor_paths: Sequence[str],
+) -> Optional[BrowserVendorDistributionFinder]:
+    """Install nested-ZIP metadata discovery for the duration of a browser fetch."""
+    if not os.path.isfile(plugin_dir) or not zipfile.is_zipfile(plugin_dir):
+        return None
+    finder = BrowserVendorDistributionFinder(plugin_dir, vendor_paths)
+    sys.meta_path.insert(0, finder)
+    return finder
+
+
+def _browser_vendor_module_names(plugin_name: str) -> List[str]:
+    """Return cached module names owned by the isolated browser stack."""
+    browser_roots = set(VENDORED_PACKAGES)
+    plugin_prefix = f"calibre_plugins.{plugin_name}."
+    module_names = []
+    for module_name in list(sys.modules):
+        top_level = module_name.split(".", 1)[0]
+        namespaced = module_name[len(plugin_prefix) :].split(".", 1)[0] if module_name.startswith(plugin_prefix) else ""
+        if top_level in browser_roots or namespaced in browser_roots:
+            module_names.append(module_name)
+    return module_names
+
+
+def snapshot_browser_vendor_modules(plugin_name: str) -> Dict[str, types.ModuleType]:
+    """Capture browser modules that must be restored after an isolated fetch."""
+    return {name: sys.modules[name] for name in _browser_vendor_module_names(plugin_name)}
+
+
+def clear_browser_vendor_modules(plugin_name: str) -> None:
+    """Remove cached browser modules so imports honor the selected vendor branch."""
+    for module_name in _browser_vendor_module_names(plugin_name):
+        sys.modules.pop(module_name, None)
+
+
+def restore_browser_vendor_modules(plugin_name: str, snapshot: Dict[str, types.ModuleType]) -> None:
+    """Remove the temporary browser stack and restore the host's prior modules."""
+    clear_browser_vendor_modules(plugin_name)
+    sys.modules.update(snapshot)
 
 
 class VendoredModule(types.ModuleType):
@@ -69,9 +543,10 @@ class VendoredModule(types.ModuleType):
 class VendoredPackageFinder(importlib.abc.MetaPathFinder):
     """Find vendored packages and handle circular imports by creating module aliases"""
 
-    def __init__(self, plugin_name, packages=None, plugin_dir=None):
+    def __init__(self, plugin_name, packages=None, plugin_dir=None, package_roots=None):
         self.plugin_name = plugin_name
         self.plugin_dir = plugin_dir
+        self.package_roots = list(package_roots or ())
         self.plugin_prefix = f"calibre_plugins.{plugin_name}"
         # Build map of package names to their prefixes
         self.packages = {pkg: f"{self.plugin_prefix}.{pkg}" for pkg in (packages or VENDORED_PACKAGES)}
@@ -133,9 +608,12 @@ class VendoredPackageFinder(importlib.abc.MetaPathFinder):
         # "No module named 'seleniumbase'" SeleniumBaseImportError even though the top-
         # level package is present.  A proper __path__ lets Python use zipimport directly
         # for all intra-package sub-imports, bypassing the problematic redirect entirely.
-        if self.plugin_dir and "." not in fullname:
-            # zipimport expects 'zip_file_path/package_name' with a forward slash
-            placeholder.__path__ = [self.plugin_dir + "/" + fullname]
+        if "." not in fullname:
+            # zipimport expects 'zip_file_path/package_name' with forward slashes.
+            # New release ZIPs keep packages below browser_vendor/<branch>;
+            # plugin_dir remains supported for older/root-layout callers.
+            roots = self.package_roots or ([self.plugin_dir] if self.plugin_dir else [])
+            placeholder.__path__ = [root.rstrip("/\\") + "/" + fullname for root in roots]
         sys.modules[fullname] = placeholder
 
         try:
@@ -253,17 +731,48 @@ def parse_html_from_selenium(html: str) -> "lxml.html.HtmlElement":  # type: ign
     return _html_fromstring(html_bytes, parser=parser)
 
 
+def _browser_binary_is_runnable(path: str) -> bool:
+    """Return whether ``path`` is a directly executable Chrome-family binary."""
+    return _executable_major_version(path) is not None
+
+
+def browser_automation_unavailable_reason(
+    system_name: Optional[str] = None,
+    machine_name: Optional[str] = None,
+) -> Optional[str]:
+    """Explain platform combinations where the managed browser path cannot run."""
+    system_name = system_name or platform.system()
+    machine_name = (machine_name or platform.machine()).lower().replace("_", "-")
+    is_arm = machine_name in ("aarch64", "arm64") or machine_name.startswith("arm")
+    if system_name == "Linux" and is_arm:
+        return (
+            f"Chrome browser fallback is unavailable on Linux ARM ({machine_name}): "
+            "Chrome for Testing does not publish a compatible Linux ARM ChromeDriver. "
+            "JSON search and lightweight HTTP metadata remain available."
+        )
+    return None
+
+
+def _installed_browser_major_version(detect_b_ver: Any, binary_location: Optional[str]) -> Optional[int]:
+    """Best-effort detection used to keep the shared driver cache current."""
+    if binary_location:
+        return _executable_major_version(binary_location)
+    try:
+        version = detect_b_ver.get_browser_version_from_os("google-chrome")
+    except Exception:  # pylint: disable=broad-except
+        return None
+    match = re.match(r"\s*(\d+)", str(version or ""))
+    return int(match.group(1)) if match else None
+
+
 def _find_flatpak_chrome() -> Optional[str]:
-    """Return the Chrome/Chromium binary installed as a flatpak, or None.
+    """Return a directly runnable Chrome binary from Flatpak storage, if any.
 
-    Works whether Calibre itself is a flatpak or not.  The flatpak directory
-    structure includes architecture and branch levels that vary by system
-    (e.g. /var/lib/flatpak/app/com.google.Chrome/x86_64/stable/active/...),
-    so glob wildcards are used to handle those levels automatically.
-
-    Requires the flatpak app directories to be visible on the filesystem.
-    If Calibre is also a flatpak, the user must first run:
-        flatpak override --user --filesystem=/var/lib/flatpak:ro com.calibre_ebook.calibre
+    Flatpak app launchers such as ``org.chromium.Chromium/files/bin/chromium``
+    depend on their own mounted ``/app`` runtime and cannot be passed to
+    Selenium's ``binary_location`` from the host or from Calibre's different
+    sandbox. Google Chrome's extra-data package may expose a direct binary on
+    some installations, but it is returned only after an execution probe.
     """
     if platform.system() != "Linux":
         return None
@@ -276,16 +785,38 @@ def _find_flatpak_chrome() -> Optional[str]:
     candidates = [
         ("com.google.Chrome", "files/extra/google-chrome"),
         ("com.google.ChromeDev", "files/extra/google-chrome"),
-        ("org.chromium.Chromium", "files/bin/chromium"),
     ]
     for base in app_bases:
         for app_id, rel_path in candidates:
             # Use * for arch (e.g. x86_64) and branch (e.g. stable) levels
             pattern = os.path.join(base, app_id, "*", "*", "active", rel_path)
             for match in glob.glob(pattern):
-                if os.access(match, os.X_OK):
+                if os.access(match, os.X_OK) and _browser_binary_is_runnable(match):
                     return match
     return None
+
+
+def _build_chrome_args(user_data_dir: str, inside_flatpak: bool, in_ci: bool) -> List[str]:
+    """Build Chrome arguments without weakening the sandbox outside Flatpak."""
+    chrome_args = [
+        f"--user-data-dir={user_data_dir}",
+        "--disable-blink-features=AutomationControlled",
+        "--exclude-switches=enable-automation",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--window-size=1920,1080",
+    ]
+
+    # Chrome cannot create its own kernel sandbox inside an existing Flatpak
+    # bubblewrap sandbox. Never use this flag for ordinary desktop installs.
+    if inside_flatpak:
+        chrome_args.append("--no-sandbox")
+
+    if in_ci:
+        chrome_args.append("--start-maximized")
+    else:
+        chrome_args.append("--window-position=-32000,-32000")
+    return chrome_args
 
 
 def log_system_info(log_func: Optional[Callable[[str], None]] = None) -> None:
@@ -316,7 +847,7 @@ def log_system_info(log_func: Optional[Callable[[str], None]] = None) -> None:
 _stale_profile_cleanup_done = False
 
 
-def fetch_page(
+def _fetch_page_in_process(
     url,
     plugin_name,
     wait_for_element=None,
@@ -361,11 +892,38 @@ def fetch_page(
         else:
             print(msg)
 
+    unavailable_reason = browser_automation_unavailable_reason()
+    if unavailable_reason:
+        _log(unavailable_reason)
+        return None
+
+    # Calibre can keep multiple plugins in one interpreter. Serialize the short
+    # period where absolute Selenium imports require temporary sys.path,
+    # sys.meta_path, and sys.modules changes, then restore the host state.
+    _BROWSER_IMPORT_LOCK.acquire()
+    original_sys_path = None
+    original_meta_path = None
+    original_vendor_modules = None
+    original_path_env = None
+    path_env_was_present = False
+    path_env_captured = False
     user_data_dir = None
     try:
+        # Keep all state capture inside the protected try. If another thread
+        # mutates sys.modules while the snapshot is being built, the finally
+        # block must still release the global import lock.
+        original_sys_path = list(sys.path)
+        original_meta_path = list(sys.meta_path)
+        original_vendor_modules = snapshot_browser_vendor_modules(plugin_name)
+        path_env_was_present = "PATH" in os.environ
+        original_path_env = os.environ.get("PATH")
+        path_env_captured = True
+
         # Use a stable driver directory under the user's home dir so chromedriver
         # persists across calibre sessions (calibre rotates its own temp dir each run)
-        stable_base = os.path.join(os.path.expanduser("~"), ".calibre_selenium")
+        stable_base = os.environ.get("CALIBRE_SELENIUM_HOME") or os.path.join(
+            os.path.expanduser("~"), ".calibre_selenium"
+        )
         sb_drivers_dir = os.path.abspath(os.path.join(stable_base, "drivers"))
         downloads_dir = os.path.abspath(os.path.join(stable_base, "downloads"))
 
@@ -400,32 +958,19 @@ def fetch_page(
         for dir_path in [sb_drivers_dir, downloads_dir]:
             os.makedirs(dir_path, exist_ok=True)
 
-        # Add the plugin directory to sys.path NOW (before module clearing and
-        # before VendoredPackageFinder is set up) so the zip is on sys.path from
-        # the start.  VendoredPackageFinder's zipimport fallback needs the zip
-        # on sys.path to find vendored packages when the calibre_plugins.*
-        # redirect fails.  Doing this early prevents a timing window where the
-        # fallback runs before the zip is discoverable.
+        # Add the plugin root and matching browser dependency branch to sys.path
+        # before module clearing and before VendoredPackageFinder is set up.
         _plugin_dir_early = os.path.dirname(os.path.abspath(__file__))
         if _plugin_dir_early not in sys.path:
             sys.path.insert(0, _plugin_dir_early)
+        _vendor_paths = configure_browser_vendor_path(_plugin_dir_early)
+        configure_browser_vendor_metadata(_plugin_dir_early, _vendor_paths)
+        _log(f"Browser dependency branch: {browser_vendor_branch()}")
 
         # Clear cached SeleniumBase/fasteners modules to ensure fresh import.
         # Clear both the calibre_plugins.{plugin_name}.* namespace AND the bare
         # selenium/seleniumbase namespace - the latter is used when the zip is on sys.path.
-        _sb_prefixes = (
-            f"calibre_plugins.{plugin_name}.seleniumbase",
-            f"calibre_plugins.{plugin_name}.fasteners",
-            "seleniumbase",
-            "selenium",
-            "fasteners",
-            "mycdp",
-            "websockets",
-            "websocket",
-        )
-        cached_sb_modules = [key for key in list(sys.modules) if key.startswith(_sb_prefixes)]
-        for module_name in cached_sb_modules:
-            del sys.modules[module_name]
+        clear_browser_vendor_modules(plugin_name)
 
         # Install import hook for vendored packages if not already installed
         # Check if we already have a finder for this plugin
@@ -436,22 +981,25 @@ def fetch_page(
                 break
 
         if not existing_finder:
-            finder: VendoredPackageFinder = VendoredPackageFinder(plugin_name, plugin_dir=_plugin_dir_early)  # type: ignore[assignment]
+            finder: VendoredPackageFinder = VendoredPackageFinder(  # type: ignore[assignment]
+                plugin_name,
+                plugin_dir=_plugin_dir_early,
+                package_roots=_vendor_paths,
+            )
             sys.meta_path.insert(0, finder)  # type: ignore[arg-type]
 
-        # Add the plugin's package directory to sys.path so vendored packages
+        # The plugin's package directory is on sys.path so vendored packages
         # can be imported directly via zipimport. This is required in calibre GUI
         # mode where the plugin is loaded from a zip that isn't on sys.path.
         #
-        # Key insight: vendored packages (seleniumbase/, selenium/, …) sit ALONGSIDE
-        # this file (common_romanceio_fetch_helper.py) inside the plugin zip.
-        # Using __file__ of the current module is always correct because it doesn't
+        # Browser packages sit below browser_vendor/ inside the plugin ZIP. Using
+        # __file__ of the current module is always correct because it doesn't
         # depend on how calibre's child IPC process sets plugin module attributes
         # (__file__ / __path__ on calibre_plugins.X point to the zip root in child
         # processes, not the plugin subdir inside it, causing ImportError).
         # NOTE: also inserted early (before module clearing) as _plugin_dir_early above.
         plugin_dir = os.path.dirname(os.path.abspath(__file__))
-        _log(f"Vendored import path: {plugin_dir!r}")
+        _log("Vendored browser dependencies configured")
         # Guard evaluates to False here (path already inserted as _plugin_dir_early above),
         # but kept for safety in case __file__ resolves differently at this point.
         if plugin_dir not in sys.path:
@@ -485,8 +1033,7 @@ def fetch_page(
             for _f in _vpf_saved:
                 sys.meta_path.insert(0, _f)  # type: ignore[arg-type]
             # Clear all stale partial state from the failed direct attempt
-            for _k in [k for k in list(sys.modules) if k.startswith(_sb_prefixes)]:
-                sys.modules.pop(_k, None)
+            clear_browser_vendor_modules(plugin_name)
             constants = importlib.import_module("seleniumbase.fixtures.constants")
         else:
             # Direct import succeeded.  Re-add VendoredPackageFinders at LOW priority
@@ -525,7 +1072,13 @@ def fetch_page(
 
         # Now import other modules - they will pick up the patched constants
         sb_install = importlib.import_module("seleniumbase.console_scripts.sb_install")
+        # SeleniumBase's compatibility helper may downgrade HTTPS to HTTP after
+        # a certificate error. Runtime executable downloads must instead stay
+        # on an explicit set of Google-owned TLS origins, including redirects.
+        configure_secure_driver_downloads(sb_install)
+        detect_b_ver = importlib.import_module("seleniumbase.core.detect_b_ver")
         download_helper = importlib.import_module("seleniumbase.core.download_helper")
+        fasteners_module = importlib.import_module("fasteners")
         patcher = importlib.import_module("seleniumbase.undetected.patcher")
 
         sb_install.DRIVER_DIR = sb_drivers_dir  # type: ignore[attr-defined]
@@ -536,94 +1089,71 @@ def fetch_page(
 
         is_windows = platform.system() == "Windows"
         uc_driver_name = "uc_driver.exe" if is_windows else "uc_driver"
-        undetected_name = "undetected_chromedriver.exe" if is_windows else "undetected_chromedriver"
         chromedriver_name = "chromedriver.exe" if is_windows else "chromedriver"
 
         # browser_launcher.py computes DRIVER_DIR from drivers.__file__ at import time.
-        # When loaded from a zip, drivers.__file__ is a virtual path inside the zip,
-        # not a real directory.  Patch DRIVER_DIR to our stable real directory and
-        # repair os.environ["PATH"] accordingly.
+        # When loaded from a zip, drivers.__file__ is a virtual path inside the zip.
+        # Save it now; after verifying the persistent download cache below, all
+        # launch-time driver paths are redirected to a per-worker real directory.
         old_driver_dir = getattr(browser_launcher, "DRIVER_DIR", None)
-        browser_launcher.DRIVER_DIR = sb_drivers_dir  # type: ignore[attr-defined]
-        if old_driver_dir and old_driver_dir != sb_drivers_dir:
-            path_env = os.environ.get("PATH", "")
-            path_env = path_env.replace(old_driver_dir + os.pathsep, "")
-            path_env = path_env.replace(old_driver_dir, "")
-            if sb_drivers_dir not in path_env:
-                path_env = sb_drivers_dir + os.pathsep + path_env
-            os.environ["PATH"] = path_env
 
-        browser_launcher.LOCAL_UC_DRIVER = os.path.join(sb_drivers_dir, uc_driver_name)  # type: ignore[attr-defined]
-        browser_launcher.LOCAL_CHROMEDRIVER = os.path.join(sb_drivers_dir, chromedriver_name)  # type: ignore[attr-defined]
-
-        # Install chromedriver if needed (SeleniumBase downloads it as "chromedriver")
+        # Install chromedriver if needed (SeleniumBase downloads it as "chromedriver").
+        # The stable cache is shared by all Calibre worker processes, so its full
+        # check/install/copy sequence must be protected by an interprocess lock.
         chromedriver_path = os.path.join(sb_drivers_dir, chromedriver_name)
-        uc_driver_path = os.path.join(sb_drivers_dir, uc_driver_name)
-
-        if not os.path.exists(chromedriver_path):
-            _log(f"chromedriver not found at {chromedriver_path!r}, downloading...")
-            sb_install.main("chromedriver latest")
-            if os.path.exists(chromedriver_path):
-                _log(f"chromedriver downloaded successfully")
-            else:
-                _log(
-                    f"chromedriver download failed - file missing after install attempt: {chromedriver_path!r}\n"
-                    "  This is often caused by antivirus software quarantining the file.\n"
-                    "  Check your antivirus exclusions for: " + sb_drivers_dir
-                )
-        else:
-            _log(f"chromedriver found at {chromedriver_path!r}")
-
-        # Copy chromedriver to uc_driver if needed
-        if os.path.exists(chromedriver_path) and not os.path.exists(uc_driver_path):
-            shutil.copy2(chromedriver_path, uc_driver_path)
-
-        # SeleniumBase's undetected mode expects to find both "uc_driver" and "undetected_chromedriver"
-        # They should be identical copies of chromedriver (the UC patcher will modify them)
-        undetected_path = os.path.join(sb_drivers_dir, undetected_name)
-        if os.path.exists(uc_driver_path):
-            temp_patcher = patcher.Patcher(executable_path=uc_driver_path)
-            if not temp_patcher.is_binary_patched():
-                temp_patcher.patch_exe()
-
-            if not os.path.exists(undetected_path):
-                shutil.copy2(uc_driver_path, undetected_path)
-
-        Driver = importlib.import_module("seleniumbase.plugins.driver_manager").Driver  # pylint: disable=invalid-name
+        runtime_drivers_dir = os.path.join(user_data_dir, "drivers")
+        os.makedirs(runtime_drivers_dir, exist_ok=True)
+        runtime_chromedriver_path = os.path.join(runtime_drivers_dir, chromedriver_name)
+        uc_driver_path = os.path.join(runtime_drivers_dir, uc_driver_name)
 
         flatpak_chrome = _find_flatpak_chrome()
         if flatpak_chrome:
-            _log(f"Flatpak Chrome detected: {flatpak_chrome!r}")
+            _log(f"Directly runnable Chrome binary found in Flatpak storage: {flatpak_chrome!r}")
         elif os.environ.get("FLATPAK_ID"):
             _log(
-                "Running inside a flatpak but no Chrome/Chromium flatpak binary found. "
-                "If Chrome is installed as a flatpak, run: "
-                "flatpak override --user --filesystem=/var/lib/flatpak:ro com.calibre_ebook.calibre"
+                "No directly runnable Chrome binary was found in Flatpak storage. "
+                "SeleniumBase will check for another Chrome binary visible inside the Calibre sandbox; "
+                "non-browser fallbacks remain available if none is found."
             )
+        browser_major_version = _installed_browser_major_version(detect_b_ver, flatpak_chrome)
+        if browser_major_version is not None:
+            _log(f"Detected installed Chrome major version: {browser_major_version}")
+
+        prepare_cached_chromedriver(
+            sb_install=sb_install,
+            interprocess_lock_class=fasteners_module.InterProcessLock,
+            stable_base=stable_base,
+            chromedriver_path=chromedriver_path,
+            runtime_chromedriver_path=runtime_chromedriver_path,
+            log_func=_log,
+            browser_major_version=browser_major_version,
+        )
+
+        sb_install.DRIVER_DIR = runtime_drivers_dir  # type: ignore[attr-defined]
+        patcher.Patcher.data_path = runtime_drivers_dir
+        browser_launcher.DRIVER_DIR = runtime_drivers_dir  # type: ignore[attr-defined]
+        browser_launcher.LOCAL_UC_DRIVER = uc_driver_path  # type: ignore[attr-defined]
+        browser_launcher.LOCAL_CHROMEDRIVER = runtime_chromedriver_path  # type: ignore[attr-defined]
+        path_env = os.environ.get("PATH", "")
+        if old_driver_dir:
+            path_env = path_env.replace(old_driver_dir + os.pathsep, "")
+            path_env = path_env.replace(old_driver_dir, "")
+        if runtime_drivers_dir not in path_env:
+            path_env = runtime_drivers_dir + os.pathsep + path_env
+        os.environ["PATH"] = path_env
+
+        uc_digest = prepare_uc_driver(runtime_chromedriver_path, uc_driver_path, patcher.Patcher)
+        _log(f"uc_driver rebuilt and verified (SHA-256: {uc_digest})")
+
+        Driver = importlib.import_module("seleniumbase.plugins.driver_manager").Driver  # pylint: disable=invalid-name
 
         driver = None
         try:
-            chrome_args = [
-                f"--user-data-dir={user_data_dir}",
-                "--disable-blink-features=AutomationControlled",
-                "--exclude-switches=enable-automation",
-                "--disable-dev-shm-usage",
-                "--disable-gpu",
-                "--window-size=1920,1080",
-            ]
-
-            # Chrome cannot create its own kernel sandbox inside an existing
-            # sandbox (e.g. a flatpak bubblewrap container), so --no-sandbox
-            # is required.  Only add it when we know we're in a flatpak.
-            if os.environ.get("FLATPAK_ID"):
-                chrome_args.append("--no-sandbox")
-
-            # In CI, keep window maximized and visible
-            # On local machines, move window far off-screen to hide it
-            if os.environ.get("CI"):
-                chrome_args.append("--start-maximized")
-            else:
-                chrome_args.append("--window-position=-32000,-32000")
+            chrome_args = _build_chrome_args(
+                user_data_dir,
+                inside_flatpak=bool(os.environ.get("FLATPAK_ID")),
+                in_ci=bool(os.environ.get("CI")),
+            )
 
             driver = Driver(
                 uc=True,
@@ -631,6 +1161,15 @@ def fetch_page(
                 chromium_arg=chrome_args,
                 binary_location=flatpak_chrome,
             )
+
+            # SeleniumBase can replace uc_driver when it detects a Chrome-version
+            # mismatch. Downloads are TLS/host restricted above; persist and verify
+            # the final bytes so the executable used by this session is covered too.
+            launched_digest = _sha256_file(uc_driver_path)
+            if launched_digest != uc_digest:
+                uc_digest = record_driver_integrity(uc_driver_path)
+                _log(f"SeleniumBase refreshed uc_driver; verified SHA-256: {uc_digest}")
+            verify_driver_integrity(uc_driver_path)
 
             try:
                 _chrome_ver = driver.capabilities.get("browserVersion") or driver.capabilities.get("version", "unknown")
@@ -747,7 +1286,7 @@ def fetch_page(
                 _log(
                     f"Chrome version mismatch: {e}\n"
                     "  The downloaded chromedriver doesn't match your installed Chrome version.\n"
-                    f"  Delete the drivers folder and retry: {sb_drivers_dir}"
+                    "  Delete the managed drivers folder and retry."
                 )
                 return None
             _log(f"Chrome error: {type(e).__name__}: {e}")
@@ -783,24 +1322,31 @@ def fetch_page(
 
             # Log the full chained traceback through calibre's job log (not just stderr).
             _log(_tb.format_exc())
-            # Log sys.path so we can see whether the plugin zip is on it.
+            # Log only structural path information; absolute paths can identify users.
             _plugin_entries = [p for p in sys.path if "calibre" in p.lower() or p.endswith(".zip")]
-            _log(f"sys.path (calibre/zip entries): {_plugin_entries}")
+            _log(f"sys.path has {len(_plugin_entries)} Calibre/ZIP entries")
             # Verify the zip contains the seleniumbase files we need.
             _zip_path = os.path.dirname(os.path.abspath(__file__))
             if os.path.isfile(_zip_path) and _zf.is_zipfile(_zip_path):
                 with _zf.ZipFile(_zip_path) as _zf_obj:
-                    _sb_files = [n for n in _zf_obj.namelist() if n.startswith("seleniumbase/")]
-                    _log(f"Zip contains {len(_sb_files)} seleniumbase/* files")
+                    _sb_files = [
+                        n for n in _zf_obj.namelist() if "/seleniumbase/" in n and n.startswith("browser_vendor/")
+                    ]
+                    _log(f"Zip contains {len(_sb_files)} seleniumbase files")
                     _missing = [
                         f
-                        for f in ["seleniumbase/__init__.py", "seleniumbase/core/browser_launcher.py"]
+                        for f in [
+                            "browser_vendor/shared/seleniumbase/__init__.py",
+                            "browser_vendor/shared/seleniumbase/core/browser_launcher.py",
+                            "browser_vendor/current/seleniumbase/__init__.py",
+                            "browser_vendor/current/seleniumbase/core/browser_launcher.py",
+                        ]
                         if f not in _sb_files
                     ]
                     if _missing:
                         _log(f"WARNING: missing from zip: {_missing}")
             else:
-                _log(f"Vendored path is a directory (not a zip): {_zip_path!r}")
+                _log("Vendored dependency source is a directory rather than a plugin ZIP")
             # Include the root cause in the error message.
             root_cause = e.__cause__ or e
             root_msg = f"{type(root_cause).__name__}: {root_cause}" if root_cause is not e else ""
@@ -813,13 +1359,124 @@ def fetch_page(
         _log(f"Top-level error in fetch_page: {type(e).__name__}: {e}")
         import traceback
 
-        traceback.print_exc()
+        _log(traceback.format_exc())
         return None
     finally:
         # Catch-all cleanup: if setup code threw before reaching the inner try/finally,
         # user_data_dir would not have been cleaned up there. Clean it up here.
         if user_data_dir and os.path.isdir(user_data_dir):
             shutil.rmtree(user_data_dir, ignore_errors=True)
+        if original_vendor_modules is not None:
+            restore_browser_vendor_modules(plugin_name, original_vendor_modules)
+        if original_sys_path is not None:
+            sys.path[:] = original_sys_path
+        if original_meta_path is not None:
+            sys.meta_path[:] = original_meta_path
+        if path_env_captured:
+            if path_env_was_present:
+                os.environ["PATH"] = original_path_env or ""
+            else:
+                os.environ.pop("PATH", None)
+        _BROWSER_IMPORT_LOCK.release()
+
+
+def _fetch_page_worker(request: Dict[str, Any]) -> Dict[str, Any]:
+    """Calibre IPC entry point; all global import mutation stays in this process."""
+    logs: List[str] = []
+    try:
+        page = _fetch_page_in_process(
+            request["url"],
+            plugin_name=request["plugin_name"],
+            wait_for_element=request.get("wait_for_element"),
+            not_found_marker=request.get("not_found_marker"),
+            secondary_wait_element=request.get("secondary_wait_element"),
+            max_wait=request.get("max_wait", 30),
+            log_func=logs.append,
+        )
+        return {"page": page, "logs": logs, "error_type": None, "error_message": None}
+    except (ChromeNotInstalledError, RosettaNotInstalledError, SeleniumBaseImportError) as error:
+        return {
+            "page": None,
+            "logs": logs,
+            "error_type": type(error).__name__,
+            "error_message": str(error),
+        }
+
+
+def _is_installed_plugin_module(plugin_name: str) -> bool:
+    expected_name = f"calibre_plugins.{plugin_name}.common_romanceio_fetch_helper"
+    return __name__ == expected_name
+
+
+def _fetch_page_via_calibre_worker(request: Dict[str, Any], log_func: Optional[Callable]) -> Optional[str]:
+    """Run Chrome in a disposable Calibre worker and return its pickled result."""
+
+    def _log(message: Any) -> None:
+        safe_message = _redact_log_text(message)
+        if log_func:
+            log_func(safe_message)
+        else:
+            print(safe_message)
+
+    try:
+        from calibre.utils.ipc.simple_worker import fork_job
+
+        response = fork_job(
+            __name__,
+            "_fetch_page_worker",
+            args=(request,),
+            timeout=max(180, int(request.get("max_wait", 30)) + 120),
+            no_output=True,
+        )["result"]
+    except Exception as error:  # pylint: disable=broad-except
+        _log(f"Browser worker failed: {type(error).__name__}: {error}")
+        return None
+
+    if not isinstance(response, dict):
+        _log("Browser worker returned an invalid response")
+        return None
+    for message in response.get("logs") or []:
+        _log(message)
+
+    error_types = {
+        "ChromeNotInstalledError": ChromeNotInstalledError,
+        "RosettaNotInstalledError": RosettaNotInstalledError,
+        "SeleniumBaseImportError": SeleniumBaseImportError,
+    }
+    error_type = response.get("error_type")
+    if error_type in error_types:
+        raise error_types[error_type](_redact_log_text(response.get("error_message") or error_type))
+
+    page = response.get("page")
+    if page is not None and not isinstance(page, str):
+        _log("Browser worker returned a non-text page")
+        return None
+    return page
+
+
+def fetch_page(
+    url,
+    plugin_name,
+    wait_for_element=None,
+    not_found_marker=None,
+    secondary_wait_element=None,
+    max_wait=30,
+    log_func=None,
+):
+    """Fetch a page in an isolated worker when running as an installed plugin."""
+    request = {
+        "url": url,
+        "plugin_name": plugin_name,
+        "wait_for_element": wait_for_element,
+        "not_found_marker": not_found_marker,
+        "secondary_wait_element": secondary_wait_element,
+        "max_wait": max_wait,
+    }
+    if _is_installed_plugin_module(plugin_name):
+        return _fetch_page_via_calibre_worker(request, log_func)
+    # Repository tools and unit tests do not have Calibre's plugin loader. They
+    # run in a dedicated process already and retain the directly testable path.
+    return _fetch_page_in_process(log_func=log_func, **request)
 
 
 def fetch_book_page_http(romanceio_id: str, log_func: Optional[Callable] = None, timeout: int = 30) -> tuple:

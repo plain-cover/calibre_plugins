@@ -2,7 +2,6 @@
 
 from test_utils import setup_test_environment  # type: ignore[import-not-found]  # pylint: disable=import-error
 
-
 env = setup_test_environment("romanceio_fields")
 cfg = env["config_module"]
 jobs = env["load_plugin_module"]("romanceio_fields.jobs", "jobs.py", env["plugin_dir"])

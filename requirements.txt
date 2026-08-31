@@ -1,16 +1,16 @@
-lxml==4.9.4
+lxml==6.1.2
 six==1.17.0
-seleniumbase==4.38.0
-selenium==4.32.0
+seleniumbase==4.52.4
+selenium==4.47.0
 fake-useragent==2.2.0
 
 # Development tools
-black==24.10.0
-pylint==3.3.2
-mypy==1.13.0
-pytest==8.3.5
+black==26.5.1
+pylint==4.0.8
+mypy==2.3.1
+pytest==9.1.1
 
 # Type stubs for IDE support
-types-lxml==2024.9.16
+types-lxml==2026.2.16
 lxml-stubs==0.5.1
-types-six==1.16.21.20240513
+types-six==1.17.0.20260724

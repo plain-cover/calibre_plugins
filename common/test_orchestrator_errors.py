@@ -375,6 +375,37 @@ def test_detail_fallback_order_is_lightweight_then_chrome_then_json():
     assert calls == [("lightweight", "abc123"), ("chrome", "abc123"), ("json", "abc123")]
 
 
+def test_prefer_chrome_changes_order_without_retrying_chrome_after_ssr_failure():
+    """The preference changes ordering, not the number of Chrome method slots."""
+    calls = []
+
+    def lightweight_html(rid, _log_func):
+        calls.append(("lightweight", rid))
+        raise RuntimeError("plain HTTP unavailable")
+
+    def chrome_html(rid, _log_func):
+        calls.append(("chrome", rid))
+        raise RuntimeError("Chrome unavailable")
+
+    def json_fetch(rid, _log_func):
+        calls.append(("json", rid))
+        return "json_result"
+
+    result = fetch_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=json_fetch,
+        lightweight_html_fetch_func=lightweight_html,
+        html_fetch_func=chrome_html,
+        log_func=lambda _: None,
+        max_retries=1,
+        retry_delay=0,
+        prefer_chrome=True,
+    )
+
+    assert result == "json_result"
+    assert calls == [("chrome", "abc123"), ("lightweight", "abc123"), ("json", "abc123")]
+
+
 # ---------------------------------------------------------------------------
 # search_with_fallback tests
 # ---------------------------------------------------------------------------
@@ -703,7 +734,7 @@ def _mock_time_and_sleep(initial_time: float) -> Iterator[tuple[list[float], lis
     def mock_time() -> float:
         return fake_clock[0]
 
-    _orchestrator_mod.time.sleep = mock_sleep
+    _orchestrator_mod.time.sleep = mock_sleep  # type: ignore[assignment]
     _orchestrator_mod.time.time = mock_time
     try:
         yield slept, fake_clock
@@ -787,7 +818,7 @@ def test_maybe_wait_no_sleep_without_prior_429():
         def mock_sleep(secs: float) -> None:
             slept.append(secs)
 
-        _orchestrator_mod.time.sleep = mock_sleep
+        _orchestrator_mod.time.sleep = mock_sleep  # type: ignore[assignment]
         try:
             getattr(_orchestrator_mod, _THROTTLE)(lambda _: None, JSON_SEARCH_URL_PREFIX)
             assert not slept, "Should not sleep when no prior 429 and min interval is zeroed"
@@ -1016,7 +1047,7 @@ def test_throttle_returns_immediately_when_abort_already_set():
 
     slept: list[float] = []
     original_sleep = _orchestrator_mod.time.sleep
-    _orchestrator_mod.time.sleep = slept.append
+    _orchestrator_mod.time.sleep = slept.append  # type: ignore[assignment]
     try:
         getattr(_orchestrator_mod, _THROTTLE)(lambda _: None, JSON_SEARCH_URL_PREFIX, abort)
         assert not slept, f"Must not sleep when abort is already set, but slept for: {slept}"
