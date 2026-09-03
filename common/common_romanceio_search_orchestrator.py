@@ -1,5 +1,6 @@
 """
-Search orchestrator for Romance.io - tries JSON API first, then falls back to HTML scraping.
+Search orchestration for Romance.io. JSON is preferred for search; book details prefer
+HTML because the legacy JSON book-details route is retained only as a fallback.
 This separates concerns: JSON search functions vs HTML search functions vs orchestration.
 """
 
@@ -12,7 +13,7 @@ parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
-from typing import Optional, List, Callable, Any, NamedTuple, Dict
+from typing import Optional, List, Callable, Any, NamedTuple, Dict, Tuple
 
 from .common_romanceio_json_api import (  # pylint: disable=import-outside-toplevel
     JsonApiEndpointError,
@@ -373,96 +374,101 @@ def fetch_details_with_fallback(
     retry_delay: float = 2.0,
     lightweight_html_fetch_func: Optional[Callable] = None,
     abort: Optional[Any] = None,
+    prefer_chrome: bool = False,
 ) -> Optional[Any]:
     """
-    Fetch book details using JSON API first, with fallback to HTML scraping.
+    Fetch book details through each configured method exactly once, with JSON last.
+
+    The JSON book-details route has returned 404 for valid books for months, while
+    JSON search remains healthy. Keeping the detail route as a final fallback avoids
+    wasting a request for every book without removing it entirely; its independent
+    live smoke test will show if the endpoint becomes useful again.
 
     This is the orchestrator for fetching details of a known book by romanceio_id.
 
     Args:
         romanceio_id: The Romance.io book ID
-        json_fetch_func: Function to fetch using JSON API (should return book data or None)
+        json_fetch_func: Function to fetch using JSON API (should return book data or None).
+            This is the final fallback for details.
         html_fetch_func: Function to fetch using HTML via Chrome (should return book data or None)
         log_func: Logging function
         max_retries: Maximum retry attempts per method (default: 3)
         retry_delay: Delay in seconds between retries (default: 2.0)
         lightweight_html_fetch_func: Optional function to fetch via lightweight HTTP GET (no Chrome).
-            Tried between the JSON API and Chrome as a faster intermediate fallback.
+            This is the preferred detail method when provided.
         abort: Optional threading.Event; if set, fetch is abandoned immediately.
+        prefer_chrome: Try Chrome before lightweight HTTP. Each method is still
+            attempted at most once (apart from its configured transient retries).
 
     Returns:
         Book data (any format), or _BookNotFound if the book definitively does not exist (404),
         or None if all fetch methods failed without a definitive answer.
     """
-    _books_key = _endpoint_key(JSON_BOOKS_URL_PREFIX)
-    if _books_key in _dead_json_endpoints:
-        log_func(f"Skipping JSON API fetch for {romanceio_id} (endpoint returned 404 earlier this session).")
-        json_fetch = SearchResult(success=False, result=None)
-    else:
-        _throttle_json_call(log_func, _books_key, abort=abort)
-        log_func(f"Attempting JSON API fetch for {romanceio_id}...")
-        json_fetch = _retry_with_delay(
-            func=lambda: json_fetch_func(romanceio_id, log_func),
-            method_name="JSON API fetch",
-            max_retries=max_retries,
-            retry_delay=retry_delay,
-            log_func=log_func,
-            abort=abort,
-        )
-
-    if json_fetch.result is not None and not _is_book_not_found(json_fetch.result):
-        return json_fetch.result
-
-    if _is_book_not_found(json_fetch.result):
-        return json_fetch.result  # definitive 404 from JSON, no point trying HTML
-
-    if json_fetch.success:
-        log_func(f"JSON API returned no data for {romanceio_id}. Skipping HTML fallback.")
-        return None
-
     if abort is not None and abort.is_set():
         log_func(f"Aborting detail fetch for {romanceio_id} (timeout exceeded)")
         return None
 
-    if lightweight_html_fetch_func is not None:
-        log_func(f"JSON API had technical failures. Trying lightweight HTTP fetch for {romanceio_id}...")
-        lw_fetch = _retry_with_delay(
-            func=lambda: lightweight_html_fetch_func(romanceio_id, log_func),
-            method_name="Lightweight HTTP fetch",
+    html_methods: List[Tuple[str, Callable]] = []
+    chrome_method = ("Chrome HTML scraping", html_fetch_func)
+    if prefer_chrome:
+        html_methods.append(chrome_method)
+        if lightweight_html_fetch_func is not None:
+            html_methods.append(("Lightweight HTTP fetch", lightweight_html_fetch_func))
+    else:
+        if lightweight_html_fetch_func is not None:
+            html_methods.append(("Lightweight HTTP fetch", lightweight_html_fetch_func))
+        html_methods.append(chrome_method)
+
+    for index, (method_name, fetch_func) in enumerate(html_methods):
+        if abort is not None and abort.is_set():
+            log_func(f"Aborting before {method_name} for {romanceio_id} (timeout exceeded)")
+            return None
+        order_label = " first" if index == 0 else ""
+        log_func(f"Attempting {method_name}{order_label} for {romanceio_id}...")
+        html_fetch = _retry_with_delay(
+            func=lambda fetch_func=fetch_func: fetch_func(romanceio_id, log_func),
+            method_name=method_name,
             max_retries=max_retries,
             retry_delay=retry_delay,
             log_func=log_func,
             abort=abort,
         )
-        if _is_book_not_found(lw_fetch.result):
-            return lw_fetch.result  # book definitively not found, no point trying Chrome
-        if lw_fetch.result is not None:
-            return lw_fetch.result
-        if lw_fetch.success:
-            log_func(f"Lightweight HTTP fetch completed but found no data for {romanceio_id}.")
-            return None
-        log_func(f"Lightweight HTTP fetch failed. Falling back to Chrome HTML scraping for {romanceio_id}...")
-    else:
-        log_func(f"JSON API had technical failures. Falling back to Chrome HTML scraping for {romanceio_id}...")
+        if _is_book_not_found(html_fetch.result):
+            return html_fetch.result
+        if html_fetch.result is not None:
+            return html_fetch.result
+        if html_fetch.success:
+            log_func(f"{method_name} completed but found no data for {romanceio_id}.")
+        else:
+            log_func(f"{method_name} failed for {romanceio_id}.")
 
     if abort is not None and abort.is_set():
-        log_func(f"Aborting before Chrome fetch for {romanceio_id} (timeout exceeded)")
+        log_func(f"Aborting before final JSON fetch for {romanceio_id} (timeout exceeded)")
         return None
 
-    html_fetch = _retry_with_delay(
-        func=lambda: html_fetch_func(romanceio_id, log_func),
-        method_name="Chrome HTML scraping",
+    # The /json/books route is retained as a last-resort fallback and monitored
+    # independently, but it should not add a known-failing request to every book.
+    _books_key = _endpoint_key(JSON_BOOKS_URL_PREFIX)
+    if _books_key in _dead_json_endpoints:
+        log_func(f"Skipping final JSON API fetch for {romanceio_id} (endpoint failed earlier this session).")
+        return None
+
+    _throttle_json_call(log_func, _books_key, abort=abort)
+    log_func(f"HTML detail methods unavailable; trying JSON API as a final fallback for {romanceio_id}...")
+    json_fetch = _retry_with_delay(
+        func=lambda: json_fetch_func(romanceio_id, log_func),
+        method_name="JSON API fetch",
         max_retries=max_retries,
         retry_delay=retry_delay,
         log_func=log_func,
         abort=abort,
     )
 
-    if html_fetch.result is not None:
-        return html_fetch.result
+    if json_fetch.result is not None:
+        return json_fetch.result
 
-    if html_fetch.success:
-        log_func(f"Chrome HTML scraping completed but found no data for {romanceio_id}.")
+    if json_fetch.success:
+        log_func(f"JSON API returned no data for {romanceio_id}.")
     else:
         log_func("✗ All fetch attempts failed")
 

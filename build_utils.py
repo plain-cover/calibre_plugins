@@ -8,12 +8,76 @@ import re
 import zipfile
 from glob import glob
 
+MAX_PLUGIN_ZIP_SIZE_BYTES = 40 * 1024 * 1024
 
 MAINTAINER_ONLY_COMMON_FILES = frozenset(
     {
         "check_romanceio_tag_taxonomy.py",
+        "run_installed_browser_smoke.py",
+        "test_dependency_manifests.py",
+        "test_detail_validation.py",
+        "test_installed_plugins.py",
+        "run_installed_live_smoke.py",
+        "test_flatpak_compatibility.py",
+        "test_release_zip.py",
+        "test_release_zip_imports.py",
         "test_romanceio_tag_taxonomy.py",
+        "test_verify_sha512.py",
         "update_tag_mappings.py",
+        "verify_sha512.py",
+    }
+)
+
+# Only these generated dependency/resource directories belong in a release ZIP.
+# Keeping this list explicit prevents a maintainer's old virtualenv packages from
+# leaking into a build merely because they are present in the plugin directory.
+RELEASE_SUBFOLDERS = frozenset(
+    {
+        "browser_vendor",
+        "images",
+    }
+)
+
+# pip exposes command-line launchers and SeleniumBase development helpers that
+# are not imported by either plugin. Exclude these directory names at every
+# depth; checking only the ZIP root allowed platform-specific executables under
+# browser_vendor/<branch>/bin to leak into otherwise portable artifacts.
+RELEASE_EXCLUDED_PATH_COMPONENTS = frozenset(
+    {
+        "__pycache__",
+        "bin",
+        "downloaded_files",
+        "mcp_servers",
+        "sbase",
+    }
+)
+RELEASE_EXCLUDED_FILENAMES = frozenset({"sockshandler.py"})
+
+RELEASE_TOP_LEVEL_MODULES = frozenset(
+    {
+        "__init__.py",
+        "action.py",
+        "common_compatibility.py",
+        "common_dialogs.py",
+        "common_icons.py",
+        "common_menus.py",
+        "common_romanceio_fetch_helper.py",
+        "common_romanceio_json_api.py",
+        "common_romanceio_search.py",
+        "common_romanceio_search_orchestrator.py",
+        "common_romanceio_tag_categories.py",
+        "common_romanceio_tag_mappings.py",
+        "common_romanceio_validation.py",
+        "common_widgets.py",
+        "config.py",
+        "config_defaults.py",
+        "fetch_helper.py",
+        "jobs.py",
+        "parse_html.py",
+        "parse_json.py",
+        "rating_tags.py",
+        "six.py",
+        "worker.py",
     }
 )
 
@@ -25,11 +89,16 @@ def add_folder_to_zip(my_zip_file, folder, exclude=None):
     exclude_list = []
     for ex in exclude:
         exclude_list.extend(glob(folder + "/" + ex))
-    for file in glob(folder + "/*"):
+    for file in sorted(glob(folder + "/*")):
         if file in exclude_list:
             continue
         # Also check basename directly to handle path separator differences on Windows
-        if os.path.basename(file) in exclude:
+        basename = os.path.basename(file)
+        if (
+            basename in exclude
+            or basename in RELEASE_EXCLUDED_PATH_COMPONENTS
+            or basename in RELEASE_EXCLUDED_FILENAMES
+        ):
             continue
         if os.path.isfile(file):
             my_zip_file.write(file, file)
@@ -38,10 +107,10 @@ def add_folder_to_zip(my_zip_file, folder, exclude=None):
 
 
 def create_zip_file(filename, mode, files, exclude=None):
-    """Create an uncompressed zip file for a Calibre plugin."""
+    """Create a compressed zip file for a Calibre plugin."""
     if exclude is None:
         exclude = []
-    my_zip_file = zipfile.ZipFile(filename, mode, zipfile.ZIP_STORED)
+    my_zip_file = zipfile.ZipFile(filename, mode, zipfile.ZIP_DEFLATED, compresslevel=9)
     exclude_list = []
     for ex in exclude:
         exclude_list.extend(glob(ex))
@@ -53,6 +122,36 @@ def create_zip_file(filename, mode, files, exclude=None):
             my_zip_file.write(file, base_filename)
         if os.path.isdir(file):
             add_folder_to_zip(my_zip_file, file, exclude=exclude)
+
+    # Python 3.8/3.9's importlib.resources loses the sys.path prefix when a
+    # package is loaded from a nested directory inside a ZIP. Certifi is stored
+    # under browser_vendor/shared, but those runtimes consequently look for its
+    # data file at the archive root. Keep this data-only compatibility alias;
+    # omitting __init__.py ensures imports still use the versioned package.
+    certifi_bundle = os.path.join("browser_vendor", "shared", "certifi", "cacert.pem")
+    if os.path.isfile(certifi_bundle) and "certifi/cacert.pem" not in my_zip_file.namelist():
+        my_zip_file.write(certifi_bundle, "certifi/cacert.pem")
+
+    # Python 3.8's zipimport does not reliably discover implicit namespace
+    # packages inside plugin ZIPs. Some otherwise-compatible dependencies (for
+    # example Selenium's webdriver/common/fedcm directory) intentionally omit
+    # __init__.py. Add an empty marker for every shipped Python directory so
+    # the same release artifact imports on Calibre 5 and current Calibre.
+    names = set(my_zip_file.namelist())
+    python_folders = set()
+    for name in names:
+        if not name.endswith(".py"):
+            continue
+        folder = os.path.dirname(name).replace("\\", "/")
+        while folder:
+            python_folders.add(folder)
+            folder = os.path.dirname(folder).replace("\\", "/")
+    for folder in sorted(python_folders):
+        init_name = f"{folder}/__init__.py"
+        if init_name not in names:
+            my_zip_file.writestr(init_name, "")
+            names.add(init_name)
+
     my_zip_file.close()
     return (1, filename)
 
@@ -116,31 +215,10 @@ def copy_static_test_data():
     print("Copied static test data directory from common folder")
 
 
-def get_plugin_subfolders(exclude_folders=None):
-    """Get list of subfolders to include in the plugin, excluding specified folders."""
-    if exclude_folders is None:
-        exclude_folders = {
-            "downloaded_files",  # SeleniumBase runtime downloads
-            "__pycache__",  # Python bytecode cache
-            "test_data",  # Test HTML files
-            "common_romanceio_static_test_data",  # Test fixtures, not needed at runtime
-            "bin",  # CLI executables (sbase, seleniumbase, etc.), not used by plugin
-        }
-
+def get_plugin_subfolders():
+    """Return the explicit runtime/resource directories included in a release."""
     cwd = os.getcwd()
-    folders = []
-    for subfolder in os.listdir(cwd):
-        subfolder_path = os.path.join(cwd, subfolder)
-        if os.path.isdir(subfolder_path):
-            # Filter out our special development folders like .build and .tx
-            # Also filter out pip metadata directories (not needed at runtime)
-            if (
-                not subfolder.startswith(".")
-                and subfolder not in exclude_folders
-                and not subfolder.endswith(".dist-info")
-            ):
-                folders.append(subfolder)
-    return folders
+    return [subfolder for subfolder in sorted(RELEASE_SUBFOLDERS) if os.path.isdir(os.path.join(cwd, subfolder))]
 
 
 def read_plugin_name():
@@ -225,6 +303,9 @@ def build_plugin(adjust_imports_func):
     # import the drivers subpackage (browser_launcher.py does: from seleniumbase import drivers)
     exclude = [
         "*.pyc",
+        "*.pyd",
+        "*.so",
+        "*.dylib",
         "*~",
         "*.xcf",
         "build.py",
@@ -244,7 +325,10 @@ def build_plugin(adjust_imports_func):
         "undetected_chromedriver.exe",
         *MAINTAINER_ONLY_COMMON_FILES,
     ]
-    files.extend(glob("*.py"))
+    # Only explicitly-reviewed runtime modules belong at the plugin root.
+    # Tests, maintenance utilities, and pip-installed command modules remain
+    # available in the checkout but cannot leak into a user-facing release.
+    files.extend(file for file in glob("*.py") if os.path.basename(file) in RELEASE_TOP_LEVEL_MODULES)
     files.extend(glob("*.md"))
     files.extend(glob("*.html"))
     files.extend(glob("*.cmd"))
@@ -252,8 +336,11 @@ def build_plugin(adjust_imports_func):
 
     create_zip_file(zip_file_name, "w", files, exclude=exclude)
 
-    size_mb = os.path.getsize(zip_file_name) / (1024 * 1024)
+    size_bytes = os.path.getsize(zip_file_name)
+    size_mb = size_bytes / (1024 * 1024)
     print(f"Plugin zip size: {size_mb:.1f} MB")
+    if size_bytes >= MAX_PLUGIN_ZIP_SIZE_BYTES:
+        raise RuntimeError(f"Plugin ZIP must be smaller than 40 MB: {zip_file_name} is {size_mb:.2f} MB")
 
 
 def pre_build_setup():

@@ -170,18 +170,23 @@ def test_book_not_found_does_not_retry():
     assert not any("retry attempt" in msg.lower() for msg in logs)
 
 
-def test_fetch_details_book_not_found_falls_through_to_html():
-    """On JsonApiBookNotFoundError, fetch_details_with_fallback must try HTML without marking endpoint dead."""
+def test_fetch_details_html_success_avoids_json_book_details():
+    """A working HTML detail method must avoid the known-failing JSON details request."""
     html_called = []
+    json_called = []
 
     def html_fetch(romanceio_id, _log_func):
         html_called.append(romanceio_id)
         return "html_result"
 
-    log_func, logs = _collecting_log()
+    def json_fetch(romanceio_id, _log_func):
+        json_called.append(romanceio_id)
+        return "json_result"
+
+    log_func, _ = _collecting_log()
     result = fetch_details_with_fallback(
         romanceio_id="abc123",
-        json_fetch_func=_raise_book_not_found,
+        json_fetch_func=json_fetch,
         html_fetch_func=html_fetch,
         log_func=log_func,
         max_retries=3,
@@ -189,36 +194,42 @@ def test_fetch_details_book_not_found_falls_through_to_html():
     )
 
     assert result == "html_result"
-    assert html_called == ["abc123"], "HTML fallback should have been called exactly once"
-    assert any("falling back" in msg.lower() for msg in logs)
-    assert not _is_endpoint_dead(JSON_BOOKS_URL_PREFIX), "Books endpoint must NOT be marked dead for a per-book 404"
+    assert html_called == ["abc123"]
+    assert not json_called, "JSON book details must stay unused when HTML succeeds"
 
 
-def test_fetch_details_404_falls_through_to_html():
-    """On JSON endpoint 404 (JsonApiEndpointError), fetch_details_with_fallback should try HTML scraping."""
+def test_fetch_details_book_not_found_is_graceful_after_html_failure():
+    """A final JSON per-book 404 is graceful and does not mark the endpoint dead."""
     html_called = []
+    json_called = []
 
     def html_fetch(romanceio_id, _log_func):
         html_called.append(romanceio_id)
-        return "html_result"
+        return None
+
+    def json_fetch(romanceio_id, log_func):
+        json_called.append(romanceio_id)
+        return _raise_book_not_found(romanceio_id, log_func)
 
     log_func, logs = _collecting_log()
     result = fetch_details_with_fallback(
         romanceio_id="abc123",
-        json_fetch_func=_raise_404,
+        json_fetch_func=json_fetch,
         html_fetch_func=html_fetch,
         log_func=log_func,
         max_retries=3,
         retry_delay=0,
     )
 
-    assert result == "html_result"
-    assert html_called == ["abc123"], "HTML fallback should have been called exactly once"
-    assert any("falling back" in msg.lower() for msg in logs)
+    assert result is None
+    assert html_called == ["abc123"]
+    assert json_called == ["abc123"]
+    assert any("final fallback" in msg.lower() for msg in logs)
+    assert not _is_endpoint_dead(JSON_BOOKS_URL_PREFIX), "A per-book 404 must not mark the endpoint dead"
 
 
 def test_fetch_details_404_html_also_fails_returns_none():
-    """On JSON 404 + HTML failure, result is None with no unhandled exception."""
+    """An endpoint 404 in the final JSON slot is cached without escaping."""
     log_func, _ = _collecting_log()
     result = fetch_details_with_fallback(
         romanceio_id="abc123",
@@ -230,6 +241,7 @@ def test_fetch_details_404_html_also_fails_returns_none():
     )
 
     assert result is None
+    assert _is_endpoint_dead(JSON_BOOKS_URL_PREFIX)
 
 
 # ---------------------------------------------------------------------------
@@ -238,9 +250,10 @@ def test_fetch_details_404_html_also_fails_returns_none():
 
 
 def test_lightweight_fetch_used_before_chrome():
-    """When lightweight_html_fetch_func is provided and succeeds, Chrome is never called."""
+    """When lightweight HTML succeeds, neither Chrome nor JSON is called."""
     chrome_called = []
     lightweight_called = []
+    json_called = []
 
     def lightweight_html(rid, _log_func):
         lightweight_called.append(rid)
@@ -250,10 +263,14 @@ def test_lightweight_fetch_used_before_chrome():
         chrome_called.append(rid)
         return "chrome_result"
 
+    def json_fetch(rid, _log_func):
+        json_called.append(rid)
+        return "json_result"
+
     log_func, _ = _collecting_log()
     result = fetch_details_with_fallback(
         romanceio_id="abc123",
-        json_fetch_func=_raise_404,
+        json_fetch_func=json_fetch,
         lightweight_html_fetch_func=lightweight_html,
         html_fetch_func=chrome_html,
         log_func=log_func,
@@ -264,11 +281,13 @@ def test_lightweight_fetch_used_before_chrome():
     assert result == "lightweight_result"
     assert lightweight_called == ["abc123"]
     assert not chrome_called, "Chrome must NOT be called when lightweight fetch succeeds"
+    assert not json_called, "JSON details must NOT be called when lightweight fetch succeeds"
 
 
 def test_lightweight_fetch_failure_falls_through_to_chrome():
-    """If lightweight fetch raises, Chrome HTML should still be tried."""
+    """If lightweight fetch raises, Chrome is next and JSON remains unused on success."""
     chrome_called = []
+    json_called = []
 
     def lightweight_html(rid, _log_func):
         raise RuntimeError("Cloudflare blocking plain HTTP")
@@ -277,10 +296,14 @@ def test_lightweight_fetch_failure_falls_through_to_chrome():
         chrome_called.append(rid)
         return "chrome_result"
 
+    def json_fetch(rid, _log_func):
+        json_called.append(rid)
+        return "json_result"
+
     log_func, logs = _collecting_log()
     result = fetch_details_with_fallback(
         romanceio_id="abc123",
-        json_fetch_func=_raise_404,
+        json_fetch_func=json_fetch,
         lightweight_html_fetch_func=lightweight_html,
         html_fetch_func=chrome_html,
         log_func=log_func,
@@ -290,21 +313,27 @@ def test_lightweight_fetch_failure_falls_through_to_chrome():
 
     assert result == "chrome_result"
     assert chrome_called == ["abc123"]
+    assert not json_called
     assert any("chrome" in msg.lower() or "falling back" in msg.lower() for msg in logs)
 
 
-def test_no_lightweight_func_goes_straight_to_chrome():
-    """Without lightweight_html_fetch_func, Chrome is tried immediately after JSON fails."""
+def test_no_lightweight_func_goes_to_chrome_before_json():
+    """Without lightweight HTML, Chrome is still preferred over JSON details."""
     chrome_called = []
+    json_called = []
 
     def chrome_html(rid, _log_func):
         chrome_called.append(rid)
         return "chrome_result"
 
+    def json_fetch(rid, _log_func):
+        json_called.append(rid)
+        return "json_result"
+
     log_func, _ = _collecting_log()
     result = fetch_details_with_fallback(
         romanceio_id="abc123",
-        json_fetch_func=_raise_404,
+        json_fetch_func=json_fetch,
         html_fetch_func=chrome_html,
         log_func=log_func,
         max_retries=3,
@@ -313,6 +342,68 @@ def test_no_lightweight_func_goes_straight_to_chrome():
 
     assert result == "chrome_result"
     assert chrome_called == ["abc123"]
+    assert not json_called
+
+
+def test_detail_fallback_order_is_lightweight_then_chrome_then_json():
+    """All technical failures must reach JSON details only after both HTML methods."""
+    calls = []
+
+    def lightweight_html(rid, _log_func):
+        calls.append(("lightweight", rid))
+        raise RuntimeError("plain HTTP unavailable")
+
+    def chrome_html(rid, _log_func):
+        calls.append(("chrome", rid))
+        raise RuntimeError("Chrome unavailable")
+
+    def json_fetch(rid, _log_func):
+        calls.append(("json", rid))
+        return "json_result"
+
+    result = fetch_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=json_fetch,
+        lightweight_html_fetch_func=lightweight_html,
+        html_fetch_func=chrome_html,
+        log_func=lambda _: None,
+        max_retries=1,
+        retry_delay=0,
+    )
+
+    assert result == "json_result"
+    assert calls == [("lightweight", "abc123"), ("chrome", "abc123"), ("json", "abc123")]
+
+
+def test_prefer_chrome_changes_order_without_retrying_chrome_after_ssr_failure():
+    """The preference changes ordering, not the number of Chrome method slots."""
+    calls = []
+
+    def lightweight_html(rid, _log_func):
+        calls.append(("lightweight", rid))
+        raise RuntimeError("plain HTTP unavailable")
+
+    def chrome_html(rid, _log_func):
+        calls.append(("chrome", rid))
+        raise RuntimeError("Chrome unavailable")
+
+    def json_fetch(rid, _log_func):
+        calls.append(("json", rid))
+        return "json_result"
+
+    result = fetch_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=json_fetch,
+        lightweight_html_fetch_func=lightweight_html,
+        html_fetch_func=chrome_html,
+        log_func=lambda _: None,
+        max_retries=1,
+        retry_delay=0,
+        prefer_chrome=True,
+    )
+
+    assert result == "json_result"
+    assert calls == [("chrome", "abc123"), ("lightweight", "abc123"), ("json", "abc123")]
 
 
 # ---------------------------------------------------------------------------
@@ -503,7 +594,7 @@ def test_search_not_skipped_when_only_books_endpoint_dead():
 
 
 def test_fetch_details_skips_json_when_books_endpoint_dead():
-    """fetch_details_with_fallback skips JSON when the books endpoint is marked dead."""
+    """The final JSON fallback is skipped when the books endpoint is marked dead."""
     _mark_endpoint_dead(JSON_BOOKS_URL_PREFIX)
     json_called = []
 
@@ -515,7 +606,7 @@ def test_fetch_details_skips_json_when_books_endpoint_dead():
 
     def html_fetch(romanceio_id, _log):
         html_called.append(romanceio_id)
-        return "html_result"
+        return None
 
     log_func, _ = _collecting_log()
     result = fetch_details_with_fallback(
@@ -528,8 +619,8 @@ def test_fetch_details_skips_json_when_books_endpoint_dead():
     )
 
     assert not json_called, "JSON fetch must not be called when books endpoint is known-dead"
-    assert html_called == ["abc123"], "HTML fallback must still be called"
-    assert result == "html_result"
+    assert html_called == ["abc123"], "HTML must still be attempted before the dead JSON slot"
+    assert result is None
 
 
 def test_fetch_details_not_skipped_when_only_search_endpoint_dead():
@@ -643,7 +734,7 @@ def _mock_time_and_sleep(initial_time: float) -> Iterator[tuple[list[float], lis
     def mock_time() -> float:
         return fake_clock[0]
 
-    _orchestrator_mod.time.sleep = mock_sleep
+    _orchestrator_mod.time.sleep = mock_sleep  # type: ignore[assignment]
     _orchestrator_mod.time.time = mock_time
     try:
         yield slept, fake_clock
@@ -727,7 +818,7 @@ def test_maybe_wait_no_sleep_without_prior_429():
         def mock_sleep(secs: float) -> None:
             slept.append(secs)
 
-        _orchestrator_mod.time.sleep = mock_sleep
+        _orchestrator_mod.time.sleep = mock_sleep  # type: ignore[assignment]
         try:
             getattr(_orchestrator_mod, _THROTTLE)(lambda _: None, JSON_SEARCH_URL_PREFIX)
             assert not slept, "Should not sleep when no prior 429 and min interval is zeroed"
@@ -836,13 +927,13 @@ def test_403_search_with_fallback_falls_through_to_html():
     assert html_called, "HTML search must be called after JSON returns 403"
 
 
-def test_403_fetch_details_falls_through_to_html():
-    """fetch_details_with_fallback must fall through to HTML when JSON returns 403."""
+def test_403_in_final_detail_fallback_is_graceful():
+    """A 403 in the final JSON detail slot is graceful and marks JSON unavailable."""
     html_called = []
 
     def html_fetch(romanceio_id, _log_func):
         html_called.append(romanceio_id)
-        return {"title": "some book"}
+        return None
 
     log_func, _ = _collecting_log()
     result = fetch_details_with_fallback(
@@ -854,8 +945,10 @@ def test_403_fetch_details_falls_through_to_html():
         retry_delay=0,
     )
 
-    assert result == {"title": "some book"}, "HTML fallback result must be returned after 403"
-    assert html_called == ["abc123"], "HTML fetch must be called after JSON returns 403"
+    assert result is None
+    assert html_called == ["abc123"]
+    assert _is_endpoint_dead(JSON_SEARCH_URL_PREFIX)
+    assert _is_endpoint_dead(JSON_BOOKS_URL_PREFIX)
 
 
 def test_403_subsequent_books_skip_json():
@@ -954,7 +1047,7 @@ def test_throttle_returns_immediately_when_abort_already_set():
 
     slept: list[float] = []
     original_sleep = _orchestrator_mod.time.sleep
-    _orchestrator_mod.time.sleep = slept.append
+    _orchestrator_mod.time.sleep = slept.append  # type: ignore[assignment]
     try:
         getattr(_orchestrator_mod, _THROTTLE)(lambda _: None, JSON_SEARCH_URL_PREFIX, abort)
         assert not slept, f"Must not sleep when abort is already set, but slept for: {slept}"

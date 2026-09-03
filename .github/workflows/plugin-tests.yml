@@ -1,6 +1,7 @@
 name: Calibre Plugin Tests
 
 on:
+  workflow_dispatch:
   push:
     branches: [ "main" ]  # Only run on main; feature branches are covered by pull_request
   pull_request:
@@ -12,20 +13,41 @@ permissions:
   contents: read
   actions: read  # Needed to query previous workflow run status
 
+env:
+  # Keep one current Calibre version across Linux, Windows, and macOS so the
+  # compatibility matrix tests the same application release everywhere.
+  # Digests are pinned from https://calibre-ebook.com/signatures/.
+  CALIBRE_CURRENT_VERSION: "9.14.0"
+  CALIBRE_CURRENT_LINUX_SHA512: "d1a162d472dfbc3b74946809a979197121277150efe9e2172786843573c89dab542ce2bad98164c5d788420d2b9d8caea208cfe82c5016b3db09c0ed3ef3fc37"
+  CALIBRE_CURRENT_LINUX_ARM64_SHA512: "4f20dd31065f09a2777c1a2815acce2d6fabc0c9b48d41b4c909e245bf53e7b03dfdcbaa362095cbfb3bc840113244e261b6d07a4bbd4911b3dbdad665c2fd7e"
+  CALIBRE_CURRENT_WINDOWS_SHA512: "e2c1417ee4801fff87a1e10f4014e6e20a0b4efa1169417d1942b4352d4901fcb410bfab4a55bfb7f22737b64ff8956d508898a7fa7734e08f9d8a96391bc8d1"
+  CALIBRE_CURRENT_MACOS_SHA512: "b88c240f61c06ea311472419403681d914784d60f3a8e4391f65786feb49a7f2cb268dfff7b31b2e1a9e137d62efc8f3ef04d392f3ba44b56dce2199dd7708dd"
+  CALIBRE_5_LINUX_SHA512: "4dc7907af940851e966c20d6b5c0e95da5097d54d5b0d774d7a9c5ff4fbeeee5a0fc07e08c78a70522790e904a5d70af159661463bfb8e29389e6d9b25f4851f"
+  CALIBRE_5_DESKTOP_VERSION: "5.44.0"
+  CALIBRE_5_WINDOWS_SHA512: "c0f9c67a83d3d51fc99cc896dded0d682d083a42dd596dbe9ac3401ad036b9af981573a5febea23f5d8758dd69db49caa7ea23c85bc0392fa1d000e2c291bfda"
+  CALIBRE_5_MACOS_SHA512: "ff115bd5f7b434b892c298039cb2f244108cbfcf1e09b7ec18ac323a13a40fbce9b06d47d0c9c5c8386b864fb1a6f0bbd7c5dd3dd1856c7c81f2c19e781057db"
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
+    outputs:
+      substantive_changes: ${{ steps.changes.outputs.substantive_changes }}
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       with:
         fetch-depth: 2  # Fetch at least 2 commits for diff comparison
+
+    - name: Configure isolated Calibre paths
+      run: |
+        echo "CALIBRE_CONFIG_DIRECTORY=$RUNNER_TEMP/calibre-config" >> "$GITHUB_ENV"
+        echo "CALIBRE_DIRECTORY=$RUNNER_TEMP/calibre-current" >> "$GITHUB_ENV"
 
     - name: Detect changes and determine what to run
       id: changes
       run: |
         # Check if previous workflow run failed (to catch lingering test failures)
         FORCE_ALL_TESTS=false
-        if [ "${{ github.event_name }}" != "schedule" ]; then
+        if [ "${{ github.event_name }}" != "schedule" ] && [ "${{ github.event_name }}" != "workflow_dispatch" ]; then
           echo "Checking previous workflow run status..."
 
           # Get the most recent completed workflow run before this one
@@ -44,9 +66,9 @@ jobs:
         fi
 
         # Determine which files changed
-        if [ "${{ github.event_name }}" == "schedule" ]; then
-          # For scheduled runs, run all tests
-          echo "Scheduled run - will run all tests"
+        if [ "${{ github.event_name }}" == "schedule" ] || [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+          # For scheduled and manually dispatched runs, run all tests
+          echo "Scheduled/manual run - will run all tests"
           CHANGED_FILES="all"
         elif [ "${{ github.event_name }}" == "pull_request" ]; then
           # For PRs, compare against the base branch
@@ -68,14 +90,14 @@ jobs:
         echo "$CHANGED_FILES"
 
         # Check if changes are substantive (not just documentation)
-        # Non-substantive files: *.md, LICENSE, .gitignore, *.txt (except requirements.txt)
+        # Non-substantive files: *.md, LICENSE, .gitignore, and non-requirement *.txt files
         if [ "$CHANGED_FILES" == "all" ]; then
           echo "substantive_changes=true" >> $GITHUB_OUTPUT
           echo "✅ First commit or unable to determine changes - running full pipeline"
-        elif echo "$CHANGED_FILES" | grep -qE '^requirements\.txt$'; then
-          # requirements.txt is always substantive
+        elif echo "$CHANGED_FILES" | grep -qE '(^|/)requirements[^/]*\.txt$'; then
+          # Every root/plugin dependency manifest is substantive
           echo "substantive_changes=true" >> $GITHUB_OUTPUT
-          echo "✅ Substantive changes detected (including requirements.txt)"
+          echo "✅ Substantive changes detected (including a dependency manifest)"
         elif echo "$CHANGED_FILES" | grep -v -E '\.(md)$|^LICENSE$|^\\.gitignore$|\\.txt$|^images/' | grep -q .; then
           # Has files other than markdown, LICENSE, .gitignore, .txt, images/
           echo "substantive_changes=true" >> $GITHUB_OUTPUT
@@ -128,7 +150,7 @@ jobs:
 
     - name: Set up Python 3.11.9
       if: steps.changes.outputs.substantive_changes == 'true'
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
       with:
         python-version: "3.11.9"
         cache: 'pip'
@@ -161,41 +183,57 @@ jobs:
       if: steps.changes.outputs.substantive_changes == 'true'
       run: |
         python -m pytest common/test_orchestrator_errors.py -v
+        python -m pytest common/test_detail_validation.py -v
 
     - name: Test vendored import (common)
       if: steps.changes.outputs.substantive_changes == 'true'
       run: |
         python -m pytest common/test_vendored_import.py -v
 
+    - name: Test browser dependency manifests (common)
+      if: steps.changes.outputs.substantive_changes == 'true'
+      run: |
+        python -m pytest common/test_dependency_manifests.py -v
+
+    - name: Test conservative Flatpak browser handling (common)
+      if: steps.changes.outputs.substantive_changes == 'true'
+      run: |
+        python -m pytest common/test_flatpak_compatibility.py -v
+
+    - name: Test download integrity verifier (common)
+      if: steps.changes.outputs.substantive_changes == 'true'
+      run: |
+        python -m pytest common/test_verify_sha512.py -v
+
     - name: Format check with Black
       if: steps.changes.outputs.substantive_changes == 'true'
       run: |
-        black --check --line-length=120 . || true
+        git ls-files -z '*.py' | xargs -0 black --check --line-length=120
 
     - name: Lint with Pylint
       if: steps.changes.outputs.substantive_changes == 'true'
       run: |
-        pylint --rcfile=.pylintrc romanceio/ romanceio_fields/ common/ || true
+        git ls-files -z '*.py' | xargs -0 pylint --rcfile=.pylintrc --disable=all --enable=E,F
 
     - name: Type check with Mypy
       if: steps.changes.outputs.substantive_changes == 'true'
       run: |
-        mypy --config-file=mypy.ini || true
+        git ls-files -z '*.py' | xargs -0 mypy --config-file=mypy.ini --follow-imports=skip
 
-    - name: Install Calibre
+    - name: Install verified official Calibre binary
       if: steps.changes.outputs.substantive_changes == 'true'
       run: |
         sudo apt-get update
-        sudo apt-get install -y calibre
-        calibre-debug --version
-
-        # To test against a specific Calibre version instead of the system default:
-        # sudo apt-get install -y libegl1 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0 libxcb-shape0 libopengl0
-        # sudo mkdir -p /opt/calibre
-        # wget -nv -O- https://download.calibre-ebook.com/7.21.0/calibre-7.21.0-x86_64.txz | sudo tar xJ -C /opt/calibre
-        # sudo ln -sf /opt/calibre/calibre-debug /usr/bin/calibre-debug
-        # sudo ln -sf /opt/calibre/calibre-customize /usr/bin/calibre-customize
-        # calibre-debug --version
+        sudo apt-get install -y libegl1 libopengl0 libxcb-cursor0 xdg-utils xz-utils
+        archive="$RUNNER_TEMP/calibre-$CALIBRE_CURRENT_VERSION-x86_64.txz"
+        curl -fsSL \
+          "https://download.calibre-ebook.com/$CALIBRE_CURRENT_VERSION/calibre-$CALIBRE_CURRENT_VERSION-x86_64.txz" \
+          -o "$archive"
+        python common/verify_sha512.py "$archive" "$CALIBRE_CURRENT_LINUX_SHA512"
+        mkdir -p "$CALIBRE_DIRECTORY"
+        tar -xJf "$archive" -C "$CALIBRE_DIRECTORY"
+        echo "$CALIBRE_DIRECTORY" >> "$GITHUB_PATH"
+        "$CALIBRE_DIRECTORY/calibre-debug" --version
 
     - name: Build plugins
       if: steps.changes.outputs.substantive_changes == 'true'
@@ -203,12 +241,40 @@ jobs:
         cd romanceio
         bash build.sh
         echo "Checking romanceio dependencies..."
-        ls -la seleniumbase 2>/dev/null || echo "WARNING: seleniumbase not found in romanceio/"
+        ls -la browser_vendor/shared/seleniumbase browser_vendor/current/seleniumbase
         cd ../romanceio_fields
         bash build.sh
         echo "Checking romanceio_fields dependencies..."
-        ls -la seleniumbase 2>/dev/null || echo "WARNING: seleniumbase not found in romanceio_fields/"
+        ls -la browser_vendor/shared/seleniumbase browser_vendor/current/seleniumbase
         cd ..
+
+    - name: Audit portable release ZIPs
+      if: steps.changes.outputs.substantive_changes == 'true'
+      run: |
+        python common/test_release_zip.py \
+          romanceio/Romance.io.zip \
+          "romanceio_fields/Romance.io Fields.zip"
+        calibre-debug -e common/test_release_zip_imports.py -- romanceio/Romance.io.zip
+        calibre-debug -e common/test_release_zip_imports.py -- "romanceio_fields/Romance.io Fields.zip"
+
+    - name: Install and verify release ZIPs
+      if: steps.changes.outputs.substantive_changes == 'true'
+      run: |
+        calibre-customize -a romanceio/Romance.io.zip
+        calibre-customize -a "romanceio_fields/Romance.io Fields.zip"
+        calibre-customize -l
+        calibre-debug -e common/test_installed_plugins.py
+
+    - name: Preserve exact release ZIPs for compatibility jobs
+      if: steps.changes.outputs.substantive_changes == 'true'
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: release-zips
+        if-no-files-found: error
+        retention-days: 7
+        path: |
+          romanceio/Romance.io.zip
+          romanceio_fields/Romance.io Fields.zip
 
     - name: Test romanceio plugin tag mapping
       if: steps.changes.outputs.romanceio_changed == 'true'
@@ -331,6 +397,7 @@ jobs:
 
     - name: Test romanceio plugin initialization
       if: steps.changes.outputs.romanceio_changed == 'true'
+      timeout-minutes: 1
       env:
         PYTHONPATH: ${{ github.workspace }}/..
       run: |
@@ -343,16 +410,528 @@ jobs:
       run: |
         cd romanceio_fields && calibre-debug -e __init__.py
 
-    - name: Test romanceio_fields plugin JSON API download
-      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+    # Live endpoint checks are intentionally non-blocking. Each access method is
+    # reported separately, but third-party availability, Cloudflare challenges,
+    # and retired endpoints are not treated as repository regressions.
+    # Deterministic parsing, matching, and fallback tests above remain required.
+    - name: Live smoke - metadata plugin identify
+      if: steps.changes.outputs.romanceio_changed == 'true'
+      continue-on-error: true
+      timeout-minutes: 5
       env:
         PYTHONPATH: ${{ github.workspace }}/..
       run: |
-        cd romanceio_fields && calibre-debug -e test_json_download.py
+        cd romanceio && xvfb-run -a calibre-debug -e __init__.py -- --live
 
-    - name: Test romanceio_fields plugin HTML field download
+    - name: Live smoke - JSON search
       if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      continue-on-error: true
+      timeout-minutes: 2
       env:
         PYTHONPATH: ${{ github.workspace }}/..
       run: |
-        cd romanceio_fields && xvfb-run -a calibre-debug -e test_html_fields_download.py
+        calibre-debug -e common/run_installed_live_smoke.py -- json-search
+
+    - name: Live smoke - JSON book details
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      continue-on-error: true
+      timeout-minutes: 2
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        calibre-debug -e common/run_installed_live_smoke.py -- json-details
+
+    - name: Live smoke - lightweight SSR book details
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      continue-on-error: true
+      timeout-minutes: 2
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        calibre-debug -e common/run_installed_live_smoke.py -- ssr-details
+
+    - name: Live smoke - Chrome search
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      continue-on-error: true
+      timeout-minutes: 2
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        xvfb-run -a calibre-debug -e common/run_installed_live_smoke.py -- chrome-search
+
+    - name: Live smoke - Chrome book details
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      continue-on-error: true
+      timeout-minutes: 2
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        xvfb-run -a calibre-debug -e common/run_installed_live_smoke.py -- chrome-details
+
+    - name: Live smoke - default fallback path
+      if: steps.changes.outputs.romanceio_fields_changed == 'true'
+      continue-on-error: true
+      timeout-minutes: 2
+      env:
+        PYTHONPATH: ${{ github.workspace }}/..
+      run: |
+        xvfb-run -a calibre-debug -e common/run_installed_live_smoke.py -- default
+
+  platform-compatibility:
+    name: Installed ZIP - ${{ matrix.name }}
+    needs: test
+    if: needs.test.outputs.substantive_changes == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Ubuntu 24.04
+            os: ubuntu-24.04
+          - name: Windows 2025
+            os: windows-2025
+          - name: macOS 15 (Apple Silicon)
+            os: macos-15
+            architecture: arm64
+          - name: macOS 15 (Intel)
+            os: macos-15-intel
+            architecture: x86_64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+    - name: Set up Python 3.11.9
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: "3.11.9"
+
+    - name: Download the exact release ZIPs
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: release-zips
+        path: dist
+
+    - name: Locate downloaded release ZIPs
+      shell: pwsh
+      run: |
+        $romanceio = Get-ChildItem -Path dist -Recurse -Filter 'Romance.io.zip' | Select-Object -First 1
+        $fields = Get-ChildItem -Path dist -Recurse -Filter 'Romance.io Fields.zip' | Select-Object -First 1
+        if (-not $romanceio -or -not $fields) {
+          throw 'Both release ZIPs must be present in the downloaded artifact.'
+        }
+        "ROMANCEIO_ZIP=$($romanceio.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "ROMANCEIO_FIELDS_ZIP=$($fields.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "CALIBRE_CONFIG_DIRECTORY=$env:RUNNER_TEMP/calibre-config" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Install verified official Calibre on Ubuntu
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libegl1 libopengl0 libxcb-cursor0 xdg-utils xz-utils
+        archive="$RUNNER_TEMP/calibre-$CALIBRE_CURRENT_VERSION-x86_64.txz"
+        curl -fsSL \
+          "https://download.calibre-ebook.com/$CALIBRE_CURRENT_VERSION/calibre-$CALIBRE_CURRENT_VERSION-x86_64.txz" \
+          -o "$archive"
+        python common/verify_sha512.py "$archive" "$CALIBRE_CURRENT_LINUX_SHA512"
+        mkdir -p "$RUNNER_TEMP/calibre-current"
+        tar -xJf "$archive" -C "$RUNNER_TEMP/calibre-current"
+        echo "$RUNNER_TEMP/calibre-current" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/calibre-current/calibre-debug" --version
+
+    - name: Install official Calibre on Windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $installer = Join-Path $env:RUNNER_TEMP "calibre-$env:CALIBRE_CURRENT_VERSION.msi"
+        $url = "https://download.calibre-ebook.com/$env:CALIBRE_CURRENT_VERSION/calibre-64bit-$env:CALIBRE_CURRENT_VERSION.msi"
+        Invoke-WebRequest -Uri $url -OutFile $installer
+        python common/verify_sha512.py $installer $env:CALIBRE_CURRENT_WINDOWS_SHA512
+        $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @('/i', $installer, '/qn', '/norestart')
+        if ($process.ExitCode -notin @(0, 3010)) {
+          throw "Calibre MSI installation failed with exit code $($process.ExitCode)"
+        }
+        'C:\Program Files\Calibre2' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        & 'C:\Program Files\Calibre2\calibre-debug.exe' --version
+
+    - name: Install official Calibre on macOS
+      if: runner.os == 'macOS'
+      run: |
+        test "$(uname -m)" = "${{ matrix.architecture }}"
+        curl -fsSL \
+          "https://download.calibre-ebook.com/$CALIBRE_CURRENT_VERSION/calibre-$CALIBRE_CURRENT_VERSION.dmg" \
+          -o "$RUNNER_TEMP/calibre.dmg"
+        python common/verify_sha512.py "$RUNNER_TEMP/calibre.dmg" "$CALIBRE_CURRENT_MACOS_SHA512"
+        mkdir -p "$RUNNER_TEMP/calibre-dmg"
+        hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/calibre-dmg" "$RUNNER_TEMP/calibre.dmg"
+        CALIBRE_APP=$(find "$RUNNER_TEMP/calibre-dmg" -maxdepth 1 -name '*.app' -print -quit)
+        test -n "$CALIBRE_APP"
+        ditto "$CALIBRE_APP" "$RUNNER_TEMP/calibre.app"
+        hdiutil detach "$RUNNER_TEMP/calibre-dmg"
+        echo "$RUNNER_TEMP/calibre.app/Contents/MacOS" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/calibre.app/Contents/MacOS/calibre-debug" --version
+
+    - name: Audit the portable release ZIPs
+      shell: pwsh
+      run: python common/test_release_zip.py "$env:ROMANCEIO_ZIP" "$env:ROMANCEIO_FIELDS_ZIP"
+
+    - name: Install both release ZIPs into isolated Calibre
+      shell: pwsh
+      run: |
+        calibre-customize -a "$env:ROMANCEIO_ZIP"
+        calibre-customize -a "$env:ROMANCEIO_FIELDS_ZIP"
+        calibre-customize -l
+
+    - name: Verify browser imports and native Calibre dependencies
+      shell: pwsh
+      run: |
+        calibre-debug -e common/test_release_zip_imports.py -- "$env:ROMANCEIO_ZIP"
+        calibre-debug -e common/test_release_zip_imports.py -- "$env:ROMANCEIO_FIELDS_ZIP"
+
+    - name: Verify Calibre loads code from the installed ZIPs
+      shell: pwsh
+      run: calibre-debug -e common/test_installed_plugins.py
+
+    # Required and deterministic: exercise the installed ZIP's real SeleniumBase
+    # and undetected-Chrome launch path against a local page. The matching driver
+    # is already supplied by each GitHub runner, so this performs no site or
+    # driver download and cannot be affected by Romance.io or Cloudflare.
+    - name: Required local Chrome launch (Linux)
+      if: runner.os == 'Linux'
+      timeout-minutes: 5
+      run: xvfb-run -a calibre-debug -e common/run_installed_browser_smoke.py -- romanceio_fields
+
+    - name: Required local Chrome launch
+      if: runner.os != 'Linux'
+      timeout-minutes: 5
+      shell: pwsh
+      run: calibre-debug -e common/run_installed_browser_smoke.py -- romanceio_fields
+
+    # These exercise the real browser on every supported desktop OS, but remain
+    # non-blocking because Romance.io and Cloudflare are external systems. The
+    # complete set of method-specific live checks remains visible in the Ubuntu job.
+    - name: Cross-platform live smoke - Chrome book details (Linux)
+      if: runner.os == 'Linux' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      continue-on-error: true
+      timeout-minutes: 3
+      run: xvfb-run -a calibre-debug -e common/run_installed_live_smoke.py -- chrome-details
+
+    - name: Cross-platform live smoke - Chrome book details
+      if: runner.os != 'Linux' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      continue-on-error: true
+      timeout-minutes: 3
+      shell: pwsh
+      run: calibre-debug -e common/run_installed_live_smoke.py -- chrome-details
+
+  flatpak-compatibility:
+    name: Installed ZIP - Calibre Flatpak
+    needs: test
+    if: needs.test.outputs.substantive_changes == 'true'
+    runs-on: ubuntu-24.04
+
+    steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+    - name: Download the exact release ZIPs
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: release-zips
+        path: dist
+
+    - name: Locate downloaded release ZIPs
+      run: |
+        romanceio=$(find dist -type f -name 'Romance.io.zip' -print -quit)
+        fields=$(find dist -type f -name 'Romance.io Fields.zip' -print -quit)
+        test -n "$romanceio" && test -n "$fields"
+        romanceio=$(realpath "$romanceio")
+        fields=$(realpath "$fields")
+        echo "ROMANCEIO_ZIP=$romanceio" >> "$GITHUB_ENV"
+        echo "ROMANCEIO_FIELDS_ZIP=$fields" >> "$GITHUB_ENV"
+
+    - name: Install the current Calibre Flatpak
+      timeout-minutes: 15
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y flatpak xvfb
+        flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
+        flatpak install --user --noninteractive flathub com.calibre_ebook.calibre
+        flatpak info --user com.calibre_ebook.calibre
+        flatpak run --filesystem="$GITHUB_WORKSPACE":ro --env=QT_QPA_PLATFORM=offscreen \
+          --command=calibre-debug com.calibre_ebook.calibre --version
+
+    - name: Install the current Google Chrome Flatpak
+      timeout-minutes: 15
+      run: |
+        flatpak install --user --noninteractive flathub com.google.Chrome
+        flatpak info --user com.google.Chrome
+
+    - name: Install both release ZIPs inside the Flatpak sandbox
+      run: |
+        flatpak run --filesystem="$GITHUB_WORKSPACE":ro --env=QT_QPA_PLATFORM=offscreen \
+          --command=calibre-customize com.calibre_ebook.calibre -a "$ROMANCEIO_ZIP"
+        flatpak run --filesystem="$GITHUB_WORKSPACE":ro --env=QT_QPA_PLATFORM=offscreen \
+          --command=calibre-customize com.calibre_ebook.calibre -a "$ROMANCEIO_FIELDS_ZIP"
+
+    - name: Verify release imports and nested workers inside the Flatpak sandbox
+      timeout-minutes: 5
+      run: |
+        flatpak run --filesystem="$GITHUB_WORKSPACE":ro --env=QT_QPA_PLATFORM=offscreen \
+          --command=calibre-debug com.calibre_ebook.calibre \
+          -e "$GITHUB_WORKSPACE/common/test_release_zip_imports.py" -- "$ROMANCEIO_ZIP"
+        flatpak run --filesystem="$GITHUB_WORKSPACE":ro --env=QT_QPA_PLATFORM=offscreen \
+          --command=calibre-debug com.calibre_ebook.calibre \
+          -e "$GITHUB_WORKSPACE/common/test_release_zip_imports.py" -- "$ROMANCEIO_FIELDS_ZIP"
+        flatpak run --filesystem="$GITHUB_WORKSPACE":ro --env=QT_QPA_PLATFORM=offscreen \
+          --command=calibre-debug com.calibre_ebook.calibre \
+          -e "$GITHUB_WORKSPACE/common/test_installed_plugins.py"
+
+    - name: Required Chrome launch inside the Calibre Flatpak
+      timeout-minutes: 10
+      run: |
+        for plugin in romanceio romanceio_fields; do
+          xvfb-run -a flatpak run \
+            --filesystem="$GITHUB_WORKSPACE":ro \
+            --filesystem="$HOME/.local/share/flatpak/app/com.google.Chrome:ro" \
+            --share=network \
+            --socket=x11 \
+            --env=QT_QPA_PLATFORM=offscreen \
+            --env=RUNNER_TEMP=/tmp \
+            --command=calibre-debug com.calibre_ebook.calibre \
+            -e "$GITHUB_WORKSPACE/common/run_installed_browser_smoke.py" -- \
+            "$plugin" --driver-source managed --require-flatpak-chrome
+        done
+
+  linux-arm64-compatibility:
+    name: Installed ZIP - Ubuntu 24.04 ARM64
+    needs: test
+    if: needs.test.outputs.substantive_changes == 'true'
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+    - name: Download the exact release ZIPs
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: release-zips
+        path: dist
+
+    - name: Locate downloaded release ZIPs
+      run: |
+        romanceio=$(find dist -type f -name 'Romance.io.zip' -print -quit)
+        fields=$(find dist -type f -name 'Romance.io Fields.zip' -print -quit)
+        test -n "$romanceio" && test -n "$fields"
+        romanceio=$(realpath "$romanceio")
+        fields=$(realpath "$fields")
+        echo "ROMANCEIO_ZIP=$romanceio" >> "$GITHUB_ENV"
+        echo "ROMANCEIO_FIELDS_ZIP=$fields" >> "$GITHUB_ENV"
+        echo "CALIBRE_CONFIG_DIRECTORY=$RUNNER_TEMP/calibre-arm64-config" >> "$GITHUB_ENV"
+        echo "CALIBRE_ARM64_DIRECTORY=$RUNNER_TEMP/calibre-arm64" >> "$GITHUB_ENV"
+
+    - name: Install verified official Calibre ARM64
+      run: |
+        test "$(uname -m)" = "aarch64"
+        sudo apt-get update
+        sudo apt-get install -y libegl1 libopengl0 libxcb-cursor0 xdg-utils xz-utils
+        archive="$RUNNER_TEMP/calibre-$CALIBRE_CURRENT_VERSION-arm64.txz"
+        curl -fsSL \
+          "https://download.calibre-ebook.com/$CALIBRE_CURRENT_VERSION/calibre-$CALIBRE_CURRENT_VERSION-arm64.txz" \
+          -o "$archive"
+        python3 common/verify_sha512.py "$archive" "$CALIBRE_CURRENT_LINUX_ARM64_SHA512"
+        mkdir -p "$CALIBRE_ARM64_DIRECTORY"
+        tar -xJf "$archive" -C "$CALIBRE_ARM64_DIRECTORY"
+        echo "$CALIBRE_ARM64_DIRECTORY" >> "$GITHUB_PATH"
+        "$CALIBRE_ARM64_DIRECTORY/calibre-debug" --version
+
+    - name: Install and verify both release ZIPs on Linux ARM64
+      env:
+        QT_QPA_PLATFORM: offscreen
+      run: |
+        python3 common/test_release_zip.py "$ROMANCEIO_ZIP" "$ROMANCEIO_FIELDS_ZIP"
+        "$CALIBRE_ARM64_DIRECTORY/calibre-customize" -a "$ROMANCEIO_ZIP"
+        "$CALIBRE_ARM64_DIRECTORY/calibre-customize" -a "$ROMANCEIO_FIELDS_ZIP"
+        "$CALIBRE_ARM64_DIRECTORY/calibre-debug" -e common/test_release_zip_imports.py -- "$ROMANCEIO_ZIP"
+        "$CALIBRE_ARM64_DIRECTORY/calibre-debug" -e common/test_release_zip_imports.py -- "$ROMANCEIO_FIELDS_ZIP"
+        "$CALIBRE_ARM64_DIRECTORY/calibre-debug" -e common/test_installed_plugins.py
+
+  python-39-vendor-compatibility:
+    name: Release ZIP - Python 3.9 browser branch
+    needs: test
+    if: needs.test.outputs.substantive_changes == 'true'
+    runs-on: ubuntu-24.04
+
+    steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+    - name: Set up the actual Python 3.9 runtime
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: "3.9.25"
+
+    - name: Download the exact release ZIPs
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: release-zips
+        path: dist
+
+    - name: Locate downloaded release ZIPs
+      shell: pwsh
+      run: |
+        $romanceio = Get-ChildItem -Path dist -Recurse -Filter 'Romance.io.zip' | Select-Object -First 1
+        $fields = Get-ChildItem -Path dist -Recurse -Filter 'Romance.io Fields.zip' | Select-Object -First 1
+        if (-not $romanceio -or -not $fields) {
+          throw 'Both release ZIPs must be present in the downloaded artifact.'
+        }
+        "ROMANCEIO_ZIP=$($romanceio.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "ROMANCEIO_FIELDS_ZIP=$($fields.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Import the Python 3.9 vendored browser stack
+      run: |
+        python -m pip install lxml==6.0.2 psutil==7.1.3
+        python -c "import sys; assert sys.version_info[:2] == (3, 9), sys.version"
+        python common/test_release_zip_imports.py "$ROMANCEIO_ZIP"
+        python common/test_release_zip_imports.py "$ROMANCEIO_FIELDS_ZIP"
+
+  calibre-5-desktop-compatibility:
+    name: Installed ZIP - Calibre 5.44 on ${{ matrix.name }}
+    needs: test
+    if: needs.test.outputs.substantive_changes == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-2025
+          - name: macOS Apple Silicon
+            os: macos-15
+            architecture: arm64
+          - name: macOS Intel
+            os: macos-15-intel
+            architecture: x86_64
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+    - name: Download the exact release ZIPs
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: release-zips
+        path: dist
+
+    - name: Locate downloaded release ZIPs
+      shell: pwsh
+      run: |
+        $romanceio = Get-ChildItem -Path dist -Recurse -Filter 'Romance.io.zip' | Select-Object -First 1
+        $fields = Get-ChildItem -Path dist -Recurse -Filter 'Romance.io Fields.zip' | Select-Object -First 1
+        if (-not $romanceio -or -not $fields) {
+          throw 'Both release ZIPs must be present in the downloaded artifact.'
+        }
+        "ROMANCEIO_ZIP=$($romanceio.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "ROMANCEIO_FIELDS_ZIP=$($fields.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "CALIBRE_CONFIG_DIRECTORY=$env:RUNNER_TEMP/calibre-5-desktop-config" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Install verified Calibre 5.44 on Windows
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: |
+        $installer = Join-Path $env:RUNNER_TEMP "calibre-64bit-$env:CALIBRE_5_DESKTOP_VERSION.msi"
+        $url = "https://download.calibre-ebook.com/$env:CALIBRE_5_DESKTOP_VERSION/calibre-64bit-$env:CALIBRE_5_DESKTOP_VERSION.msi"
+        Invoke-WebRequest -Uri $url -OutFile $installer
+        python common/verify_sha512.py $installer $env:CALIBRE_5_WINDOWS_SHA512
+        $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @('/i', $installer, '/qn', '/norestart')
+        if ($process.ExitCode -notin @(0, 3010)) {
+          throw "Calibre 5.44 MSI installation failed with exit code $($process.ExitCode)"
+        }
+        'C:\Program Files\Calibre2' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        & 'C:\Program Files\Calibre2\calibre-debug.exe' --version
+
+    - name: Install verified Calibre 5.44 on macOS
+      if: runner.os == 'macOS'
+      run: |
+        test "$(uname -m)" = "${{ matrix.architecture }}"
+        curl -fsSL \
+          "https://download.calibre-ebook.com/$CALIBRE_5_DESKTOP_VERSION/calibre-$CALIBRE_5_DESKTOP_VERSION.dmg" \
+          -o "$RUNNER_TEMP/calibre-5.dmg"
+        python3 common/verify_sha512.py "$RUNNER_TEMP/calibre-5.dmg" "$CALIBRE_5_MACOS_SHA512"
+        mkdir -p "$RUNNER_TEMP/calibre-5-dmg"
+        hdiutil attach -nobrowse -readonly -mountpoint "$RUNNER_TEMP/calibre-5-dmg" "$RUNNER_TEMP/calibre-5.dmg"
+        CALIBRE_APP=$(find "$RUNNER_TEMP/calibre-5-dmg" -maxdepth 1 -name '*.app' -print -quit)
+        test -n "$CALIBRE_APP"
+        ditto "$CALIBRE_APP" "$RUNNER_TEMP/calibre-5.app"
+        hdiutil detach "$RUNNER_TEMP/calibre-5-dmg"
+        echo "$RUNNER_TEMP/calibre-5.app/Contents/MacOS" >> "$GITHUB_PATH"
+        "$RUNNER_TEMP/calibre-5.app/Contents/MacOS/calibre-debug" --version
+
+    - name: Install and verify exact release ZIPs on Calibre 5.44
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $PSNativeCommandUseErrorActionPreference = $true
+        calibre-customize -a "$env:ROMANCEIO_ZIP"
+        calibre-customize -a "$env:ROMANCEIO_FIELDS_ZIP"
+        calibre-debug -e common/test_release_zip_imports.py -- "$env:ROMANCEIO_ZIP"
+        calibre-debug -e common/test_release_zip_imports.py -- "$env:ROMANCEIO_FIELDS_ZIP"
+        calibre-debug -e common/test_installed_plugins.py
+
+    - name: Required local Chrome launch on Calibre 5.44
+      timeout-minutes: 5
+      shell: pwsh
+      run: calibre-debug -e common/run_installed_browser_smoke.py -- romanceio_fields
+
+  calibre-5-compatibility:
+    name: Installed ZIP - Calibre 5.0 compatibility
+    needs: test
+    if: needs.test.outputs.substantive_changes == 'true'
+    runs-on: ubuntu-24.04
+
+    steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+    - name: Download the exact release ZIPs
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: release-zips
+        path: dist
+
+    - name: Locate downloaded release ZIPs
+      shell: pwsh
+      run: |
+        $romanceio = Get-ChildItem -Path dist -Recurse -Filter 'Romance.io.zip' | Select-Object -First 1
+        $fields = Get-ChildItem -Path dist -Recurse -Filter 'Romance.io Fields.zip' | Select-Object -First 1
+        if (-not $romanceio -or -not $fields) {
+          throw 'Both release ZIPs must be present in the downloaded artifact.'
+        }
+        "ROMANCEIO_ZIP=$($romanceio.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "ROMANCEIO_FIELDS_ZIP=$($fields.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "CALIBRE_CONFIG_DIRECTORY=$env:RUNNER_TEMP/calibre-5-config" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        "CALIBRE_5_DIRECTORY=$env:RUNNER_TEMP/calibre-5.0.0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+    - name: Install Calibre 5.0.0 from the official archive
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0 libxcb-shape0 xz-utils
+        mkdir -p "$CALIBRE_5_DIRECTORY"
+        curl -fsSL \
+          https://download.calibre-ebook.com/5.0.0/calibre-5.0.0-x86_64.txz \
+          -o "$RUNNER_TEMP/calibre-5.0.0.txz"
+        python3 common/verify_sha512.py "$RUNNER_TEMP/calibre-5.0.0.txz" "$CALIBRE_5_LINUX_SHA512"
+        tar -xJf "$RUNNER_TEMP/calibre-5.0.0.txz" -C "$CALIBRE_5_DIRECTORY"
+        "$CALIBRE_5_DIRECTORY/calibre-debug" --version
+
+    - name: Install exact release ZIPs on minimum supported Calibre
+      run: |
+        "$CALIBRE_5_DIRECTORY/calibre-customize" -a "$ROMANCEIO_ZIP"
+        "$CALIBRE_5_DIRECTORY/calibre-customize" -a "$ROMANCEIO_FIELDS_ZIP"
+        "$CALIBRE_5_DIRECTORY/calibre-customize" -l
+
+    - name: Verify plugin and browser imports on minimum supported Calibre
+      env:
+        QT_QPA_PLATFORM: offscreen
+      run: |
+        "$CALIBRE_5_DIRECTORY/calibre-debug" -e common/test_release_zip_imports.py -- "$ROMANCEIO_ZIP"
+        "$CALIBRE_5_DIRECTORY/calibre-debug" -e common/test_release_zip_imports.py -- "$ROMANCEIO_FIELDS_ZIP"
+        "$CALIBRE_5_DIRECTORY/calibre-debug" -e common/test_installed_plugins.py
+
+    - name: Required local Chrome launch on minimum supported Calibre
+      timeout-minutes: 5
+      run: xvfb-run -a "$CALIBRE_5_DIRECTORY/calibre-debug" -e common/run_installed_browser_smoke.py -- romanceio_fields

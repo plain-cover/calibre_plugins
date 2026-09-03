@@ -15,7 +15,6 @@ import time
 from typing import Dict, List, Optional, Set, Tuple
 from urllib.request import Request, urlopen
 
-
 WORKSPACE_DIR = Path(__file__).resolve().parent.parent
 BOOK_SOURCE_URL = "https://www.romance.io/books/65b604fa00d361e53f20ecfb/funny-story-emily-henry"
 TOPICS_SOURCE_URL = "https://www.romance.io/topics/best/all/1"

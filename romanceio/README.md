@@ -18,10 +18,10 @@ The stored `romanceio` identifier is the key that the companion [Romance.io Fiel
 
 **Preferences > Metadata download > Romance.io > Configure selected source**
 
-- **Get tags directly from website (slower but includes additional community tags)** - When checked, the plugin tries to open each book's page in a browser first to fetch the full set of community-voted tags that only appear after the page's JavaScript has run. If the browser is unavailable or fails, the plugin automatically falls back to the JSON API and then a lightweight HTTP fetch, so you still get metadata even without Chrome. Leave unchecked (default) for faster downloads - the JSON API and lightweight HTTP fetch cover the core tag set and work without a browser.
+- **Get tags directly from website (slower but includes additional community tags)** - When checked, the plugin tries Chrome first to fetch the full set of community-voted tags that only appear after JavaScript runs. If that attempt fails, it continues with lightweight HTTP and then the legacy JSON details endpoint; Chrome is not retried. Leave unchecked (default) to use lightweight HTTP first, then Chrome, then legacy JSON.
 
   > **Why do my tags look different from what I see on romance.io?**
-  > Romance.io displays two layers of tags: a core set (tropes, genres, etc.) stored in their database and returned by the API, and additional community-voted tags injected into the page by JavaScript after it loads. The default fast fetch (JSON API / lightweight HTTP) retrieves only the core set. To get the community tags too, enable this option - but be aware it requires Chrome and is slower since a browser window will have to open for each book.
+  > Romance.io displays two layers of tags: a core set (tropes, genres, etc.) available in the server-rendered page, and additional community-voted tags injected after JavaScript runs. The default lightweight HTTP fetch retrieves the core set. To get the community tags too, enable this option - but be aware it requires Chrome and is slower since a browser window will have to open for each book.
 
 - **Romance.io tag to Calibre tag mappings** - Controls how Romance.io tags are imported into Calibre's Tags field. Use the green "+" and red "-" buttons to add or remove mappings. Create one row for each Romance.io tag you want to map to one or more Calibre tags. The text you enter for the Romance.io tag must match how the tag looks on the website exactly. Any Romance.io tags that are not mapped will be ignored.
 
@@ -44,7 +44,7 @@ The stored `romanceio` identifier is the key that the companion [Romance.io Fiel
 cd romanceio && ./build.sh
 ```
 
-`build.sh` runs `setup_deps.sh` (vendors dependencies via pip into the plugin folder), then `build.py` (copies `common/` files with rewritten imports, creates `Romance.io.zip`).
+`build.sh` verifies a content fingerprint for every SHA-256-locked dependency manifest and `setup_deps.sh`, rebuilds the runtime-specific vendor trees with pip's `--require-hashes` mode when needed, then runs `build.py` to copy shared files and create `Romance.io.zip`.
 
 ## Testing
 
@@ -88,13 +88,11 @@ calibre-debug test_search_parity.py -- --live=all               # JSON search vs
 ![Calibre "Edit metadata" menu emphasizing the "Ids" field where users can manually enter the Romance.io ID](../images/Edit%20metadata%20-%20set%20ID.png)
 
 **Chrome is not installed ("Chrome is not installed - HTML metadata fallback is unavailable"):**
-- The plugin tries the JSON API first, then a lightweight HTTP fetch, and only uses Chrome as a final fallback
+- The plugin uses JSON search first. For book details it tries lightweight HTTP, then Chrome, with the legacy JSON details route last
 - Without Chrome, most books still download fine via the JSON API or lightweight HTTP fetch
 - Install Chrome from [google.com/chrome](https://www.google.com/chrome/) if you see this warning or downloads are failing
-- **Linux with Chrome installed as a flatpak:** the plugin can find Chrome automatically, but if Calibre is also a flatpak you need to run this once in a terminal and restart Calibre:
-  ```
-  flatpak override --user --filesystem=/var/lib/flatpak:ro com.calibre_ebook.calibre
-  ```
+- **Calibre installed as a Flatpak:** JSON search and lightweight webpage downloads still work. A Chrome/Chromium app installed as a separate Flatpak depends on its own `/app` runtime and cannot be used as Selenium's browser executable. The plugin ignores app launchers that cannot execute directly and continues with non-browser fallbacks. Use a native Chrome binary visible to Calibre if you need the browser fallback.
+- **Linux ARM64:** Chrome for Testing does not publish a compatible Linux ARM ChromeDriver. The plugin skips browser setup and continues with JSON/lightweight metadata, but browser-only community tags are unavailable.
 
 **Browser/chromedriver errors:**
 - Ensure Chrome is installed ([google.com/chrome](https://www.google.com/chrome/))

@@ -34,8 +34,8 @@ from calibre.constants import numeric_version as calibre_version
 PLUGIN_NAME = "Romance.io"
 PLUGIN_DESCRIPTION = "Downloads metadata from Romance.io"
 PLUGIN_AUTHOR = "plain-cover"
-PLUGIN_VERSION = (1, 3, 0)
-PLUGIN_MINIMUM_CALIBRE_VERSION = (2, 0, 0)
+PLUGIN_VERSION = (1, 4, 0)
+PLUGIN_MINIMUM_CALIBRE_VERSION = (5, 0, 0)
 
 
 class RomanceIO(Source):  # pylint: disable=abstract-method
@@ -43,8 +43,8 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
     name = "Romance.io"  # Must match PLUGIN_NAME
     description = "Downloads metadata from Romance.io"  # Must match PLUGIN_DESCRIPTION
     author = "plain-cover"  # Must match PLUGIN_AUTHOR
-    version = (1, 3, 0)  # Must match PLUGIN_VERSION
-    minimum_calibre_version = (2, 0, 0)  # Must match PLUGIN_MINIMUM_CALIBRE_VERSION
+    version = (1, 4, 0)  # Must match PLUGIN_VERSION
+    minimum_calibre_version = (5, 0, 0)  # Must match PLUGIN_MINIMUM_CALIBRE_VERSION
 
     capabilities = frozenset(["identify", "cover"])
     touched_fields = frozenset(
@@ -93,7 +93,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
 
         return ConfigWidget(self)
 
-    def get_book_url(self, identifiers):
+    def get_book_url(self, identifiers):  # type: ignore[override]
         """Return a user-friendly URL for the book on Romance.io."""
         romanceio_id = identifiers.get(self.ID_NAME, None)
         if romanceio_id:
@@ -104,7 +104,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
             )
         return None
 
-    def id_from_url(self, url):
+    def id_from_url(self, url):  # type: ignore[override]
         """Parse a URL and return a tuple of the form:
         (identifier_type, identifier_value).
         If the URL does not match the pattern for the metadata source,
@@ -363,9 +363,12 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
 
 if __name__ == "__main__":
     # To run these tests use:
-    # calibre-debug -e __init__.py
+    #   Deterministic metadata smoke: calibre-debug -e __init__.py
+    #   Live functional suite:        calibre-debug -e __init__.py -- --live
     import sys
     import os
+
+    run_live_tests = "--live" in sys.argv[1:]
 
     # Add parent directory to path to import shared test utilities
     parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -451,6 +454,10 @@ if __name__ == "__main__":
     assert "cover" in plugin.capabilities, "Expected 'cover' capability"
     print()
 
+    if not run_live_tests:
+        print("Deterministic plugin initialization passed. Use --live to run network tests.")
+        sys.exit(0)
+
     # ===== Functional tests =====
     print("=" * 80)
     print("Running functional tests...")
@@ -523,11 +530,13 @@ if __name__ == "__main__":
 
         test_cases.append((query, expected))
 
+    test_results: List[bool] = []
+    negative_test_results: List[bool] = []
+
     if test_cases:
         print_banner("=", f"Running {len(test_cases)} positive tests")
 
         MAX_RETRIES = 3
-        test_results: List[bool] = []
         RETRY_COUNT = 0
 
         for i, (query, expected) in enumerate(test_cases):
@@ -564,7 +573,6 @@ if __name__ == "__main__":
         print_banner("=", f"Running {len(negative_test_cases)} negative test(s) (expecting no results)")
 
         MAX_RETRIES = 3
-        negative_test_results: List[bool] = []  # type: ignore[misc]
         NEGATIVE_RETRY_COUNT = 0
 
         for i, (query, book) in enumerate(negative_test_cases):

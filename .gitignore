@@ -40,6 +40,8 @@ common_romanceio_static_test_data/
 
 # Vendored dependencies for romanceio and romanceio_fields plugins
 romanceio*/*.dist-info/
+romanceio*/.dependencies-installed
+romanceio*/browser_vendor/
 romanceio*/bin/
 romanceio*/sbase/
 romanceio*/certifi/
@@ -48,9 +50,12 @@ romanceio*/colorama/
 romanceio*/cssselect/
 romanceio*/fake_useragent/
 romanceio*/fasteners/
+romanceio*/filelock/
 romanceio*/idna/
 romanceio*/lxml/
+romanceio*/mcp_servers/
 romanceio*/mycdp/
+romanceio*/psutil/
 romanceio*/requests/
 romanceio*/sbvirtualdisplay/
 romanceio*/selenium/

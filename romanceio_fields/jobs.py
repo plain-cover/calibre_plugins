@@ -324,31 +324,12 @@ def get_romanceio_fields_for_book(
 
     try:
         with quick_metadata:
-            # Use orchestrator to try JSON first, then HTML fallback with retries
+            # Prefer lightweight SSR details, with Chrome and the legacy JSON
+            # book-details endpoint retained as later fallbacks.
             from calibre_plugins.romanceio_fields.common_romanceio_search_orchestrator import (  # type: ignore[import-not-found]  # pylint: disable=import-error
                 fetch_details_with_fallback,
                 _is_book_not_found,
             )
-
-            # Create fetch functions without field-specific logic
-            if prefer_html:
-                # Try Chrome first for the full JS-rendered tag set.
-                # On technical failure (Chrome unavailable, driver crash, etc.) fall back
-                # to the normal JSON -> SSR orchestrator so the user still gets metadata.
-                # On a genuine 404 (book not found), stop immediately.
-                log(f"prefer_html=True: fetching Chrome HTML directly for {romanceio_id}")
-                try:
-                    chrome_result = _fetch_html(romanceio_id, log)
-                    if _is_book_not_found(chrome_result):
-                        log(f"Romance.io ID {romanceio_id} was not found on the website (404)")
-                        return _result({})
-                    from calibre_plugins.romanceio_fields.parse_html import parse_fields_from_html  # type: ignore[import-not-found]  # pylint: disable=import-error
-
-                    return _result(
-                        _build_fields(parse_fields_from_html(chrome_result, max_tags), fields_to_run, max_tags)
-                    )
-                except Exception as e:  # pylint: disable=broad-except
-                    log(f"Chrome fetch failed ({type(e).__name__}: {e}), falling back to JSON/SSR")
 
             result = fetch_details_with_fallback(
                 romanceio_id=romanceio_id,
@@ -360,6 +341,7 @@ def get_romanceio_fields_for_book(
                 log_func=log,
                 max_retries=3,
                 retry_delay=2.0,
+                prefer_chrome=prefer_html,
                 # abort= intentionally omitted: this runs in a Calibre child process
                 # with no shared threading.Event. Calibre handles cancellation at the
                 # process level by terminating the child process.
@@ -409,8 +391,11 @@ def _fetch_json(
         Exception on technical failure (network, parsing, etc.)
     """
     from calibre_plugins.romanceio_fields.common_romanceio_json_api import get_book_details_json  # type: ignore[import-not-found]  # pylint: disable=import-error
+    from calibre_plugins.romanceio_fields.common_romanceio_validation import is_usable_book_detail_json  # type: ignore[import-not-found]  # pylint: disable=import-error
 
     book_json = get_book_details_json(romanceio_id, log_func=log_func, timeout=_JSON_REQUEST_TIMEOUT_SECS)
+    if book_json is not None and not is_usable_book_detail_json(book_json, romanceio_id):
+        raise ValueError(f"JSON API returned an unusable detail payload for {romanceio_id}")
     return book_json
 
 
@@ -442,6 +427,7 @@ def _fetch_html_lightweight(
         fetch_book_page_http,
         parse_html_from_selenium,
     )
+    from calibre_plugins.romanceio_fields.common_romanceio_validation import is_usable_book_detail_html  # type: ignore[import-not-found]  # pylint: disable=import-error
     from calibre_plugins.romanceio_fields.parse_html import parse_fields_from_ssr_html  # type: ignore[import-not-found]  # pylint: disable=import-error
 
     raw_html, is_valid = fetch_book_page_http(romanceio_id, log_func=log_func, timeout=_JSON_REQUEST_TIMEOUT_SECS)
@@ -458,6 +444,9 @@ def _fetch_html_lightweight(
         if "search results for" in page_title:
             log_func(f"Lightweight HTTP fetch: got search results page for {romanceio_id}")
             return _BookNotFound()
+
+    if not is_usable_book_detail_html(root):
+        raise ValueError(f"Lightweight HTTP returned an unusable detail page for {romanceio_id}")
 
     parsed = parse_fields_from_ssr_html(root, max_tags=max_tags)
     return _SsrParsedFields(fields=parsed)
@@ -491,6 +480,7 @@ def _fetch_html(
         return _BookNotFound()
 
     from calibre_plugins.romanceio_fields.common_romanceio_fetch_helper import parse_html_from_selenium  # type: ignore[import-not-found]  # pylint: disable=import-error
+    from calibre_plugins.romanceio_fields.common_romanceio_validation import is_usable_book_detail_html  # type: ignore[import-not-found]  # pylint: disable=import-error
 
     root = parse_html_from_selenium(raw_html)
 
@@ -507,6 +497,9 @@ def _fetch_html(
 
         msg = tostring(errmsg[0], method="text", encoding="unicode").strip()
         raise RuntimeError(f"Page contains error: {msg}")
+
+    if not is_usable_book_detail_html(root):
+        raise ValueError(f"Chrome returned an unusable detail page for {romanceio_id}")
 
     return root
 
