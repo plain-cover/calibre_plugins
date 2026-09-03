@@ -2,17 +2,26 @@
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Use python3 if available (Linux/macOS), otherwise try python, then fall back to venv
-if command -v python3 &> /dev/null; then
+# A Windows Store app-execution alias can appear in PATH as python3 even though
+# Git Bash cannot execute it. Probe candidates before selecting one.
+python_is_usable() {
+    command -v "$1" &> /dev/null && "$1" -c 'import sys' &> /dev/null
+}
+
+# Honor an explicitly configured interpreter, then try system commands and the
+# repository virtual environment.
+if [ -n "${PYTHON:-}" ] && python_is_usable "$PYTHON"; then
+    :
+elif python_is_usable python3; then
     PYTHON=python3
-elif command -v python &> /dev/null; then
+elif python_is_usable python; then
     PYTHON=python
-elif [ -f "$SCRIPT_DIR/../.romanceio/Scripts/python.exe" ]; then
+elif python_is_usable "$SCRIPT_DIR/../.romanceio/Scripts/python.exe"; then
     PYTHON="$SCRIPT_DIR/../.romanceio/Scripts/python.exe"
-elif [ -f "$SCRIPT_DIR/../.romanceio/bin/python" ]; then
+elif python_is_usable "$SCRIPT_DIR/../.romanceio/bin/python"; then
     PYTHON="$SCRIPT_DIR/../.romanceio/bin/python"
 else
-    echo "Error: Python not found"
+    echo "Error: No usable Python interpreter was found"
     exit 1
 fi
 

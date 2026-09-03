@@ -12,12 +12,24 @@ echo "Installing dependencies for romanceio plugin..."
 # supported Calibre releases. The plugin picks one branch before importing
 # Selenium; this avoids forcing Python 3.8 and current Python to share mutually
 # incompatible SeleniumBase/Selenium versions.
-if command -v python3 &> /dev/null; then
+# A Windows Store app-execution alias can appear in PATH as python3 even though
+# Git Bash cannot execute it. Probe candidates before selecting one.
+python_is_usable() {
+    command -v "$1" &> /dev/null && "$1" -c 'import sys' &> /dev/null
+}
+
+if [ -n "${PYTHON:-}" ] && python_is_usable "$PYTHON"; then
+    :
+elif python_is_usable python3; then
     PYTHON=python3
-elif command -v python &> /dev/null; then
+elif python_is_usable python; then
     PYTHON=python
+elif python_is_usable "$SCRIPT_DIR/../.romanceio/Scripts/python.exe"; then
+    PYTHON="$SCRIPT_DIR/../.romanceio/Scripts/python.exe"
+elif python_is_usable "$SCRIPT_DIR/../.romanceio/bin/python"; then
+    PYTHON="$SCRIPT_DIR/../.romanceio/bin/python"
 else
-    echo "ERROR: Python is required to install plugin dependencies"
+    echo "ERROR: A usable Python interpreter is required to install plugin dependencies"
     exit 1
 fi
 

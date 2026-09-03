@@ -12,6 +12,9 @@ MANIFESTS = (
     "requirements-py39.txt",
     "requirements-current.txt",
 )
+PYTHON_SELECTING_SCRIPTS = tuple(
+    ROOT / plugin / script for plugin in ("romanceio", "romanceio_fields") for script in ("build.sh", "setup_deps.sh")
+)
 
 
 def _manifest(plugin, name):
@@ -40,6 +43,18 @@ def test_every_dependency_is_hash_locked():
             requirements = [line for line in manifest.splitlines() if line and not line.startswith(("#", " ", "--"))]
             assert requirements, (plugin, name)
             assert manifest.count("--hash=sha256:") == len(requirements), (plugin, name)
+
+
+def test_shell_scripts_probe_python_before_selecting_it():
+    """Do not select an unusable Windows Store alias merely because it exists."""
+    for script_path in PYTHON_SELECTING_SCRIPTS:
+        script = script_path.read_text(encoding="utf-8")
+        assert 'command -v "$1"' in script, script_path
+        assert "\"$1\" -c 'import sys'" in script, script_path
+        assert "elif python_is_usable python3" in script, script_path
+        assert "elif python_is_usable python" in script, script_path
+        assert '.romanceio/Scripts/python.exe"' in script, script_path
+        assert '.romanceio/bin/python"' in script, script_path
 
 
 def test_release_folder_packaging_excludes_nested_command_debris(tmp_path):

@@ -6,8 +6,8 @@ import tempfile
 import zipfile
 
 PLUGINS = (
-    ("Romance.io", "romanceio", (1, 3, 1), (5, 0, 0), ("parse_html", "parse_json")),
-    ("Romance.io Fields", "romanceio_fields", (1, 3, 1), (5, 0, 0), ("parse_html", "parse_json")),
+    ("Romance.io", "romanceio", (1, 4, 0), (5, 0, 0), ("parse_html", "parse_json")),
+    ("Romance.io Fields", "romanceio_fields", (1, 4, 0), (5, 0, 0), ("parse_html", "parse_json")),
 )
 
 

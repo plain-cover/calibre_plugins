@@ -60,9 +60,43 @@ def _seed_production_driver(source):
     return destination
 
 
+def _prepare_driver(driver_source):
+    """Seed the runner driver or exercise the plugin's managed download path."""
+    if driver_source == "managed":
+        print("No ChromeDriver seeded; exercising the plugin's managed driver download")
+        return None
+
+    source_driver = _find_runner_chromedriver()
+    seeded_driver = _seed_production_driver(source_driver)
+    print(f"Seeded matching runner ChromeDriver: {source_driver} -> {seeded_driver}")
+    return seeded_driver
+
+
+def _verify_flatpak_chrome(helper):
+    """Require the installed plugin to see a directly runnable Flatpak Chrome."""
+    if not os.environ.get("FLATPAK_ID"):
+        raise AssertionError("--require-flatpak-chrome must run inside a Flatpak sandbox")
+    chrome_path = helper._find_flatpak_chrome()  # pylint: disable=protected-access
+    if not chrome_path:
+        raise AssertionError("Installed plugin could not find a directly runnable Flatpak Chrome binary")
+    print(f"Detected directly runnable Flatpak Chrome: {chrome_path}")
+    return chrome_path
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plugin", choices=sorted(PLUGINS))
+    parser.add_argument(
+        "--driver-source",
+        choices=("runner", "managed"),
+        default="runner",
+        help="seed GitHub's matching ChromeDriver, or let the plugin download and verify one",
+    )
+    parser.add_argument(
+        "--require-flatpak-chrome",
+        action="store_true",
+        help="fail unless the installed plugin detects a directly runnable Chrome from Flatpak storage",
+    )
     args = parser.parse_args()
 
     from calibre.customize.ui import find_plugin
@@ -75,11 +109,11 @@ def main():
     smoke_parent = os.environ.get("RUNNER_TEMP") or os.environ.get("CALIBRE_CONFIG_DIRECTORY") or tempfile.gettempdir()
     os.environ["CALIBRE_SELENIUM_HOME"] = os.path.join(smoke_parent, "browser-smoke", args.plugin)
 
-    source_driver = _find_runner_chromedriver()
-    seeded_driver = _seed_production_driver(source_driver)
-    print(f"Seeded matching runner ChromeDriver: {source_driver} -> {seeded_driver}")
-
     helper = importlib.import_module(f"calibre_plugins.{args.plugin}.common_romanceio_fetch_helper")
+    if args.require_flatpak_chrome:
+        _verify_flatpak_chrome(helper)
+    _prepare_driver(args.driver_source)
+
     marker = "calibre-installed-plugin-browser-smoke-pass"
     html = f"<html><body><h1>{marker}</h1><p>{'local fixture ' * 20}</p></body></html>"
     _LocalPageHandler.body = html.encode("utf-8")

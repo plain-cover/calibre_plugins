@@ -651,12 +651,18 @@ jobs:
       timeout-minutes: 15
       run: |
         sudo apt-get update
-        sudo apt-get install -y flatpak
+        sudo apt-get install -y flatpak xvfb
         flatpak remote-add --user --if-not-exists flathub https://flathub.org/repo/flathub.flatpakrepo
         flatpak install --user --noninteractive flathub com.calibre_ebook.calibre
         flatpak info --user com.calibre_ebook.calibre
         flatpak run --filesystem="$GITHUB_WORKSPACE":ro --env=QT_QPA_PLATFORM=offscreen \
           --command=calibre-debug com.calibre_ebook.calibre --version
+
+    - name: Install the current Google Chrome Flatpak
+      timeout-minutes: 15
+      run: |
+        flatpak install --user --noninteractive flathub com.google.Chrome
+        flatpak info --user com.google.Chrome
 
     - name: Install both release ZIPs inside the Flatpak sandbox
       run: |
@@ -677,6 +683,22 @@ jobs:
         flatpak run --filesystem="$GITHUB_WORKSPACE":ro --env=QT_QPA_PLATFORM=offscreen \
           --command=calibre-debug com.calibre_ebook.calibre \
           -e "$GITHUB_WORKSPACE/common/test_installed_plugins.py"
+
+    - name: Required Chrome launch inside the Calibre Flatpak
+      timeout-minutes: 10
+      run: |
+        for plugin in romanceio romanceio_fields; do
+          xvfb-run -a flatpak run \
+            --filesystem="$GITHUB_WORKSPACE":ro \
+            --filesystem="$HOME/.local/share/flatpak/app/com.google.Chrome:ro" \
+            --share=network \
+            --socket=x11 \
+            --env=QT_QPA_PLATFORM=offscreen \
+            --env=RUNNER_TEMP=/tmp \
+            --command=calibre-debug com.calibre_ebook.calibre \
+            -e "$GITHUB_WORKSPACE/common/run_installed_browser_smoke.py" -- \
+            "$plugin" --driver-source managed --require-flatpak-chrome
+        done
 
   linux-arm64-compatibility:
     name: Installed ZIP - Ubuntu 24.04 ARM64

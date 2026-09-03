@@ -5,6 +5,7 @@ from typing import List
 
 import pytest
 
+from common import run_installed_browser_smoke
 from common.common_romanceio_fetch_helper import (
     _browser_binary_is_runnable,
     _build_chrome_args,
@@ -158,3 +159,45 @@ def test_ci_window_argument_does_not_change_flatpak_sandboxing():
     assert "--no-sandbox" in args
     assert "--start-maximized" in args
     assert not any(arg.startswith("--window-position=") for arg in args)
+
+
+def test_browser_smoke_managed_driver_does_not_require_runner_driver(monkeypatch):
+    monkeypatch.setattr(
+        run_installed_browser_smoke,
+        "_find_runner_chromedriver",
+        lambda: (_ for _ in ()).throw(AssertionError("runner driver must not be inspected")),
+    )
+
+    assert run_installed_browser_smoke._prepare_driver("managed") is None
+
+
+def test_browser_smoke_runner_driver_is_seeded(monkeypatch):
+    monkeypatch.setattr(run_installed_browser_smoke, "_find_runner_chromedriver", lambda: "/runner/chromedriver")
+    monkeypatch.setattr(
+        run_installed_browser_smoke,
+        "_seed_production_driver",
+        lambda source: f"/seeded/{source.rsplit('/', 1)[-1]}",
+    )
+
+    assert run_installed_browser_smoke._prepare_driver("runner") == "/seeded/chromedriver"
+
+
+def test_browser_smoke_requires_detectable_flatpak_chrome(monkeypatch):
+    class Helper:
+        @staticmethod
+        def _find_flatpak_chrome():
+            return "/flatpak/com.google.Chrome/google-chrome"
+
+    monkeypatch.setenv("FLATPAK_ID", "com.calibre_ebook.calibre")
+    assert run_installed_browser_smoke._verify_flatpak_chrome(Helper) == "/flatpak/com.google.Chrome/google-chrome"
+
+
+def test_browser_smoke_rejects_missing_flatpak_chrome(monkeypatch):
+    class Helper:
+        @staticmethod
+        def _find_flatpak_chrome():
+            return None
+
+    monkeypatch.setenv("FLATPAK_ID", "com.calibre_ebook.calibre")
+    with pytest.raises(AssertionError, match="directly runnable Flatpak Chrome"):
+        run_installed_browser_smoke._verify_flatpak_chrome(Helper)
