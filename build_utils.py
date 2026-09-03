@@ -123,6 +123,15 @@ def create_zip_file(filename, mode, files, exclude=None):
         if os.path.isdir(file):
             add_folder_to_zip(my_zip_file, file, exclude=exclude)
 
+    # Python 3.8/3.9's importlib.resources loses the sys.path prefix when a
+    # package is loaded from a nested directory inside a ZIP. Certifi is stored
+    # under browser_vendor/shared, but those runtimes consequently look for its
+    # data file at the archive root. Keep this data-only compatibility alias;
+    # omitting __init__.py ensures imports still use the versioned package.
+    certifi_bundle = os.path.join("browser_vendor", "shared", "certifi", "cacert.pem")
+    if os.path.isfile(certifi_bundle) and "certifi/cacert.pem" not in my_zip_file.namelist():
+        my_zip_file.write(certifi_bundle, "certifi/cacert.pem")
+
     # Python 3.8's zipimport does not reliably discover implicit namespace
     # packages inside plugin ZIPs. Some otherwise-compatible dependencies (for
     # example Selenium's webdriver/common/fedcm directory) intentionally omit

@@ -622,6 +622,8 @@ def test_nested_zip_distribution_metadata_is_discoverable(tmp_path):
     try:
         finder = configure_browser_vendor_metadata(zip_path, [package_root])
         assert finder is not None
+        finder_result = finder.find_distributions(metadata.DistributionFinder.Context(name="example-dist"))
+        assert iter(finder_result) is finder_result
         distribution = metadata.distribution("example-dist")
         assert distribution.version == "1.2.3"
         assert "browser_vendor/current" in str(distribution.locate_file("")).replace("\\", "/")

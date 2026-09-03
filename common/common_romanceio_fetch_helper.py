@@ -465,12 +465,16 @@ class BrowserVendorDistributionFinder(importlib.abc.MetaPathFinder):
             context = importlib_metadata.DistributionFinder.Context()
         requested = _normalized_distribution_name(context.name) if context.name else None
         if requested is None:
-            return list(self.distributions)
-        return [
-            distribution
-            for distribution in self.distributions
-            if _normalized_distribution_name(distribution.metadata["Name"]) == requested
-        ]
+            matches = self.distributions
+        else:
+            matches = [
+                distribution
+                for distribution in self.distributions
+                if _normalized_distribution_name(distribution.metadata["Name"]) == requested
+            ]
+        # Python 3.8's importlib.metadata calls next() directly on resolver
+        # results, while newer versions accept any iterable.
+        return iter(matches)
 
 
 def configure_browser_vendor_metadata(

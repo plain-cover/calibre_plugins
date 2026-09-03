@@ -27,6 +27,9 @@ FORBIDDEN_PATH_COMPONENTS = frozenset(
 )
 REQUIRED_ENTRIES = (
     "__init__.py",
+    # Python 3.8/3.9 importlib.resources resolves this nested certifi resource
+    # from the ZIP root. This data-only alias keeps Calibre 5 TLS imports usable.
+    "certifi/cacert.pem",
     "browser_vendor/shared/seleniumbase/__init__.py",
     "browser_vendor/current/seleniumbase/__init__.py",
     "browser_vendor/py38/selenium/__init__.py",

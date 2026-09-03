@@ -3,7 +3,7 @@
 import zipfile
 from pathlib import Path
 
-from build_utils import add_folder_to_zip
+from build_utils import add_folder_to_zip, create_zip_file
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFESTS = (
@@ -77,3 +77,17 @@ def test_release_folder_packaging_excludes_nested_command_debris(tmp_path):
     assert any(name.endswith("runtime_package/__init__.py") for name in names)
     assert not any("/bin/" in name or "/mcp_servers/" in name or "/sbase/" in name for name in names)
     assert not any(name.endswith("sockshandler.py") for name in names)
+
+
+def test_release_zip_adds_legacy_certifi_resource_alias(tmp_path, monkeypatch):
+    """Keep certifi usable through nested zipimport on Python 3.8 and 3.9."""
+    monkeypatch.chdir(tmp_path)
+    certificate = tmp_path / "browser_vendor" / "shared" / "certifi" / "cacert.pem"
+    certificate.parent.mkdir(parents=True)
+    certificate.write_bytes(b"test certificate bundle")
+
+    create_zip_file("plugin.zip", "w", ["browser_vendor"])
+
+    with zipfile.ZipFile("plugin.zip") as plugin_zip:
+        assert plugin_zip.read("certifi/cacert.pem") == certificate.read_bytes()
+        assert "certifi/__init__.py" not in plugin_zip.namelist()
