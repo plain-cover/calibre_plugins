@@ -49,6 +49,7 @@ from common.common_romanceio_fetch_helper import (
     prepare_cached_chromedriver,
     prepare_uc_driver,
     record_driver_integrity,
+    resolve_browser_vendor_source,
     restore_browser_vendor_modules,
     snapshot_browser_vendor_modules,
     validate_driver_download_url,
@@ -122,6 +123,15 @@ def _make_vendored_zip(directory: str, package_root: str = "") -> str:
     return zip_path
 
 
+def _make_browser_plugin_zip(directory: str, plugin_name: str) -> str:
+    """Return a minimal release-layout ZIP accepted by source discovery."""
+    zip_path = os.path.join(directory, f"{plugin_name}.zip")
+    with zipfile.ZipFile(zip_path, "w") as plugin_zip:
+        plugin_zip.writestr(f"plugin-import-name-{plugin_name}.txt", "")
+        plugin_zip.writestr("browser_vendor/shared/seleniumbase/__init__.py", "")
+    return zip_path
+
+
 @pytest.fixture()
 def vendored_zip(tmp_path):
     """Yield a zip path with a minimal vendored package; restore sys.modules and sys.path after."""
@@ -160,6 +170,50 @@ class _FailingRedirectVPF(VendoredPackageFinder):
 # ---------------------------------------------------------------------------
 # Group 1: VPF routing
 # ---------------------------------------------------------------------------
+
+
+def test_browser_vendor_source_uses_calibre_5_loader_mapping_before_placeholder_cwd(tmp_path, monkeypatch):
+    """Calibre 5's placeholder __file__ must resolve through PluginLoader.loaded_plugins."""
+    plugin_name = "romanceio_fields"
+    installed_zip = _make_browser_plugin_zip(str(tmp_path), plugin_name)
+
+    # Make the launch directory look like a valid checkout. Selecting it would
+    # hide this regression locally while still failing in Calibre's child worker.
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / f"plugin-import-name-{plugin_name}.txt").write_text("", encoding="ascii")
+    seleniumbase_dir = checkout / "browser_vendor" / "shared" / "seleniumbase"
+    seleniumbase_dir.mkdir(parents=True)
+    (seleniumbase_dir / "__init__.py").write_text("", encoding="ascii")
+    monkeypatch.chdir(checkout)
+
+    legacy_loader = types.SimpleNamespace(loaded_plugins={plugin_name: (installed_zip, {})})
+    source = resolve_browser_vendor_source(
+        plugin_name,
+        module_file="<calibre Plugin Loader>",
+        module_loader=legacy_loader,
+        search_path=[],
+        meta_path=[],
+    )
+
+    assert source == installed_zip
+
+
+def test_browser_vendor_source_finds_new_calibre_virtual_zip_path(tmp_path):
+    """Newer Calibre's ZIP/module.py __file__ form remains supported."""
+    plugin_name = "romanceio_fields"
+    installed_zip = _make_browser_plugin_zip(str(tmp_path), plugin_name)
+    virtual_module = installed_zip + "/common_romanceio_fetch_helper.py"
+
+    source = resolve_browser_vendor_source(
+        plugin_name,
+        module_file=virtual_module,
+        module_loader=types.SimpleNamespace(),
+        search_path=[],
+        meta_path=[],
+    )
+
+    assert source == installed_zip
 
 
 def test_vpf_intercepts_vendored_top_level_package():

@@ -20,11 +20,13 @@ def main():
     # scope lets the normal-Python deterministic suite collect this helper.
     from calibre.customize.ui import find_plugin
 
+    installed_plugin_paths = {}
     for display_name, import_name, expected_version, expected_minimum, plugin_modules in PLUGINS:
         plugin = find_plugin(display_name)
         assert plugin is not None, f"{display_name} is not installed"
 
         plugin_path = os.path.abspath(plugin.plugin_path)
+        installed_plugin_paths[import_name] = plugin_path
         assert zipfile.is_zipfile(plugin_path), f"Installed plugin is not a ZIP: {plugin_path}"
         assert tuple(plugin.version) == expected_version, (display_name, plugin.version)
         assert tuple(plugin.minimum_calibre_version) == expected_minimum, (
@@ -51,6 +53,12 @@ def main():
             assert imported_path.startswith(
                 plugin_path
             ), f"{display_name}.{child_module} did not load from the installed ZIP: {imported_path}"
+            if child_module == "common_romanceio_fetch_helper":
+                resolve_browser_vendor_source = getattr(imported, "resolve_browser_vendor_source")
+                browser_source = os.path.abspath(resolve_browser_vendor_source(import_name))
+                assert os.path.normcase(browser_source) == os.path.normcase(
+                    plugin_path
+                ), f"{display_name} browser dependencies resolved outside its installed ZIP: {browser_source}"
 
         print(f"PASS: {display_name} v{'.'.join(map(str, expected_version))}: {plugin_path}")
 
@@ -62,6 +70,16 @@ def main():
     from calibre.utils.ipc.simple_worker import fork_job
 
     helper = importlib.import_module("calibre_plugins.romanceio_fields.common_romanceio_fetch_helper")
+    worker_source = fork_job(
+        "calibre_plugins.romanceio_fields.common_romanceio_fetch_helper",
+        "resolve_browser_vendor_source",
+        args=("romanceio_fields",),
+        no_output=True,
+    )["result"]
+    assert os.path.normcase(os.path.abspath(worker_source)) == os.path.normcase(
+        installed_plugin_paths["romanceio_fields"]
+    ), f"Nested Calibre worker resolved browser dependencies outside the installed ZIP: {worker_source}"
+    print("PASS: nested Calibre worker resolved browser dependencies from the installed ZIP")
     unavailable_reason = helper.browser_automation_unavailable_reason()
 
     previous_selenium_home = os.environ.get("CALIBRE_SELENIUM_HOME")

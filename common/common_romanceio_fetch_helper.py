@@ -394,6 +394,134 @@ def browser_vendor_branch(version_info: Optional[Sequence[int]] = None) -> str:
     return "current"
 
 
+def _browser_vendor_source_is_valid(path: str, plugin_name: str) -> bool:
+    """Return whether *path* is this plugin's directory or installed ZIP."""
+    marker = f"plugin-import-name-{plugin_name}.txt"
+    seleniumbase_init = "browser_vendor/shared/seleniumbase/__init__.py"
+    try:
+        if os.path.isdir(path):
+            return os.path.isfile(os.path.join(path, marker)) and os.path.isfile(
+                os.path.join(path, *seleniumbase_init.split("/"))
+            )
+        if os.path.isfile(path) and zipfile.is_zipfile(path):
+            with zipfile.ZipFile(path) as plugin_zip:
+                names = set(plugin_zip.namelist())
+            return marker in names and seleniumbase_init in names
+    except (OSError, zipfile.BadZipFile):
+        return False
+    return False
+
+
+def _filesystem_source_candidates(path: Any) -> List[str]:
+    """Return real directory/ZIP candidates represented by a possibly virtual path."""
+    try:
+        candidate = os.path.abspath(os.fsdecode(os.fspath(path)))
+    except (TypeError, ValueError):
+        return []
+
+    candidates = []
+    # Calibre 5 reports ``<calibre Plugin Loader>`` as __file__, while newer
+    # Calibre versions can report a virtual ``Plugin.zip/module.py`` path. Walk
+    # upward so both real directories and the archive portion are considered.
+    while candidate:
+        candidates.append(candidate)
+        parent = os.path.dirname(candidate.rstrip("/\\"))
+        if not parent or parent == candidate:
+            break
+        candidate = parent
+    return candidates
+
+
+def _loader_source_candidates(loader: Any, plugin_name: str) -> List[Any]:
+    """Read plugin paths exposed by current and legacy Calibre loaders."""
+    if loader is None:
+        return []
+
+    candidates = []
+    for attribute in ("zip_file_path", "plugin_path", "archive_path"):
+        try:
+            value = getattr(loader, attribute, None)
+        except Exception:  # pylint: disable=broad-except
+            continue
+        if value:
+            candidates.append(value)
+
+    # Calibre 5's shared PluginLoader sets module.__file__ to a placeholder,
+    # but retains ``plugin_name: (zip_path, module_names)`` in this mapping.
+    try:
+        loaded_plugins = getattr(loader, "loaded_plugins", None)
+    except Exception:  # pylint: disable=broad-except
+        loaded_plugins = None
+    if loaded_plugins is not None:
+        try:
+            entry = loaded_plugins.get(plugin_name)
+        except (AttributeError, TypeError):
+            entry = None
+        if isinstance(entry, (tuple, list)) and entry:
+            candidates.append(entry[0])
+        elif isinstance(entry, dict):
+            for key in ("zip_file_path", "plugin_path", "archive_path", "path"):
+                if entry.get(key):
+                    candidates.append(entry[key])
+    return candidates
+
+
+def resolve_browser_vendor_source(
+    plugin_name: str,
+    module_file: Optional[str] = None,
+    module_loader: Any = None,
+    search_path: Optional[Sequence[str]] = None,
+    meta_path: Optional[Sequence[Any]] = None,
+) -> str:
+    """Locate the plugin directory or ZIP that owns the browser dependencies.
+
+    Calibre 5 uses ``<calibre Plugin Loader>`` for plugin module ``__file__``
+    values. Its loader mapping is therefore authoritative and must be checked
+    before the current working directory implied by that placeholder.
+    """
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", plugin_name):
+        raise ValueError(f"Invalid plugin import name: {plugin_name!r}")
+
+    if module_file is None:
+        module_file = __file__
+    if module_loader is None:
+        module_loader = globals().get("__loader__")
+    if search_path is None:
+        search_path = sys.path
+    if meta_path is None:
+        meta_path = sys.meta_path
+
+    raw_candidates = []
+    raw_candidates.extend(_loader_source_candidates(module_loader, plugin_name))
+    module_spec = globals().get("__spec__")
+    raw_candidates.extend(_loader_source_candidates(getattr(module_spec, "loader", None), plugin_name))
+    zipplugin_module = sys.modules.get("calibre.customize.zipplugin")
+    raw_candidates.extend(_loader_source_candidates(getattr(zipplugin_module, "loader", None), plugin_name))
+    for finder in meta_path:
+        raw_candidates.extend(_loader_source_candidates(finder, plugin_name))
+
+    # Loader-owned paths come first. This prevents a Calibre 5 placeholder
+    # __file__ from accidentally selecting a checkout in the launch directory.
+    raw_candidates.append(module_file)
+    raw_candidates.extend(search_path)
+    module_parent = os.path.dirname(os.path.dirname(os.path.abspath(module_file)))
+    raw_candidates.append(os.path.join(module_parent, plugin_name))
+
+    seen = set()
+    for raw_candidate in raw_candidates:
+        for candidate in _filesystem_source_candidates(raw_candidate):
+            normalized = os.path.normcase(candidate)
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            if _browser_vendor_source_is_valid(candidate, plugin_name):
+                return candidate
+
+    # Preserve the prior error path so callers receive the existing actionable
+    # SeleniumBaseImportError if an installation is incomplete or corrupted.
+    return os.path.dirname(os.path.abspath(module_file))
+
+
 def configure_browser_vendor_path(
     plugin_dir: str,
     version_info: Optional[Sequence[int]] = None,
@@ -964,7 +1092,7 @@ def _fetch_page_in_process(
 
         # Add the plugin root and matching browser dependency branch to sys.path
         # before module clearing and before VendoredPackageFinder is set up.
-        _plugin_dir_early = os.path.dirname(os.path.abspath(__file__))
+        _plugin_dir_early = resolve_browser_vendor_source(plugin_name)
         if _plugin_dir_early not in sys.path:
             sys.path.insert(0, _plugin_dir_early)
         _vendor_paths = configure_browser_vendor_path(_plugin_dir_early)
@@ -996,13 +1124,11 @@ def _fetch_page_in_process(
         # can be imported directly via zipimport. This is required in calibre GUI
         # mode where the plugin is loaded from a zip that isn't on sys.path.
         #
-        # Browser packages sit below browser_vendor/ inside the plugin ZIP. Using
-        # __file__ of the current module is always correct because it doesn't
-        # depend on how calibre's child IPC process sets plugin module attributes
-        # (__file__ / __path__ on calibre_plugins.X point to the zip root in child
-        # processes, not the plugin subdir inside it, causing ImportError).
+        # Browser packages sit below browser_vendor/ inside the plugin ZIP. The
+        # resolved source supports both newer Calibre virtual paths and Calibre
+        # 5's ``<calibre Plugin Loader>`` __file__ placeholder.
         # NOTE: also inserted early (before module clearing) as _plugin_dir_early above.
-        plugin_dir = os.path.dirname(os.path.abspath(__file__))
+        plugin_dir = _plugin_dir_early
         _log("Vendored browser dependencies configured")
         # Guard evaluates to False here (path already inserted as _plugin_dir_early above),
         # but kept for safety in case __file__ resolves differently at this point.
@@ -1330,7 +1456,7 @@ def _fetch_page_in_process(
             _plugin_entries = [p for p in sys.path if "calibre" in p.lower() or p.endswith(".zip")]
             _log(f"sys.path has {len(_plugin_entries)} Calibre/ZIP entries")
             # Verify the zip contains the seleniumbase files we need.
-            _zip_path = os.path.dirname(os.path.abspath(__file__))
+            _zip_path = _plugin_dir_early
             if os.path.isfile(_zip_path) and _zf.is_zipfile(_zip_path):
                 with _zf.ZipFile(_zip_path) as _zf_obj:
                     _sb_files = [
