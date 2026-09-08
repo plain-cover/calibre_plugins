@@ -6,18 +6,12 @@ Use this to fetch raw JSON data, then parse it in plugin-specific modules.
 
 import json
 from typing import Optional, Dict, Any, List, Callable
+from urllib.parse import quote
+from urllib.request import Request
+from urllib.error import HTTPError
 
-try:
-    from urllib.parse import quote
-except ImportError:
-    from urllib import quote  # type: ignore[attr-defined,no-redef]
-
-try:
-    from urllib.request import Request, urlopen
-    from urllib.error import HTTPError
-except ImportError:
-    from urllib2 import Request, urlopen  # type: ignore[import-not-found,no-redef]
-    from urllib2 import HTTPError  # type: ignore[import-not-found,no-redef]
+from .common_romanceio_transport import HttpRateLimitError, open_request
+from .common_romanceio_session import clearance_headers, discard_clearance
 
 
 class JsonApiEndpointError(RuntimeError):
@@ -37,7 +31,7 @@ class JsonApiBookNotFoundError(JsonApiEndpointError):
     """
 
 
-class JsonApiRateLimitError(RuntimeError):
+class JsonApiRateLimitError(HttpRateLimitError):
     """Raised when the Romance.io JSON API returns HTTP 429 Too Many Requests.
 
     The endpoint is alive but is rate-limiting this client. The caller should
@@ -49,9 +43,9 @@ class JsonApiAccessDeniedError(RuntimeError):
     """Raised when the Romance.io JSON API returns HTTP 403 Forbidden.
 
     This typically means Cloudflare is blocking plain HTTP requests to the JSON API.
-    The block is site-wide (not per-endpoint), so ALL JSON endpoints should be
-    marked dead for this session and the caller should fall back to Chrome/HTML
-    immediately without retrying.
+    Search can recover through a supplied browser callback. The orchestrator
+    skips identical retries without disabling unrelated endpoints or preventing
+    later HTTP requests from using newly obtained clearance.
     """
 
 
@@ -89,10 +83,14 @@ def _make_json_request(url: str, timeout: int = 30, log_func: Optional[Callable]
         "Accept-Language": "en-US,en;q=0.9",
     }
 
+    cached_headers = clearance_headers(url)
+    headers.update(cached_headers)
+    if cached_headers and log_func:
+        log_func("Using cached Cloudflare clearance for direct JSON HTTP request")
     try:
         req = Request(url, headers=headers)
-        response = urlopen(req, timeout=timeout)
-        data = response.read()
+        with open_request(req, timeout) as response:
+            data = response.read()
 
         if log_func:
             log_func(f"JSON API response received: {len(data)} bytes")
@@ -106,13 +104,16 @@ def _make_json_request(url: str, timeout: int = 30, log_func: Optional[Callable]
                 log_func(msg)
             raise JsonApiEndpointError(msg, url=url) from e
         if e.code == 403:
+            discard_clearance(cached_headers.get("Cookie", ""))
             if log_func:
                 log_func(f"JSON API request failed: HTTPError 403: {e}")
-            raise JsonApiAccessDeniedError(f"HTTP Error 403: Forbidden") from e
+            raise JsonApiAccessDeniedError("HTTP Error 403: Forbidden") from e
         if e.code == 429:
             if log_func:
                 log_func(f"JSON API request failed: HTTPError 429: {e}")
-            raise JsonApiRateLimitError(f"HTTP Error 429: {e}") from e
+            raise JsonApiRateLimitError(
+                f"HTTP Error 429: {e}", retry_after=e.headers.get("Retry-After") if e.headers is not None else None
+            ) from e
         error_msg = f"JSON API request failed: HTTPError {e.code}: {e}"
         if log_func:
             log_func(error_msg)
@@ -125,16 +126,22 @@ def _make_json_request(url: str, timeout: int = 30, log_func: Optional[Callable]
 
 
 def search_books_json(
-    title: str, authors: Optional[List[str]] = None, timeout: int = 30, log_func: Optional[Callable] = None
+    title: str,
+    authors: Optional[List[str]] = None,
+    timeout: int = 30,
+    log_func: Optional[Callable] = None,
+    browser_fetch_func: Optional[Callable] = None,
 ) -> List[Dict[str, Any]]:
     """
-    Search for books using the JSON API.
+    Search for books using JSON, optionally retrying a plain-HTTP 403 through a browser.
 
     Args:
         title: Book title to search for
         authors: List of author names (optional, but recommended for better results)
         timeout: Request timeout in seconds
         log_func: Optional logging function
+        browser_fetch_func: Optional callable accepting the JSON URL and returning
+            rendered page HTML from the supervised browser. Used only after a 403.
 
     Returns:
         List of book dicts from JSON response (empty list if no results)
@@ -153,26 +160,66 @@ def search_books_json(
 
     url = f"https://www.romance.io/json/search_books?search={search_string}"
 
-    result = _make_json_request(url, timeout, log_func)
-
-    # Check for API success flag
-    if result and result.get("success") is False:
-        error_msg = "JSON API search returned success=false"
+    try:
+        return _parse_search_response(_make_json_request(url, timeout, log_func), log_func)
+    except JsonApiAccessDeniedError:
+        if browser_fetch_func is None:
+            raise
         if log_func:
-            log_func(error_msg)
-        raise RuntimeError(error_msg)
+            log_func("Direct JSON search unavailable; trying JSON/HTML in Qt, then Chrome if needed.")
 
-    if result and result.get("success") is True and "books" in result:
-        books = result["books"]
-        if log_func:
-            log_func(f"JSON API search successful: found {len(books)} books")
-        return books
+    from .common_romanceio_fetch_helper import BrowserFetchError, parse_html_from_selenium
 
-    # Missing books key or unexpected response format
-    error_msg = "JSON API search returned unexpected format (missing books key)"
     if log_func:
-        log_func(error_msg)
-    raise RuntimeError(error_msg)
+        log_func(f"Browser JSON search request: {url}")
+    assert browser_fetch_func is not None
+    page = browser_fetch_func(url)
+    try:
+        if not page:
+            raise ValueError("Browser returned no page")
+        # The web engine renders application/json in a <pre>; parse its text rather than
+        # the HTML serialization so entities and Unicode are decoded correctly.
+        root = parse_html_from_selenium(page)
+        blocks = root.xpath("//pre")
+        if len(blocks) != 1:
+            # A browser can recover via HTML in the same session after its JSON
+            # route fails. Preserve the existing matching logic and result shape.
+            from .common_romanceio_search import _parse_search_results_with_details
+
+            if not root.xpath('//ul[@id="book-results"]//li[@class="has-background"]'):
+                raise ValueError("Browser search returned incomplete results")
+            match = _parse_search_results_with_details(root, title, authors, log_func or print)
+            if not match:
+                return []
+            book_id, book_title, book_authors = match
+            return [
+                {
+                    "_id": book_id,
+                    "info": {"title": book_title},
+                    "authors": [{"name": author} for author in book_authors],
+                }
+            ]
+        response = json.loads(blocks[0].text_content())
+        return _parse_search_response(response, log_func)
+    except (ValueError, TypeError, RuntimeError) as error:
+        if isinstance(error, BrowserFetchError):
+            raise
+        # Do not repeat an unsuccessful browser request three times. The normal
+        # orchestrator can still try the separate HTML search fallback.
+        raise BrowserFetchError(f"Browser JSON search failed: {error}") from error
+
+
+def _parse_search_response(result: Any, log_func: Optional[Callable]) -> List[Dict[str, Any]]:
+    """Apply the same response contract to HTTP and browser JSON transports."""
+    if isinstance(result, dict) and result.get("success") is False:
+        raise RuntimeError("JSON API search returned success=false")
+    if isinstance(result, dict) and result.get("success") is True:
+        books = result.get("books")
+        if isinstance(books, list) and all(isinstance(book, dict) for book in books):
+            if log_func:
+                log_func(f"JSON API search successful: found {len(books)} books")
+            return books
+    raise RuntimeError("JSON API search returned unexpected format (missing or invalid books list)")
 
 
 def get_book_details_json(

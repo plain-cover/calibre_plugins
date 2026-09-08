@@ -10,10 +10,9 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from calibre.customize.ui import quick_metadata
 from calibre.ebooks import DRMError
-from calibre.utils.ipc.server import Server
-from calibre.utils.ipc.job import ParallelJob
 
 from . import config as cfg
+from .common_romanceio_transport import job_session  # pylint: disable=import-error
 
 
 @dataclass
@@ -29,6 +28,7 @@ INTERNAL_CUSTOM_FIELDS_TO_UPDATE = "__custom_fields_to_update__"
 INTERNAL_TAG_FIELDS_TO_UPDATE = "__tag_fields_to_update__"
 
 
+@job_session
 def prepare_books_for_download(
     book_ids: List[int],
     fields_to_cols_map: Dict[str, str],
@@ -71,7 +71,15 @@ def prepare_books_for_download(
         from calibre_plugins.romanceio_fields.common_romanceio_json_api import search_books_json  # type: ignore[import-not-found]  # pylint: disable=import-error
         from calibre_plugins.romanceio_fields.common_romanceio_search import find_best_json_match  # type: ignore[import-not-found]  # pylint: disable=import-error
 
-        books = search_books_json(title, authors, _JSON_REQUEST_TIMEOUT_SECS, log_func)
+        from calibre_plugins.romanceio_fields.fetch_helper import fetch_page  # type: ignore[import-not-found]  # pylint: disable=import-error
+
+        books = search_books_json(
+            title,
+            authors,
+            _JSON_REQUEST_TIMEOUT_SECS,
+            log_func,
+            browser_fetch_func=lambda url: fetch_page(url, log_func=log_func),
+        )
         if books and len(books) > 0:
             return find_best_json_match(books, title, authors, log_func)
         return None
@@ -121,12 +129,13 @@ def prepare_books_for_download(
                 if authors:
                     authors = [x.replace("|", ",") for x in authors.split(",")]
 
-                search_logs: List[str] = []
                 romanceio_id = search_with_fallback(
-                    title, authors, json_search, html_search, log_func=search_logs.append
+                    title,
+                    authors,
+                    json_search,
+                    html_search,
+                    log_func=lambda msg: print(f"[{title}] {msg}", flush=True),
                 )
-                for msg in search_logs:
-                    print(f"[{title}] {msg}")
 
                 if romanceio_id:
                     # Don't save here - return it to be saved in main thread
@@ -202,24 +211,7 @@ def call_plugin_callback(plugin_callback: Dict[str, Any], parent: Any, plugin_re
         callback_func(*args, **kwargs)
 
 
-class CustomMasterParallelJob(ParallelJob):
-    """Parallel job with tracking for book processing and field results."""
-
-    # Attributes inherited from ParallelJob
-    name: str
-    description: str
-    done: Optional[Dict[int, Dict[str, Any]]]
-
-    def __init__(self, book_id: int, *args: Any, **kwargs: Any) -> None:
-        super().__init__(*args, **kwargs)
-        # Additional attributes specific to this usage
-        self.book_id: int = book_id
-        self.fields_to_run: List[str] = []
-        self.custom_fields_to_update: List[str] = []
-        self.tag_fields_to_update: List[str] = []
-        self.result: Optional[Dict[str, Any]] = None
-
-
+@job_session
 def do_metadata_download(
     books_to_scan_raw: List[Tuple],
     max_tags: int,
@@ -227,90 +219,48 @@ def do_metadata_download(
     prefer_html: bool = False,
     notification: Callable[[float, str], float] = (lambda x, y: x),
 ) -> Dict[int, Dict[str, Any]]:
+    """Download sequentially in Calibre's existing job process.
+
+    Browser rendering runs in a supervised worker. A second pool of book workers adds no
+    concurrency and survives cancellation of this outer job, so do not create one.
+    The cpus argument remains for compatibility with Calibre's job invocation.
     """
-    Master job to launch child jobs to download metadata from Romance.io for this list of books.
-
-    Note: cpus parameter is kept for API compatibility but not used since we force pool_size=1
-    for SeleniumBase compatibility.
-    """
-    job: CustomMasterParallelJob
-    # Force pool_size=1 to run jobs sequentially because SeleniumBase undetected Chrome
-    # doesn't handle concurrent instances well
-    server = Server(pool_size=1)
-
-    books_to_scan = [BookToScan(*book) for book in books_to_scan_raw]
-
-    # Queue all the jobs
-    for book_to_scan in books_to_scan:
-        args = [
-            "calibre_plugins.romanceio_fields.jobs",
-            "get_romanceio_fields_for_book",
-            (
-                book_to_scan.romanceio_id,
-                book_to_scan.fields_to_run,
-                max_tags,
-                prefer_html,
-            ),
-        ]
-        job = CustomMasterParallelJob(
-            name="arbitrary",
-            description=str(book_to_scan.book_id),
-            done=None,
-            book_id=book_to_scan.book_id,
-            args=args,
-        )
-        job.fields_to_run = book_to_scan.fields_to_run
-        job.custom_fields_to_update = book_to_scan.custom_fields_to_update
-        job.tag_fields_to_update = book_to_scan.tag_fields_to_update
-        server.add_job(job)
-
-    # This server is an arbitrary_n job, so there is a notifier available.
-    # Set the % complete to a small number to avoid the 'unavailable' indicator
-    notification(0.01, "Downloading metadata from Romance.io")
-
-    # Dequeue the job results as they arrive, saving the results
-    total = len(books_to_scan)
-    count = 0
+    total = len(books_to_scan_raw)
     book_results_map: Dict[int, Dict[str, Any]] = {}
-    while True:
-        job = server.changed_jobs_queue.get()
-        # A job can 'change' when it is not finished, for example if it
-        # produces a notification. Ignore these.
-        job.update()
-        if not job.is_finished:
-            continue
-        # A job really finished. Get the information.
-        assert job.result is not None
-        results = job.result
-        book_id = job.book_id
-        # Print any log lines collected inside the child process so they appear
-        # in the calibre job log (child stdout is not captured directly).
-        for log_line in results.pop("__log__", []):
-            print(log_line)
-        # Empty results indicate a failed fetch. Do not attach update instructions,
-        # otherwise a failure could be mistaken for a successful empty rating.
+    notification(0.01 if total else 1.0, "Downloading metadata from Romance.io")
+    for count, raw_book in enumerate(books_to_scan_raw, 1):
+        book = BookToScan(*raw_book)
+        print(
+            f"[{count}/{total}] Downloading Romance.io fields for book {book.book_id} ({book.romanceio_id})", flush=True
+        )
+        if book.romanceio_id:
+            results = get_romanceio_fields_for_book(
+                book.romanceio_id, book.fields_to_run, max_tags, prefer_html, live_log=True
+            )
+        else:
+            print(f"Book {book.book_id} has no Romance.io identifier; skipping", flush=True)
+            results = {}
+        results.pop("__log__", None)
         if results:
-            results[INTERNAL_CUSTOM_FIELDS_TO_UPDATE] = job.custom_fields_to_update
-            results[INTERNAL_TAG_FIELDS_TO_UPDATE] = job.tag_fields_to_update
-        book_results_map[book_id] = results
-        count = count + 1
+            results[INTERNAL_CUSTOM_FIELDS_TO_UPDATE] = book.custom_fields_to_update
+            results[INTERNAL_TAG_FIELDS_TO_UPDATE] = book.tag_fields_to_update
+        book_results_map[book.book_id] = results
+        print(f"[{count}/{total}] {'Completed' if results else 'Failed'} book {book.book_id}", flush=True)
         notification(float(count) / total, "Downloading metadata from Romance.io")
-
-        if count >= total:
-            break
-
-    server.close()
     return book_results_map
 
 
 def get_romanceio_fields_for_book(
-    romanceio_id: str, fields_to_run: List[str], max_tags: int, prefer_html: bool = False
+    romanceio_id: str, fields_to_run: List[str], max_tags: int, prefer_html: bool = False, live_log: bool = False
 ) -> Dict[str, Any]:
     """Download and parse requested Romance.io fields for a single book."""
     logs: List[str] = []
 
     def log(msg: str) -> None:
-        logs.append(msg)
+        if live_log:
+            print(msg, flush=True)
+        else:
+            logs.append(msg)
 
     def _result(fields: Dict[str, Any]) -> Dict[str, Any]:
         """Attach collected log lines to a result dict and return it."""
@@ -324,8 +274,8 @@ def get_romanceio_fields_for_book(
 
     try:
         with quick_metadata:
-            # Prefer lightweight SSR details, with Chrome and the legacy JSON
-            # book-details endpoint retained as later fallbacks.
+            # The website-tags setting selects HTTP-first or Chrome-first details.
+            # The legacy JSON book-details endpoint remains the final fallback.
             from calibre_plugins.romanceio_fields.common_romanceio_search_orchestrator import (  # type: ignore[import-not-found]  # pylint: disable=import-error
                 fetch_details_with_fallback,
                 _is_book_not_found,
@@ -337,14 +287,14 @@ def get_romanceio_fields_for_book(
                 lightweight_html_fetch_func=lambda book_id, log_func: _fetch_html_lightweight(
                     book_id, log_func, max_tags=max_tags
                 ),
-                html_fetch_func=_fetch_html,
+                html_fetch_func=lambda book_id, log_func: _fetch_html(
+                    book_id, log_func, backend="embedded" if prefer_html else None
+                ),
+                chrome_fetch_func=lambda book_id, log_func: _fetch_html(book_id, log_func, backend="chrome"),
                 log_func=log,
                 max_retries=3,
                 retry_delay=2.0,
                 prefer_chrome=prefer_html,
-                # abort= intentionally omitted: this runs in a Calibre child process
-                # with no shared threading.Event. Calibre handles cancellation at the
-                # process level by terminating the child process.
             )
 
             if result is None:
@@ -404,18 +354,16 @@ def _fetch_html_lightweight(
     log_func: Callable,
     max_tags: int,
 ) -> Optional[Any]:
-    """Fetch and parse book fields using a lightweight HTTP GET (no Chrome).
+    """Fetch and parse book fields using a lightweight HTTP GET (no browser).
 
-    Romance.io renders pages server-side. Ratings come from the book-stats
-    element (same as Chrome). The legacy combined tags come from the meta
-    description attribute, which contains the same slug set as the JSON API
-    'tropes' field. Categorized tag copies come from the page's embedded
-    rendered and embedded tag groups without changing that legacy combined output.
+    Ratings and full topic lists are already present in server-rendered pages.
+    Use the same parser as browser HTML, with description tags as a fallback
+    only when populated topic lists are absent.
 
     Args:
         romanceio_id: Romance.io book identifier.
         log_func: Callback for job-log messages.
-        max_tags: Maximum size of the legacy combined tag list.
+        max_tags: Maximum size of the combined tag list.
 
     Returns:
         _SsrParsedFields with pre-parsed fields, or _BookNotFound if the book was not found (404)
@@ -455,8 +403,9 @@ def _fetch_html_lightweight(
 def _fetch_html(
     romanceio_id: str,
     log_func: Callable,
+    backend: Optional[str] = None,
 ) -> Optional[Any]:
-    """Fetch and parse HTML page for book via Chrome browser automation.
+    """Fetch and parse HTML page for book via supervised browser rendering.
 
     Returns:
         lxml HtmlElement root if successful, _BookNotFound if book not found
@@ -469,11 +418,11 @@ def _fetch_html(
     )
 
     url = f"https://www.romance.io/books/{romanceio_id}"
-    raw_html, is_valid = fetch_romanceio_book_page(url, log=log_func)
+    raw_html, is_valid = fetch_romanceio_book_page(url, log=log_func, backend=backend)
 
     if not raw_html:
-        # Chrome failed to load the page (timeout, crash, or driver error) - technical failure
-        raise RuntimeError(f"Failed to fetch HTML page for {romanceio_id} (Chrome did not return page content)")
+        # Browser failed to load the page: a technical failure, not a missing book.
+        raise RuntimeError(f"Failed to fetch HTML page for {romanceio_id} (browser did not return page content)")
 
     if not is_valid:
         # Page loaded but shows 404 / "page not found" - invalid book ID
@@ -488,7 +437,7 @@ def _fetch_html(
     if title_node:
         page_title = (title_node[0].text or "").strip().lower()
         if "search results for" in page_title:
-            log_func(f"Chrome HTML fetch: got search results page instead of book page for {romanceio_id}")
+            log_func(f"Browser HTML fetch: got search results page instead of book page for {romanceio_id}")
             return _BookNotFound()
 
     errmsg = root.xpath('//*[@id="errorMessage"]')
@@ -499,7 +448,7 @@ def _fetch_html(
         raise RuntimeError(f"Page contains error: {msg}")
 
     if not is_usable_book_detail_html(root):
-        raise ValueError(f"Chrome returned an unusable detail page for {romanceio_id}")
+        raise ValueError(f"Browser returned an unusable detail page for {romanceio_id}")
 
     return root
 

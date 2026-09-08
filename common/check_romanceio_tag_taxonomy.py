@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
 """Check Romance.io's live tag taxonomy against the plugin's bundled data.
 
-The check uses plain HTTP only. It validates both slug-to-display-name mappings
+The check tries HTTP first, with optional installed-plugin browser recovery.
+It validates both slug-to-display-name mappings
 and the content-warning, geography, and format categories used by the JSON path.
 """
 
 import argparse
 import html
+import importlib
+from types import ModuleType
 import os
 from pathlib import Path
 import re
 import sys
-import time
 from typing import Dict, List, Optional, Set, Tuple
-from urllib.request import Request, urlopen
+from urllib.error import HTTPError
+from urllib.request import Request
 
 WORKSPACE_DIR = Path(__file__).resolve().parent.parent
 BOOK_SOURCE_URL = "https://www.romance.io/books/65b604fa00d361e53f20ecfb/funny-story-emily-henry"
@@ -76,29 +79,103 @@ def extract_topic_display_names(html_content: str) -> Dict[str, str]:
     return mappings
 
 
-def fetch_live_html(url: str, attempts: int = 3) -> str:
-    """Fetch a server-rendered Romance.io page using plain HTTP, with retries."""
-    request = Request(
-        url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-            ),
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9",
-        },
-    )
-    last_error = None
-    for attempt in range(1, attempts + 1):
-        try:
-            with urlopen(request, timeout=30) as response:
-                return response.read().decode("utf-8", errors="replace")
-        except Exception as error:  # pylint: disable=broad-except
-            last_error = error
-            if attempt < attempts:
-                time.sleep(attempt * 2)
-    raise RuntimeError(f"Could not fetch {url} after {attempts} attempts: {last_error}")
+def _access_modules(browser_fallback):
+    """Use one module namespace so HTTP, cooldowns and browser cookies agree."""
+    if str(WORKSPACE_DIR) not in sys.path:
+        sys.path.insert(0, str(WORKSPACE_DIR))
+    prefix = "calibre_plugins.romanceio_fields." if browser_fallback else "common."
+    try:
+        return {
+            name: importlib.import_module(prefix + "common_romanceio_" + name)
+            for name in ("transport", "session", "search_orchestrator", "fetch_helper", "webengine")
+        }
+    except ImportError as error:
+        raise RuntimeError(
+            "Browser recovery requires calibre-debug and the installed Romance.io Fields plugin"
+        ) from error
+
+
+def fetch_live_html(
+    url: str, attempts: int = 3, browser_fallback: bool = False, modules: Optional[Dict[str, ModuleType]] = None
+) -> str:
+    """Fetch taxonomy HTML with production pacing, cookies and optional browsers."""
+    modules = modules or _access_modules(browser_fallback)
+    transport = modules["transport"]
+    orchestrator = modules["search_orchestrator"]
+    helper = modules["fetch_helper"]
+    session = modules["session"]
+    marker = "special_tags" if "/books/" in url else "topic-link"
+
+    @transport.lookup_budget
+    def fetch(abort=None, log_func=print):
+        def http():
+            log_func(f"Taxonomy HTTP request: {url}")
+            headers = {
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            }
+            clearance = session.clearance_headers(url)
+            headers.update(clearance)
+            try:
+                with transport.open_request(Request(url, headers=headers), timeout=30) as response:
+                    content = response.read(5 * 1024 * 1024 + 1)
+                if len(content) > 5 * 1024 * 1024:
+                    raise ValueError("Taxonomy page exceeds the 5 MiB response limit")
+            except HTTPError as error:
+                if error.code == 403:
+                    if clearance:
+                        session.discard_clearance(clearance.get("Cookie", ""))
+                    raise helper.HttpAccessDeniedError(f"Taxonomy HTTP access denied (403): {url}") from error
+                if error.code == 429:
+                    raise transport.HttpRateLimitError(
+                        f"Taxonomy request rate limited (429): {url}",
+                        retry_after=error.headers.get("Retry-After") if error.headers is not None else None,
+                    ) from error
+                raise
+            page = content.decode("utf-8", errors="replace")
+            title = re.search(r"<title[^>]*>(.*?)</title>", page, re.I | re.S)
+            if not modules["webengine"].page_ready(
+                page, title.group(1) if title else "", {"url": url, "wait_for_element": marker}
+            ):
+                raise helper.HttpAccessDeniedError("HTTP returned a challenge or incomplete taxonomy page")
+            # Keep the retry logger from printing the entire HTML document.
+            return (page,)
+
+        result = orchestrator._retry_with_delay(
+            http, "Taxonomy HTTP", max_retries=attempts, retry_delay=2, log_func=log_func, abort=abort
+        )
+        if result.success and result.result:
+            return result.result[0]
+        if not browser_fallback:
+            raise RuntimeError(f"Could not fetch {url}; browser recovery was not enabled")
+        log_func("Taxonomy HTTP unavailable; trying Qt, then Chrome if needed")
+        return helper.fetch_page(
+            url,
+            plugin_name="romanceio_fields",
+            wait_for_element=marker,
+            max_wait=30,
+            log_func=log_func,
+            abort=abort,
+        )
+
+    return fetch()
+
+
+def fetch_live_pages(browser_fallback=False):
+    modules = _access_modules(browser_fallback)
+
+    @modules["transport"].job_session
+    def fetch():
+        return tuple(
+            fetch_live_html(url, browser_fallback=browser_fallback, modules=modules)
+            for url in (BOOK_SOURCE_URL, TOPICS_SOURCE_URL)
+        )
+
+    return fetch()
 
 
 def load_bundled_taxonomy() -> Tuple[Dict[str, str], Dict[str, str], Set[str], int]:
@@ -257,10 +334,17 @@ def compare_taxonomy(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--live", action="store_true", help="Check the live Romance.io taxonomy")
+    parser.add_argument(
+        "--browser-fallback",
+        action="store_true",
+        help="Use the installed Fields plugin for Qt/Chrome recovery (run with calibre-debug)",
+    )
     parser.add_argument("--book-html-file", type=Path, help="Use a saved Romance.io book page")
     parser.add_argument("--topics-html-file", type=Path, help="Use a saved Romance.io topics page")
     args = parser.parse_args()
 
+    if args.browser_fallback and not args.live:
+        parser.error("--browser-fallback requires --live")
     if args.live and (args.book_html_file or args.topics_html_file):
         parser.error("--live cannot be combined with saved HTML files")
     if bool(args.book_html_file) != bool(args.topics_html_file):
@@ -273,8 +357,7 @@ def main() -> int:
             book_html = args.book_html_file.read_text(encoding="utf-8")
             topics_html = args.topics_html_file.read_text(encoding="utf-8")
         else:
-            book_html = fetch_live_html(BOOK_SOURCE_URL)
-            topics_html = fetch_live_html(TOPICS_SOURCE_URL)
+            book_html, topics_html = fetch_live_pages(browser_fallback=args.browser_fallback)
 
         categories, special_display_names = extract_special_tag_taxonomy(book_html)
         topic_display_names = extract_topic_display_names(topics_html)
@@ -293,6 +376,10 @@ def main() -> int:
         print(f"Romance.io taxonomy check could not run: {error}", file=sys.stderr)
         if os.environ.get("GITHUB_ACTIONS"):
             print(f"::error title=Romance.io taxonomy check could not run::{error}")
+        summary = os.environ.get("GITHUB_STEP_SUMMARY")
+        if summary:
+            with open(summary, "a", encoding="utf-8") as output:
+                output.write(f"## Romance.io taxonomy check unavailable\n\nNo comparison was completed: {error}\n")
         return 2
 
 

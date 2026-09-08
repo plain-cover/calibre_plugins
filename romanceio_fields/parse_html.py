@@ -257,6 +257,10 @@ def parse_fields_from_html(
     """
     rendered_categories = _parse_rendered_tag_categories(root)
     combined_tags = _combine_rendered_tag_categories(rendered_categories)
+    if not combined_tags:
+        # Older/minimal pages may omit the topic lists. Use their description
+        # as a fallback, never as a replacement for the fuller page lists.
+        combined_tags = parse_tags_from_description(root)
     result = {**_parse_ratings(root), "tags": combined_tags[:max_tags]}
     rendered_categories_present = _has_rendered_tag_category_lists(root)
     embedded_categories = _parse_embedded_tag_categories(root)
@@ -295,9 +299,8 @@ def parse_tags_from_description(root: HtmlElement) -> List[str]:
     These slugs are identical to the JSON API 'tropes' field, so the returned
     display names exactly match what parse_fields_from_json() returns for tags.
 
-    This is the correct tag source for lightweight HTTP (SSR) responses: the
-    client-side JavaScript adds extra community-voted tags to the page, but
-    the description meta tag (server-side) always matches the JSON API.
+    This is a compatibility fallback for pages without populated topic lists.
+    HTTP responses can already contain the fuller lists used by browser parsing.
 
     Args:
         root: lxml HtmlElement root
@@ -309,49 +312,11 @@ def parse_tags_from_description(root: HtmlElement) -> List[str]:
 
 
 def parse_fields_from_ssr_html(root: HtmlElement, max_tags: int = 100) -> Dict[str, Any]:
-    """Parse all fields from a server-side rendered (SSR) HTML page.
+    """Parse HTTP HTML with the same full topic lists and ordering as browsers.
 
-    Romance.io renders book pages server-side. Ratings are in the book-stats
-    element (same as Chrome-rendered pages). Tags appear as slugs in the
-    meta description attribute - the same underlying source as the JSON API
-    'tropes' field - so this function produces results equivalent to the JSON API:
-
-    - steam_rating, star_rating, rating_count: identical to Chrome parsing
-    - tags: identical to JSON API tags (Chrome adds extra community-voted tags via JS)
-
-    Args:
-        root: lxml HtmlElement root parsed from a plain HTTP response
-        max_tags: Maximum number of tags to return
-
-    Returns:
-        Dict with the same generic keys as parse_fields_from_json:
-        - steam_rating: Steam/spice rating (1-5 int) or None
-        - star_rating: Star rating (0-5 float) or None
-        - rating_count: Number of ratings (int) or None
-        - tags: List of display name strings, preserving the existing JSON-equivalent output
-        - general_tags, content_warnings, geography_tags, format_tags:
-          Separate category lists copied from the server-rendered page sections
+    The description list is used only when populated topic lists are absent.
+    The user's maximum limits combined tags, not the separate category columns.
+    Keep this entry point for existing callers; transport does not choose which
+    tags are retained from an otherwise identical document.
     """
-    combined_tags = parse_tags_from_description(root)
-    result = {
-        **_parse_ratings(root),
-        "tags": combined_tags[:max_tags],
-    }
-    rendered_categories = _parse_rendered_tag_categories(root)
-    rendered_categories_present = _has_rendered_tag_category_lists(root)
-    embedded_categories = _parse_embedded_tag_categories(root)
-    raw_slugs = _parse_tag_slugs_from_description(root)
-    if rendered_categories_present or embedded_categories is not None:
-        # Category columns mirror the groups visible on the website, while the
-        # legacy combined column remains API-equivalent and maximum-limited.
-        result.update(
-            _supplement_categories_from_slugs(
-                _merge_tag_categories(rendered_categories, embedded_categories),
-                raw_slugs,
-            )
-        )
-    elif raw_slugs:
-        # Older/minimal pages may not expose category groups. Classify their
-        # API-equivalent description slugs as a compatibility fallback.
-        result.update(categorize_json_tags(raw_slugs))
-    return result
+    return parse_fields_from_html(root, max_tags=max_tags)

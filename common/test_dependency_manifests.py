@@ -3,7 +3,7 @@
 import zipfile
 from pathlib import Path
 
-from build_utils import add_folder_to_zip, create_zip_file
+from build_utils import add_folder_to_zip, create_zip_file, get_plugin_subfolders
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFESTS = (
@@ -91,3 +91,18 @@ def test_release_zip_adds_legacy_certifi_resource_alias(tmp_path, monkeypatch):
     with zipfile.ZipFile("plugin.zip") as plugin_zip:
         assert plugin_zip.read("certifi/cacert.pem") == certificate.read_bytes()
         assert "certifi/__init__.py" not in plugin_zip.namelist()
+
+
+def test_release_includes_optional_browser_dependencies(tmp_path, monkeypatch):
+    """The optional Chrome path needs its packaged dependencies and certifi alias."""
+    monkeypatch.chdir(tmp_path)
+    certificate = tmp_path / "browser_vendor" / "shared" / "certifi" / "cacert.pem"
+    certificate.parent.mkdir(parents=True)
+    certificate.write_bytes(b"stale dependency")
+    (tmp_path / "images").mkdir()
+    (tmp_path / "images" / "icon.png").write_bytes(b"fixture")
+    create_zip_file("plugin.zip", "w", get_plugin_subfolders())
+    with zipfile.ZipFile("plugin.zip") as plugin_zip:
+        assert "images/icon.png" in plugin_zip.namelist()
+        assert "browser_vendor/shared/certifi/cacert.pem" in plugin_zip.namelist()
+        assert "certifi/cacert.pem" in plugin_zip.namelist()

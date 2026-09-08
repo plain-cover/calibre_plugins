@@ -43,8 +43,10 @@ _MIN_JSON_INTERVAL = "_MIN_JSON_INTERVAL_SECS"
 
 
 @pytest.fixture(autouse=True)
-def clear_orchestrator_state():
+def clear_orchestrator_state(monkeypatch, tmp_path):
     """Reset all module-level state before and after every test."""
+    monkeypatch.setenv("CALIBRE_SELENIUM_HOME", str(tmp_path))
+    monkeypatch.setattr(_orchestrator_mod, "_retry_after_until", 0.0)
     getattr(_orchestrator_mod, _DEAD_SET).clear()
     setattr(_orchestrator_mod, _RATE_LIMIT_TIME, 0.0)
     setattr(_orchestrator_mod, _LAST_JSON_REQUEST_TIME, {})
@@ -468,7 +470,8 @@ def test_chrome_not_installed_does_not_retry():
 
     assert len(attempts) == 1, f"Expected 1 attempt, got {len(attempts)}"
     assert result == SearchResult(success=False, result=None)
-    assert any("chrome is not installed" in msg.lower() for msg in logs)
+    assert any("Chrome browser unavailable" in msg for msg in logs)
+    assert not any("google.com/chrome" in msg for msg in logs)
     assert not any("retry attempt" in msg.lower() for msg in logs)
 
 
@@ -880,16 +883,16 @@ def test_403_does_not_retry():
     assert result == SearchResult(success=False, result=None)
 
 
-def test_403_marks_all_endpoints_dead():
-    """A 403 must mark BOTH search and books endpoints dead for this session."""
+def test_403_does_not_mark_endpoints_dead():
+    """Access denial must not prevent later HTTP recovery or poison other endpoints."""
 
     def func():
         raise JsonApiAccessDeniedError("HTTP Error 403: Forbidden")
 
     _retry_with_delay(func, "JSON API search", max_retries=3, retry_delay=0, log_func=lambda _: None)
 
-    assert _is_endpoint_dead(JSON_SEARCH_URL_PREFIX), "Search endpoint must be marked dead after 403"
-    assert _is_endpoint_dead(JSON_BOOKS_URL_PREFIX), "Books endpoint must be marked dead after 403"
+    assert not _is_endpoint_dead(JSON_SEARCH_URL_PREFIX)
+    assert not _is_endpoint_dead(JSON_BOOKS_URL_PREFIX)
 
 
 def test_403_logs_cloudflare_message():
@@ -928,7 +931,7 @@ def test_403_search_with_fallback_falls_through_to_html():
 
 
 def test_403_in_final_detail_fallback_is_graceful():
-    """A 403 in the final JSON detail slot is graceful and marks JSON unavailable."""
+    """A final JSON 403 is graceful without disabling unrelated endpoints."""
     html_called = []
 
     def html_fetch(romanceio_id, _log_func):
@@ -947,12 +950,12 @@ def test_403_in_final_detail_fallback_is_graceful():
 
     assert result is None
     assert html_called == ["abc123"]
-    assert _is_endpoint_dead(JSON_SEARCH_URL_PREFIX)
-    assert _is_endpoint_dead(JSON_BOOKS_URL_PREFIX)
+    assert not _is_endpoint_dead(JSON_SEARCH_URL_PREFIX)
+    assert not _is_endpoint_dead(JSON_BOOKS_URL_PREFIX)
 
 
-def test_403_subsequent_books_skip_json():
-    """After a 403, both search and detail JSON calls must be skipped for all subsequent books."""
+def test_403_subsequent_books_can_recover_http():
+    """A later book can use HTTP again after a browser has refreshed clearance."""
     # Simulate: first book triggers 403 during search
     search_count = []
     fetch_count = []
@@ -976,12 +979,12 @@ def test_403_subsequent_books_skip_json():
     # First book - triggers 403, falls back to HTML
     search_with_fallback("Book 1", ["Author"], json_search, html_search, log_func, max_retries=1, retry_delay=0)
 
-    # After 403, both endpoints are dead, so entire JSON is skipped for subsequent books
+    # A later book must be allowed to retry HTTP with updated session state.
     search_with_fallback("Book 2", ["Author"], json_search, html_search, log_func, max_retries=1, retry_delay=0)
     fetch_details_with_fallback("abc456", json_fetch, html_fetch, log_func, max_retries=1, retry_delay=0)
 
-    assert search_count == [1], f"JSON search called {len(search_count)} times, expected exactly 1 (on first book)"
-    assert not fetch_count, "JSON fetch must not be called after 403 marked endpoints dead"
+    assert search_count == [1, 1]
+    assert not fetch_count, "Successful HTML details should still avoid legacy JSON"
 
 
 # ---------------------------------------------------------------------------
@@ -1053,3 +1056,160 @@ def test_throttle_returns_immediately_when_abort_already_set():
         assert not slept, f"Must not sleep when abort is already set, but slept for: {slept}"
     finally:
         _orchestrator_mod.time.sleep = original_sleep
+
+
+def test_browser_timeout_does_not_relaunch_chrome():
+    from common.common_romanceio_fetch_helper import BrowserFetchError
+
+    attempts = []
+
+    def browser():
+        attempts.append(1)
+        raise BrowserFetchError("Navigation exceeded its time limit")
+
+    result = _retry_with_delay(browser, "Chrome", 3, 0, lambda _msg: None)
+    assert not result.success
+    assert len(attempts) == 1
+
+
+def test_http_403_falls_back_without_repeating_blocked_request(monkeypatch):
+    from email.message import Message
+    from urllib.error import HTTPError
+    from common.common_romanceio_fetch_helper import fetch_book_page_http
+
+    attempts = []
+
+    def blocked(request, *_args, **_kwargs):
+        attempts.append(request.full_url)
+        raise HTTPError(request.full_url, 403, "Forbidden", Message(), None)
+
+    monkeypatch.setattr("common.common_romanceio_transport.open_request", blocked)
+    result = _retry_with_delay(lambda: fetch_book_page_http("book-id"), "HTTP", 3, 0, lambda _msg: None)
+    assert not result.success
+    assert len(attempts) == 1
+
+
+def test_json_search_does_not_start_browser_when_http_succeeds(monkeypatch):
+    from common import common_romanceio_json_api as api
+
+    monkeypatch.setattr(api, "_make_json_request", lambda *_args: {"success": True, "books": []})
+
+    def browser(_url):
+        pytest.fail("Successful HTTP must not start Chrome")
+
+    assert api.search_books_json("Title", browser_fetch_func=browser) == []
+
+
+def test_json_search_leaves_later_http_retry_decision_to_transport(monkeypatch):
+    from common import common_romanceio_json_api as api
+
+    calls = []
+
+    def request(*_args):
+        calls.append("http")
+        if len(calls) == 1:
+            raise JsonApiAccessDeniedError("403 Forbidden")
+        return {"success": True, "books": []}
+
+    def browser(_url):
+        calls.append("browser")
+        return '<pre>{"success":true,"books":[]}</pre>'
+
+    monkeypatch.setattr(api, "_make_json_request", request)
+    for _ in range(2):
+        assert api.search_books_json("Title", browser_fetch_func=browser) == []
+    assert calls == ["http", "browser", "http"]
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        "<html><title>Just a moment</title></html>",
+        "<pre>Not JSON</pre>",
+        '<pre>{"success":true,"books":"invalid"}</pre>',
+        '<pre>{"success":true,"books":[null]}</pre>',
+        '<pre>{"success":false}</pre>',
+    ],
+)
+def test_bad_browser_json_falls_back_to_html_without_browser_retries(monkeypatch, page):
+    from common import common_romanceio_json_api as api
+
+    browser_calls = []
+
+    def blocked(*_args):
+        raise JsonApiAccessDeniedError("403 Forbidden")
+
+    def browser(url):
+        browser_calls.append(url)
+        return page
+
+    monkeypatch.setattr(api, "_make_json_request", blocked)
+    result = search_with_fallback(
+        "Title",
+        [],
+        lambda title, authors, log: api.search_books_json(title, authors, log_func=log, browser_fetch_func=browser),
+        lambda *_args: "html-match",
+        log_func=lambda _msg: None,
+    )
+    assert result == "html-match"
+    assert len(browser_calls) == 1
+
+
+def test_valid_empty_browser_json_does_not_fall_back_to_html(monkeypatch):
+    from common import common_romanceio_json_api as api
+
+    def blocked(*_args):
+        raise JsonApiAccessDeniedError("403 Forbidden")
+
+    monkeypatch.setattr(api, "_make_json_request", blocked)
+
+    def json_search(title, authors, log):
+        books = api.search_books_json(
+            title, authors, log_func=log, browser_fetch_func=lambda _url: '<pre>{"success":true,"books":[]}</pre>'
+        )
+        assert books == []
+        return None
+
+    def html_search(*_args):
+        pytest.fail("A valid empty JSON response must not trigger HTML search")
+
+    assert search_with_fallback("Title", [], json_search, html_search, log_func=lambda _msg: None) is None
+
+
+def test_json_search_404_does_not_start_browser_json(monkeypatch):
+    from common import common_romanceio_json_api as api
+
+    def missing(*_args):
+        raise JsonApiEndpointError("404 Not Found")
+
+    def browser(_url):
+        pytest.fail("Retired endpoints must not trigger browser JSON requests")
+
+    monkeypatch.setattr(api, "_make_json_request", missing)
+    with pytest.raises(JsonApiEndpointError):
+        api.search_books_json("Title", browser_fetch_func=browser)
+
+
+def test_exhausted_search_is_not_a_confirmed_absence():
+    def fail(*_args):
+        raise _orchestrator_mod.BrowserFetchError("Cloudflare challenge timed out")
+
+    with pytest.raises(_orchestrator_mod.SearchFailedError, match="no-match status is unknown"):
+        search_with_fallback("Absent", [], fail, fail, max_retries=1, log_func=lambda _msg: None)
+
+
+def test_recursion_fails_once_with_traceback_and_next_lookup_is_clean():
+    calls: list[int] = []
+    logs: list[str] = []
+
+    def broken(*_args):
+        calls.append(1)
+        raise RecursionError("simulated recursive import")
+
+    with pytest.raises(RecursionError):
+        search_with_fallback("Title", [], broken, broken, log_func=logs.append)
+    assert calls == [1]
+    assert any("Traceback" in entry and "simulated recursive import" in entry for entry in logs)
+    _orchestrator_mod._last_json_request_time.clear()
+    assert search_with_fallback("Next", [], lambda *_args: None, broken, log_func=logs.append) is None
+    assert calls == [1]

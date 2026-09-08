@@ -75,13 +75,18 @@ if [ $? -ne 0 ]; then
 fi
 
 # Determine the zip file that just got created
-PLUGIN_ZIP=$(ls -t *.zip | head -n 1)
+PLUGIN_ZIP="Romance.io.zip"
 
 echo "Installing plugin \"$PLUGIN_ZIP\" into calibre..."
 if [ -n "$CALIBRE_DIRECTORY" ]; then
     "$CALIBRE_DIRECTORY/calibre-customize" -a "$PLUGIN_ZIP"
 else
     calibre-customize -a "$PLUGIN_ZIP"
+fi
+
+if [ $? -ne 0 ]; then
+    echo "Plugin installation failed" >&2
+    exit 1
 fi
 
 echo "Build completed successfully"

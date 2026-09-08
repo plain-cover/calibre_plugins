@@ -1,10 +1,11 @@
-"""Import the browser stack from a built ZIP inside Calibre's Python."""
+"""Audit shared runtime and browser dependency imports from a release ZIP."""
 
 import argparse
 import importlib
 from importlib import metadata
 import os
 import sys
+import types
 
 
 def _origin(module):
@@ -19,8 +20,36 @@ def main():
         help="Skip Calibre-provided native modules when running under a standalone compatibility interpreter",
     )
     parser.add_argument("zip_path")
+    parser.add_argument(
+        "--skip-qt", action="store_true", help="Audit the full Chrome stack in standalone Python without Qt"
+    )
     args = parser.parse_args()
     zip_path = os.path.abspath(args.zip_path)
+    # A package path permits the same relative imports as Calibre's loader,
+    # without requiring installation or executing the plugin's GUI entry point.
+    package_name = "_release_probe"
+    package = types.ModuleType(package_name)
+    package.__path__ = [zip_path]
+    sys.modules[package_name] = package
+    for name in (
+        "common_romanceio_fetch_helper",
+        "common_romanceio_session",
+        "common_romanceio_json_api",
+        "common_romanceio_webengine",
+        "common_romanceio_search_orchestrator",
+    ):
+        module = importlib.import_module(f"{package_name}.{name}")
+        assert module.__file__, name
+        origin = os.path.normcase(os.path.abspath(module.__file__))
+        assert origin.startswith(os.path.normcase(zip_path) + os.sep), origin
+    assert not any(name == "seleniumbase" or name.startswith("seleniumbase.") for name in sys.modules)
+    print("PASS: shared runtime imports without loading Selenium")
+    if not args.pure_python_only and not args.skip_qt:
+        try:
+            from qt.webengine import QWebEnginePage, QWebEngineProfile
+        except ImportError:
+            from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineProfile
+        assert QWebEnginePage and QWebEngineProfile
     sys.path.insert(0, zip_path)
 
     helper = importlib.import_module("common_romanceio_fetch_helper")

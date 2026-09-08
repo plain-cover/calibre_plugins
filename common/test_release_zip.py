@@ -26,6 +26,9 @@ FORBIDDEN_PATH_COMPONENTS = frozenset(
     }
 )
 REQUIRED_ENTRIES = (
+    "common_romanceio_webengine.py",
+    "common_romanceio_session.py",
+    "common_romanceio_transport.py",
     "__init__.py",
     # Python 3.8/3.9 importlib.resources resolves this nested certifi resource
     # from the ZIP root. This data-only alias keeps Calibre 5 TLS imports usable.
@@ -48,6 +51,7 @@ REQUIRED_METADATA_PREFIXES = (
     "browser_vendor/shared/trio_websocket-",
 )
 NON_RUNTIME_TOP_LEVEL_MODULES = {
+    "run_installed_browser_lifecycle.py",
     "build.py",
     "parse.py",
     "pdbp.py",

@@ -3,6 +3,8 @@
 import argparse
 import importlib
 import os
+import time
+from unittest.mock import patch
 
 from calibre.customize.ui import find_plugin
 
@@ -15,6 +17,7 @@ MODULE_NAMES = (
     "common_romanceio_json_api",
     "common_romanceio_search",
     "common_romanceio_search_orchestrator",
+    "common_romanceio_transport",
     "fetch_helper",
     "parse_html",
     "parse_json",
@@ -56,18 +59,21 @@ def _print_fields(fields):
     print(f"Tags: {len(fields.get('tags', []))}")
 
 
-def _search_json(modules, title, authors, log_func):
+def _search_json(modules, title, authors, log_func, browser_fallback=False):
     json_api = modules["common_romanceio_json_api"]
     books = json_api.search_books_json(
         title,
         authors,
         timeout=REQUEST_TIMEOUT_SECONDS,
         log_func=log_func,
+        browser_fetch_func=(
+            (lambda url: modules["fetch_helper"].fetch_page(url, log_func=log_func)) if browser_fallback else None
+        ),
     )
     return modules["common_romanceio_search"].find_best_json_match(books, title, authors, log_func)
 
 
-def _search_chrome(modules, title, authors, log_func):
+def _search_embedded(modules, title, authors, log_func):
     def fetch_with_log(url, **kwargs):
         return modules["fetch_helper"].fetch_page(url, log_func=log_func, **kwargs)
 
@@ -101,18 +107,107 @@ def _fetch_ssr_fields(modules, romanceio_id, log_func):
     return modules["parse_html"].parse_fields_from_ssr_html(root, max_tags=50)
 
 
-def _fetch_chrome_fields(modules, romanceio_id, log_func):
+def _fetch_embedded_fields(modules, romanceio_id, log_func):
     url = f"https://www.romance.io/books/{romanceio_id}"
     raw_html, is_valid = modules["fetch_helper"].fetch_romanceio_book_page(url, log=log_func)
     if not raw_html or not is_valid:
-        raise RuntimeError(f"Chrome book-page fetch was unavailable for {romanceio_id}")
+        raise RuntimeError(f"Browser book-page fetch was unavailable for {romanceio_id}")
     root = modules["common_romanceio_fetch_helper"].parse_html_from_selenium(raw_html)
     return modules["parse_html"].parse_fields_from_html(root, max_tags=50)
 
 
 def run_method(method, modules):
-    if method == "json-search":
-        romanceio_id = _search_json(modules, TEST_TITLE, TEST_AUTHORS, _log)
+    if method == "http-session":
+        transport = modules["common_romanceio_transport"]
+
+        @transport.lookup_budget
+        def pooled(abort=None, log_func=_log):
+            assert abort is not None, "Lookup budget was not initialized"
+            assert not abort.is_set()
+            found = _search_json(modules, TEST_TITLE, TEST_AUTHORS, log_func)
+            assert found == EXPECTED_ROMANCEIO_ID
+            fields = _assert_fields(_fetch_ssr_fields(modules, found, log_func))
+            _print_fields(fields)
+
+        pooled()
+        print("PASS: installed HTTP session completed search and full details without a browser")
+        return
+    if method in ("chrome-search", "chrome-details"):
+        helper = modules["common_romanceio_fetch_helper"]
+        real_fetch = helper._fetch_page_via_calibre_worker
+        attempts = []
+
+        def chrome_only(request, log, abort):
+            # Force the production Chrome worker; Qt must not satisfy this check.
+            attempts.append("chrome")
+            assert len(attempts) == 1, "Chrome-only smoke unexpectedly retried"
+            return real_fetch({**request, "backend": "chrome"}, log, abort)
+
+        with patch.object(helper, "_fetch_page_via_calibre_worker", chrome_only):
+            if method == "chrome-search":
+                romanceio_id = _search_embedded(modules, TEST_TITLE, TEST_AUTHORS, _log)
+                assert romanceio_id == EXPECTED_ROMANCEIO_ID, romanceio_id
+            else:
+                _print_fields(_assert_fields(_fetch_embedded_fields(modules, EXPECTED_ROMANCEIO_ID, _log)))
+        assert attempts == ["chrome"], attempts
+        print(f"PASS: installed Chrome-only production path completed: {method}")
+        return
+    if method == "json-clearance-reuse":
+        messages = []
+
+        def capture(message):
+            messages.append(message)
+            _log(message)
+
+        first = _search_json(modules, TEST_TITLE, TEST_AUTHORS, capture, browser_fallback=True)
+        assert first == EXPECTED_ROMANCEIO_ID, first
+        time.sleep(6)
+        # No browser callback: these calls must succeed using direct HTTP only.
+        second = _search_json(modules, TEST_TITLE, TEST_AUTHORS, _log)
+        assert second == EXPECTED_ROMANCEIO_ID, second
+        time.sleep(6)
+        _assert_fields(_fetch_ssr_fields(modules, EXPECTED_ROMANCEIO_ID, _log))
+        if any("Saved temporary Cloudflare clearance" in message for message in messages):
+            print("PASS: search and book details succeeded through direct HTTP after fresh clearance")
+        else:
+            print("PASS: direct HTTP search and details; fresh challenge clearance was not exercised on this run")
+        return
+    if method == "fields-job":
+        from calibre.utils.ipc.simple_worker import fork_job
+
+        result = fork_job(
+            "calibre_plugins.romanceio_fields.jobs",
+            "do_metadata_download",
+            args=(
+                [(1, EXPECTED_ROMANCEIO_ID, ["StarRating", "RomanceTags"], ["StarRating", "RomanceTags"], [])],
+                50,
+                1,
+            ),
+            timeout=180,
+        )
+        log_path = result["stdout_stderr"]
+        assert isinstance(log_path, str), "Calibre worker returned no log path"
+        try:
+            with open(log_path, encoding="utf-8", errors="replace") as stream:
+                print(stream.read())
+            book_results = result["result"]
+            assert isinstance(book_results, dict), book_results
+            fields = book_results.get(1)
+            assert isinstance(fields, dict), fields
+            assert fields.get("StarRating"), fields
+            assert fields.get("RomanceTags"), fields
+            assert fields["__custom_fields_to_update__"] == ["StarRating", "RomanceTags"], fields
+            print("PASS: installed Fields download job completed and returned ratings/tags")
+        finally:
+            try:
+                os.remove(log_path)
+            except OSError:
+                pass
+        return
+    if method in ("json-search", "json-search-with-browser"):
+        romanceio_id = _search_json(
+            modules, TEST_TITLE, TEST_AUTHORS, _log, browser_fallback=method == "json-search-with-browser"
+        )
         assert romanceio_id == EXPECTED_ROMANCEIO_ID, f"Unexpected JSON search result: {romanceio_id!r}"
         print(f"PASS: JSON search resolved {romanceio_id}")
         return
@@ -120,20 +215,20 @@ def run_method(method, modules):
         fields = _assert_fields(_fetch_json_fields(modules, EXPECTED_ROMANCEIO_ID, _log))
     elif method == "ssr-details":
         fields = _assert_fields(_fetch_ssr_fields(modules, EXPECTED_ROMANCEIO_ID, _log))
-    elif method == "chrome-search":
-        romanceio_id = _search_chrome(modules, TEST_TITLE, TEST_AUTHORS, _log)
-        assert romanceio_id == EXPECTED_ROMANCEIO_ID, f"Unexpected Chrome search result: {romanceio_id!r}"
-        print(f"PASS: Chrome search resolved {romanceio_id}")
+    elif method == "embedded-search":
+        romanceio_id = _search_embedded(modules, TEST_TITLE, TEST_AUTHORS, _log)
+        assert romanceio_id == EXPECTED_ROMANCEIO_ID, f"Unexpected browser search result: {romanceio_id!r}"
+        print(f"PASS: browser search (Qt first) resolved {romanceio_id}")
         return
-    elif method == "chrome-details":
-        fields = _assert_fields(_fetch_chrome_fields(modules, EXPECTED_ROMANCEIO_ID, _log))
+    elif method == "embedded-details":
+        fields = _assert_fields(_fetch_embedded_fields(modules, EXPECTED_ROMANCEIO_ID, _log))
     else:
         orchestrator = modules["common_romanceio_search_orchestrator"]
         romanceio_id = orchestrator.search_with_fallback(
             TEST_TITLE,
             TEST_AUTHORS,
-            lambda title, authors, log: _search_json(modules, title, authors, log),
-            lambda title, authors, log: _search_chrome(modules, title, authors, log),
+            lambda title, authors, log: _search_json(modules, title, authors, log, browser_fallback=True),
+            lambda title, authors, log: _search_embedded(modules, title, authors, log),
             log_func=_log,
             max_retries=1,
             retry_delay=0,
@@ -143,7 +238,7 @@ def run_method(method, modules):
             orchestrator.fetch_details_with_fallback(
                 romanceio_id,
                 lambda book_id, log: _fetch_json_fields(modules, book_id, log),
-                lambda book_id, log: _fetch_chrome_fields(modules, book_id, log),
+                lambda book_id, log: _fetch_embedded_fields(modules, book_id, log),
                 log_func=_log,
                 max_retries=1,
                 retry_delay=0,
@@ -158,7 +253,20 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "method",
-        choices=("json-search", "json-details", "ssr-details", "chrome-search", "chrome-details", "default"),
+        choices=(
+            "http-session",
+            "json-search",
+            "json-search-with-browser",
+            "json-clearance-reuse",
+            "json-details",
+            "ssr-details",
+            "embedded-search",
+            "embedded-details",
+            "chrome-search",
+            "chrome-details",
+            "fields-job",
+            "default",
+        ),
     )
     args = parser.parse_args()
 

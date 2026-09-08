@@ -1,5 +1,6 @@
 """
-Shared helper for fetching pages with SeleniumBase.
+Shared HTTP fetching and supervised embedded-browser lifecycle.
+Selenium provides an optional last resort after the embedded engine fails.
 Used by both romanceio and romanceio_fields plugins.
 """
 
@@ -7,10 +8,10 @@ import glob
 import hashlib
 import importlib
 import importlib.abc
+import json
 from importlib import metadata as importlib_metadata
 import os
 import platform
-import random
 import re
 import shutil
 import subprocess
@@ -21,7 +22,7 @@ import time
 import types
 import zipfile
 from typing import Any, Callable, Dict, List, Optional, Sequence
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 # List of vendored packages that need import redirection
 VENDORED_PACKAGES = [
@@ -92,6 +93,7 @@ _EXECUTABLE_VERSION_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _DRIVER_CACHE_LOCK_TIMEOUT_SECONDS = 120
+_MAX_DRIVER_DOWNLOAD_REDIRECTS = 30
 
 
 def validate_driver_download_url(url: str) -> str:
@@ -115,10 +117,28 @@ def _secure_seleniumbase_request(sb_install: Any, url: str, timeouts: Sequence[f
     last_error = None
     for timeout in timeouts:
         try:
-            response = sb_install.requests.get(url, proxies=proxies, timeout=timeout)
-            validate_driver_download_url(getattr(response, "url", url))
-            response.raise_for_status()
-            return response
+            request_url = url
+            for redirect_count in range(_MAX_DRIVER_DOWNLOAD_REDIRECTS + 1):
+                response = sb_install.requests.get(request_url, proxies=proxies, timeout=timeout, allow_redirects=False)
+                keep_response = False
+                try:
+                    response_url = validate_driver_download_url(getattr(response, "url", request_url))
+                    response.raise_for_status()
+                    if response.status_code not in (301, 302, 303, 307, 308):
+                        keep_response = True
+                        return response
+                    if redirect_count == _MAX_DRIVER_DOWNLOAD_REDIRECTS:
+                        raise RuntimeError("Too many ChromeDriver download redirects")
+                    location = response.headers.get("Location")
+                    if not location:
+                        raise RuntimeError("ChromeDriver download redirect has no Location header")
+                    # Validate before sending the next request, including relative
+                    # and scheme-relative redirects. Checking only the final URL
+                    # would allow an intermediate HTTP or unapproved-host hop.
+                    request_url = validate_driver_download_url(urljoin(response_url, location))
+                finally:
+                    if not keep_response:
+                        response.close()
         except Exception as error:  # pylint: disable=broad-except
             last_error = error
     raise RuntimeError(f"Secure ChromeDriver request failed for {url}: {last_error}") from last_error
@@ -173,8 +193,11 @@ def verify_driver_integrity(path: str) -> Optional[str]:
     record_path = path + ".sha256"
     if not os.path.exists(record_path):
         return None
-    with open(record_path, "r", encoding="ascii") as record:
-        expected = record.read().strip().lower()
+    try:
+        with open(record_path, "r", encoding="ascii") as record:
+            expected = record.read().strip().lower()
+    except UnicodeDecodeError as error:
+        raise RuntimeError(f"ChromeDriver integrity record is malformed: {record_path}") from error
     if not _SHA256_PATTERN.fullmatch(expected):
         raise RuntimeError(f"ChromeDriver integrity record is malformed: {record_path}")
     actual = _sha256_file(path)
@@ -188,8 +211,12 @@ def _executable_major_version(path: str) -> Optional[int]:
     try:
         completed = subprocess.run(
             [path, "--version"],
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
+            # Calibre workers have no console to inherit. Without this flag,
+            # Windows briefly creates one for each ChromeDriver version probe.
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
             check=False,
             timeout=5,
             universal_newlines=True,
@@ -548,17 +575,20 @@ def _normalized_distribution_name(name: str) -> str:
 class BrowserVendorDistribution(importlib_metadata.Distribution):
     """Distribution metadata stored below a vendor root inside a plugin ZIP."""
 
-    def __init__(self, archive_path: str, vendor_prefix: str, metadata_prefix: str):
+    def __init__(self, archive_path: str, vendor_prefix: str, metadata_prefix: str, metadata_text: str):
         self.archive_path = archive_path
         self.vendor_prefix = vendor_prefix.rstrip("/") + "/"
         self.metadata_prefix = metadata_prefix.rstrip("/") + "/"
+        self._texts: Dict[str, Optional[str]] = {"METADATA": metadata_text}
 
     def read_text(self, filename):
-        try:
-            with zipfile.ZipFile(self.archive_path) as plugin_zip:
-                return plugin_zip.read(self.metadata_prefix + filename).decode("utf-8")
-        except (KeyError, OSError, UnicodeDecodeError):
-            return None
+        if filename not in self._texts:
+            try:
+                with zipfile.ZipFile(self.archive_path) as plugin_zip:
+                    self._texts[filename] = plugin_zip.read(self.metadata_prefix + filename).decode("utf-8")
+            except (KeyError, OSError, UnicodeDecodeError):
+                self._texts[filename] = None
+        return self._texts[filename]
 
     def locate_file(self, path):
         relative = str(path).replace("\\", "/").lstrip("/")
@@ -571,19 +601,24 @@ class BrowserVendorDistributionFinder(importlib.abc.MetaPathFinder):
     def __init__(self, archive_path: str, vendor_paths: Sequence[str]):
         self.archive_path = archive_path
         self.distributions = []
+        self._by_name: Dict[str, List[BrowserVendorDistribution]] = {}
         with zipfile.ZipFile(archive_path) as plugin_zip:
             names = plugin_zip.namelist()
-        for vendor_path in vendor_paths:
-            vendor_prefix = vendor_path[len(archive_path) :].strip("/\\").replace("\\", "/")
-            metadata_suffix = ".dist-info/METADATA"
-            for name in names:
-                if not name.startswith(vendor_prefix + "/") or not name.endswith(metadata_suffix):
-                    continue
-                relative = name[len(vendor_prefix) + 1 :]
-                if relative.count("/") != 1:
-                    continue
-                metadata_prefix = name[: -len("METADATA")]
-                self.distributions.append(BrowserVendorDistribution(archive_path, vendor_prefix, metadata_prefix))
+            for vendor_path in vendor_paths:
+                vendor_prefix = vendor_path[len(archive_path) :].strip("/\\").replace("\\", "/")
+                metadata_suffix = ".dist-info/METADATA"
+                for name in names:
+                    if not name.startswith(vendor_prefix + "/") or not name.endswith(metadata_suffix):
+                        continue
+                    relative = name[len(vendor_prefix) + 1 :]
+                    if relative.count("/") != 1:
+                        continue
+                    distribution = BrowserVendorDistribution(
+                        archive_path, vendor_prefix, name[: -len("METADATA")], plugin_zip.read(name).decode("utf-8")
+                    )
+                    self.distributions.append(distribution)
+                    normalized_name = _normalized_distribution_name(distribution.metadata["Name"])
+                    self._by_name.setdefault(normalized_name, []).append(distribution)
 
     def find_spec(self, fullname, path=None, target=None):  # pylint: disable=unused-argument
         return None
@@ -595,11 +630,7 @@ class BrowserVendorDistributionFinder(importlib.abc.MetaPathFinder):
         if requested is None:
             matches = self.distributions
         else:
-            matches = [
-                distribution
-                for distribution in self.distributions
-                if _normalized_distribution_name(distribution.metadata["Name"]) == requested
-            ]
+            matches = self._by_name.get(requested, [])
         # Python 3.8's importlib.metadata calls next() directly on resolver
         # results, while newer versions accept any iterable.
         return iter(matches)
@@ -814,6 +845,14 @@ class SeleniumBaseImportError(RuntimeError):
     """Raised when seleniumbase cannot be imported in the current process context.  Not retryable."""
 
 
+class HttpAccessDeniedError(RuntimeError):
+    """Plain HTTP was blocked; move to browser fallback without repeating it."""
+
+
+class BrowserFetchError(RuntimeError):
+    """A browser attempt failed or exhausted its budget; do not relaunch it."""
+
+
 # XML 1.0 §2.2: legal chars are #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
 # Everything else is illegal and causes lxml to raise XMLSyntaxError: internal error.
 # Selenium's page_source is a DOM serialization - the browser decodes HTML entities before
@@ -935,6 +974,8 @@ def _build_chrome_args(user_data_dir: str, inside_flatpak: bool, in_ci: bool) ->
         "--disable-blink-features=AutomationControlled",
         "--exclude-switches=enable-automation",
         "--disable-dev-shm-usage",
+        "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+        "--disable-quic",
         "--disable-gpu",
         "--window-size=1920,1080",
     ]
@@ -949,6 +990,77 @@ def _build_chrome_args(user_data_dir: str, inside_flatpak: bool, in_ci: bool) ->
     else:
         chrome_args.append("--window-position=-32000,-32000")
     return chrome_args
+
+
+class _LegacyUcSubprocessProxy:
+    """Use current SeleniumBase's quiet Chrome stdio behavior on legacy branches."""
+
+    def __init__(self, subprocess_module: Any):
+        self._subprocess_module = subprocess_module
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._subprocess_module, name)
+
+    def Popen(self, *args: Any, **kwargs: Any) -> Any:  # pylint: disable=invalid-name
+        # SeleniumBase 4.44.20 passes three unconsumed PIPE handles to Chrome.
+        # Chrome and its children can fill those buffers, preventing the DevTools
+        # port from becoming responsive or hanging the Calibre worker entirely.
+        # Current SeleniumBase sends the same streams to DEVNULL.
+        quiet_kwargs = dict(kwargs)
+        for stream_name in ("stdin", "stdout", "stderr"):
+            if quiet_kwargs.get(stream_name) == self._subprocess_module.PIPE:
+                quiet_kwargs[stream_name] = self._subprocess_module.DEVNULL
+        return self._subprocess_module.Popen(*args, **quiet_kwargs)
+
+
+def configure_legacy_uc_subprocess(
+    undetected_module: Any,
+    version_info: Optional[Sequence[int]] = None,
+) -> bool:
+    """Backport non-blocking Chrome stdio handling to Python 3.8/3.9 vendors."""
+    if browser_vendor_branch(version_info) == "current":
+        return False
+    subprocess_module = getattr(undetected_module, "subprocess", None)
+    if isinstance(subprocess_module, _LegacyUcSubprocessProxy):
+        return True
+    if subprocess_module is None or not hasattr(subprocess_module, "Popen"):
+        raise RuntimeError("Legacy SeleniumBase has no usable subprocess module")
+    undetected_module.subprocess = _LegacyUcSubprocessProxy(subprocess_module)
+    return True
+
+
+class _SandboxedChromeSubprocessProxy:
+    """Enforce sandbox policy on SeleniumBase's final Chrome command line."""
+
+    _UNSAFE_SWITCHES = frozenset(
+        {"--no-sandbox", "--disable-setuid-sandbox", "--disable-namespace-sandbox", "--disable-seccomp-filter-sandbox"}
+    )
+
+    def __init__(self, subprocess_module: Any, inside_flatpak: bool):
+        self._subprocess_module = subprocess_module
+        self.inside_flatpak = inside_flatpak
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._subprocess_module, name)
+
+    def Popen(self, args: Any, **kwargs: Any) -> Any:  # pylint: disable=invalid-name
+        # Both supported SeleniumBase versions add --no-sandbox themselves on
+        # Linux. Filtering chromium_arg alone cannot override those defaults.
+        if not isinstance(args, (list, tuple)) or kwargs.get("shell"):
+            raise RuntimeError("Chrome must be launched with an explicit argument list and without a shell")
+        command = list(args)
+        if not self.inside_flatpak:
+            command = [arg for arg in command if arg.split("=", 1)[0] not in self._UNSAFE_SWITCHES]
+        return self._subprocess_module.Popen(command, **kwargs)
+
+
+def configure_browser_sandbox(undetected_module: Any, inside_flatpak: bool) -> None:
+    """Scope final-argument filtering to Chrome, without changing global subprocess."""
+    subprocess_module = undetected_module.subprocess
+    if isinstance(subprocess_module, _SandboxedChromeSubprocessProxy):
+        subprocess_module.inside_flatpak = inside_flatpak
+    else:
+        undetected_module.subprocess = _SandboxedChromeSubprocessProxy(subprocess_module, inside_flatpak)
 
 
 def log_system_info(log_func: Optional[Callable[[str], None]] = None) -> None:
@@ -987,6 +1099,8 @@ def _fetch_page_in_process(
     secondary_wait_element=None,
     max_wait=30,
     log_func=None,
+    user_data_dir=None,
+    search_fallback_url=None,
 ):
     """
     Fetch a page using SeleniumBase with Cloudflare bypass.
@@ -1005,14 +1119,12 @@ def _fetch_page_in_process(
             wait_for_element, return the page immediately instead of timing out.
             Useful to avoid waiting the full timeout when a 404 / not-found page
             is returned (which will never contain wait_for_element).
-        secondary_wait_element: Optional string; after wait_for_element is found,
-            continue polling until this element also appears (or time runs out).
-            Unlike wait_for_element, the page is returned whether or not this
-            element appears - it just buys more time for JS rendering. Use this
-            when wait_for_element is an SSR container and secondary_wait_element
-            is the JS-rendered content inside it (e.g. search result items).
+        secondary_wait_element: Optional content marker. Search pages require
+            actual populated result nodes; an empty loading shell is a failure.
         max_wait: Maximum seconds to wait for page load
         log_func: Optional logging function to route errors to calibre's job log
+        user_data_dir: Parent-owned profile for an installed browser worker.
+            If omitted, this function creates and removes its own profile.
 
     Returns:
         Page HTML as string, or None on error
@@ -1033,13 +1145,14 @@ def _fetch_page_in_process(
     # period where absolute Selenium imports require temporary sys.path,
     # sys.meta_path, and sys.modules changes, then restore the host state.
     _BROWSER_IMPORT_LOCK.acquire()
+    original_stdout, original_stderr, original_excepthook = sys.stdout, sys.stderr, sys.excepthook
     original_sys_path = None
     original_meta_path = None
     original_vendor_modules = None
     original_path_env = None
     path_env_was_present = False
     path_env_captured = False
-    user_data_dir = None
+    owns_profile = user_data_dir is None
     try:
         # Keep all state capture inside the protected try. If another thread
         # mutates sys.modules while the snapshot is being built, the finally
@@ -1062,8 +1175,10 @@ def _fetch_page_in_process(
         # Each Chrome instance gets a fresh throw-away profile in the system TEMP dir.
         # Using TEMP (not stable_base) keeps paths short (avoids Windows MAX_PATH issues)
         # and ensures the OS auto-cleans these on reboot even if we crash before cleanup.
-        # The directory is removed in the finally block below after driver.quit().
-        user_data_dir = tempfile.mkdtemp(prefix="calibre_sb_")
+        # Installed calls receive a parent-owned directory so even a killed
+        # worker's profile can be removed. Direct calls clean up locally.
+        if owns_profile:
+            user_data_dir = tempfile.mkdtemp(prefix="calibre_sb_")
 
         # One-time best-effort cleanup of stale profile dirs left by older plugin versions
         # that used ~/.calibre_selenium/user_data/profile_<pid>_<ts>/ and never deleted them.
@@ -1210,6 +1325,10 @@ def _fetch_page_in_process(
         download_helper = importlib.import_module("seleniumbase.core.download_helper")
         fasteners_module = importlib.import_module("fasteners")
         patcher = importlib.import_module("seleniumbase.undetected.patcher")
+        undetected_module = importlib.import_module("seleniumbase.undetected")
+        if configure_legacy_uc_subprocess(undetected_module):
+            _log("Applied non-blocking Chrome stdio handling for legacy SeleniumBase")
+        configure_browser_sandbox(undetected_module, inside_flatpak=bool(os.environ.get("FLATPAK_ID")))
 
         sb_install.DRIVER_DIR = sb_drivers_dir  # type: ignore[attr-defined]
         download_helper.downloads_path = downloads_dir  # type: ignore[attr-defined]
@@ -1278,6 +1397,7 @@ def _fetch_page_in_process(
         Driver = importlib.import_module("seleniumbase.plugins.driver_manager").Driver  # pylint: disable=invalid-name
 
         driver = None
+        validated_page = None
         try:
             chrome_args = _build_chrome_args(
                 user_data_dir,
@@ -1285,6 +1405,7 @@ def _fetch_page_in_process(
                 in_ci=bool(os.environ.get("CI")),
             )
 
+            _log("Starting Chrome (startup is included in the browser time limit)...")
             driver = Driver(
                 uc=True,
                 headless=False,
@@ -1310,92 +1431,21 @@ def _fetch_page_in_process(
             except Exception:  # pylint: disable=broad-except
                 pass
 
-            time.sleep(random.uniform(0.2, 0.5))
+            from .common_romanceio_webengine import navigate_chrome
 
-            # Navigate to URL
-            driver.get(url)
-
-            time.sleep(random.uniform(0.5, 1.0))
-
-            start_time = time.time()
-            cleared = False
-            cloudflare_indicators = [
-                "Just a moment",
-                "Checking your browser",
-                "Verifying you are human",
-            ]
-
-            while time.time() - start_time < max_wait:
-                try:
-                    page_source = driver.page_source
-
-                    # If page source is empty or very small, wait for it to load
-                    if not page_source or len(page_source) < 100:
-                        size = len(page_source) if page_source else 0
-                        _log(f"Page source too small ({size} bytes), waiting...")
-                        time.sleep(1)
-                        continue
-
-                    # Check for CloudFlare challenge indicators (case-insensitive)
-                    page_lower = page_source.lower()
-                    has_cloudflare = any(indicator.lower() in page_lower for indicator in cloudflare_indicators)
-
-                    if has_cloudflare:
-                        matched = [ind for ind in cloudflare_indicators if ind.lower() in page_lower]
-                        _log(f"CloudFlare challenge detected (matched: {matched}), waiting...")
-                        time.sleep(1)
-                        continue
-
-                    # Page loaded successfully
-                    _log(f"Page loaded successfully ({len(page_source)} bytes)")
-                    cleared = True
-                    break
-
-                except Exception as e:  # pylint: disable=broad-except
-                    _log(f"Error checking page: {e}")
-                    time.sleep(1)
-
-            if not cleared:
-                _log("Timeout waiting for Cloudflare")
-                return None
-
-            # Now wait for the actual content to load
-            if wait_for_element:
-                remaining_time = max(10, max_wait - (time.time() - start_time))
-                element_start = time.time()
-
-                while time.time() - element_start < remaining_time:
-                    page_source = driver.page_source
-                    if wait_for_element in page_source:
-                        if secondary_wait_element:
-                            # Container found; now wait for JS-rendered content within
-                            # remaining time. Return the page whether or not it appears
-                            # (genuine 0-result pages will never have it).
-                            secondary_start = time.time()
-                            secondary_remaining = remaining_time - (secondary_start - element_start)
-                            while time.time() - secondary_start < secondary_remaining:
-                                page_source = driver.page_source
-                                if secondary_wait_element in page_source:
-                                    _log(f"Secondary element '{secondary_wait_element}' found")
-                                    return page_source
-                                time.sleep(0.5)
-                            _log(f"Secondary element '{secondary_wait_element}' not found (page may have 0 results)")
-                            return driver.page_source
-                        # Element found - give JS a brief moment to finish any remaining rendering.
-                        time.sleep(1.0)
-                        page_source = driver.page_source
-                        return page_source
-                    # Early exit: if the not_found_marker is present and the primary element
-                    # still isn't, the page will never satisfy wait_for_element (e.g. a 404
-                    # error page that will never contain book-stats). Return immediately.
-                    if not_found_marker and not_found_marker.lower() in page_source.lower():
-                        _log("Not-found marker detected, returning page early")
-                        return page_source
-                    time.sleep(0.5)
-
-                _log(f"Timeout waiting for element: {wait_for_element}")
-                return None
-            return driver.page_source
+            validated_page = navigate_chrome(
+                driver,
+                {
+                    "url": url,
+                    "max_wait": max_wait,
+                    "wait_for_element": wait_for_element,
+                    "not_found_marker": not_found_marker,
+                    "secondary_wait_element": secondary_wait_element,
+                    "search_fallback_url": search_fallback_url,
+                },
+                _log,
+            )
+            return validated_page
 
         except Exception as e:  # pylint: disable=broad-except
             msg = str(e)
@@ -1412,7 +1462,7 @@ def _fetch_page_in_process(
                 raise RosettaNotInstalledError(
                     "Your Mac is missing a required compatibility layer (Rosetta 2) needed to run the web browser automation."
                 ) from e
-            if "session not created" in msg.lower() or "this version of chromedriver only supports" in msg.lower():
+            if "this version of chromedriver only supports" in msg.lower():
                 _log(
                     f"Chrome version mismatch: {e}\n"
                     "  The downloaded chromedriver doesn't match your installed Chrome version.\n"
@@ -1427,15 +1477,28 @@ def _fetch_page_in_process(
         finally:
             if driver:
                 try:
+                    from .common_romanceio_webengine import clearance_page_valid
+
+                    if (
+                        urlparse(url).scheme == "https"
+                        and urlparse(url).hostname == "www.romance.io"
+                        and clearance_page_valid(validated_page, {"url": url})
+                    ):
+                        try:
+                            from .common_romanceio_session import save_clearance
+
+                            if save_clearance(
+                                driver.get_cookies(), driver.execute_script("return navigator.userAgent")
+                            ):
+                                _log("Saved temporary Cloudflare clearance; subsequent requests can use direct HTTP")
+                        except Exception as session_error:  # pylint: disable=broad-except
+                            # Never log cookie values or a WebDriver response containing them.
+                            _log(f"Could not save browser clearance ({type(session_error).__name__})")
+                    _log("Closing Chrome...")
                     driver.quit()
+                    _log("Chrome closed")
                 except Exception as quit_err:  # pylint: disable=broad-except
                     _log(f"Error closing driver: {quit_err}")
-            # Always remove the throw-away Chrome profile dir created above.
-            if user_data_dir and os.path.isdir(user_data_dir):
-                try:
-                    shutil.rmtree(user_data_dir, ignore_errors=True)
-                except Exception:  # pylint: disable=broad-except
-                    pass  # best effort - temp dir cleanup is non-critical
     except ChromeNotInstalledError:
         raise  # propagate immediately - no point retrying
     except RosettaNotInstalledError:
@@ -1492,9 +1555,14 @@ def _fetch_page_in_process(
         _log(traceback.format_exc())
         return None
     finally:
-        # Catch-all cleanup: if setup code threw before reaching the inner try/finally,
-        # user_data_dir would not have been cleaned up there. Clean it up here.
-        if user_data_dir and os.path.isdir(user_data_dir):
+        # SeleniumBase initializes Colorama and its traceback hook on import.
+        # Reimports otherwise stack StreamWrappers until logging itself raises
+        # RecursionError (about 250 calls with piped output). Workers isolate
+        # installed use, but standalone Calibre diagnostics also need restoration.
+        sys.stdout, sys.stderr, sys.excepthook = original_stdout, original_stderr, original_excepthook
+        # Direct calls clean up after quit, including failures during setup.
+        # Installed workers leave their profile to the supervising process.
+        if owns_profile and user_data_dir and os.path.isdir(user_data_dir):
             shutil.rmtree(user_data_dir, ignore_errors=True)
         if original_vendor_modules is not None:
             restore_browser_vendor_modules(plugin_name, original_vendor_modules)
@@ -1511,24 +1579,41 @@ def _fetch_page_in_process(
 
 
 def _fetch_page_worker(request: Dict[str, Any]) -> Dict[str, Any]:
-    """Calibre IPC entry point; all global import mutation stays in this process."""
+    """Calibre IPC entry point for a disposable Qt or Chrome browser worker."""
     logs: List[str] = []
+
+    def log(message: str) -> None:
+        if request.get("transport_dir"):
+            _write_browser_log(request, message)
+        else:
+            logs.append(message)
+
     try:
-        page = _fetch_page_in_process(
-            request["url"],
-            plugin_name=request["plugin_name"],
-            wait_for_element=request.get("wait_for_element"),
-            not_found_marker=request.get("not_found_marker"),
-            secondary_wait_element=request.get("secondary_wait_element"),
-            max_wait=request.get("max_wait", 30),
-            log_func=logs.append,
-        )
+        from .common_romanceio_webengine import fetch_page as fetch_embedded_page
+
+        if request.get("backend") == "chrome":
+            page = _fetch_page_in_process(
+                request["url"],
+                request["plugin_name"],
+                wait_for_element=request.get("wait_for_element"),
+                not_found_marker=request.get("not_found_marker"),
+                secondary_wait_element=request.get("secondary_wait_element"),
+                max_wait=request.get("max_wait", 30),
+                log_func=log,
+                user_data_dir=request.get("user_data_dir"),
+                search_fallback_url=request.get("search_fallback_url"),
+            )
+        else:
+            page = fetch_embedded_page(request, log)
         return {"page": page, "logs": logs, "error_type": None, "error_message": None}
-    except (ChromeNotInstalledError, RosettaNotInstalledError, SeleniumBaseImportError) as error:
+    except Exception as error:  # The IPC response preserves failures without retrying the engine.
+        import traceback
+
+        log(_redact_log_text(traceback.format_exc()))
         return {
             "page": None,
             "logs": logs,
-            "error_type": type(error).__name__,
+            "error_type": "BrowserFetchError",
             "error_message": str(error),
         }
 
@@ -1538,49 +1623,232 @@ def _is_installed_plugin_module(plugin_name: str) -> bool:
     return __name__ == expected_name
 
 
-def _fetch_page_via_calibre_worker(request: Dict[str, Any], log_func: Optional[Callable]) -> Optional[str]:
-    """Run Chrome in a disposable Calibre worker and return its pickled result."""
+class _BrowserWorkerResources:
+    """Own the profile and track descendants before Calibre can kill the worker."""
 
-    def _log(message: Any) -> None:
+    def __init__(self, timeout: float, log_func: Callable):
+        # Native psutil is supplied by Calibre, never by the browser vendor.
+        import psutil
+
+        self.psutil = psutil
+        self.log_func = log_func
+        self.worker: Any = None
+        self.process: Any = None
+        self.descendants: set = set()
+        self.deadline = time.monotonic() + timeout
+        self.next_scan = 0.0
+        self.profile = tempfile.mkdtemp(prefix="calibre_sb_")
+
+    def watch(self, worker: Any) -> None:
+        self.worker = worker
+        self.process = self.psutil.Process(worker.pid)
+
+    def _collect_descendants(self, process: Any) -> None:
+        try:
+            self.descendants.update(process.children(recursive=True))
+        except self.psutil.NoSuchProcess:
+            pass
+
+    def heartbeat(self) -> bool:
+        now = time.monotonic()
+        if now >= self.next_scan or now >= self.deadline:
+            self._collect_descendants(self.process)
+            self.next_scan = now + 0.25
+        # Calibre calls this before forcibly killing the worker. The final scan
+        # preserves process identities even after Chrome is reparented on exit.
+        return now < self.deadline
+
+    def close(self) -> None:
+        try:
+            if self.process is not None:
+                self._collect_descendants(self.process)
+            for process in list(self.descendants):
+                self._collect_descendants(process)
+        except self.psutil.Error as error:
+            self.log_func(f"Could not inspect browser descendants during cleanup: {error}")
+        finally:
+            if self.worker is not None:
+                # run_job also starts an asynchronous kill; wait for the worker
+                # here so it cannot launch another browser after cleanup begins.
+                self.worker.kill()
+                if self.process is not None:
+                    try:
+                        self.process.wait(timeout=5)
+                    except self.psutil.Error as error:
+                        self.log_func(f"Could not wait for browser worker exit: {error}")
+
+        for process in self.descendants:
+            try:
+                # psutil verifies creation time before signalling, protecting
+                # unrelated processes if the operating system reuses a PID.
+                process.terminate()
+            except self.psutil.NoSuchProcess:
+                pass
+            except self.psutil.Error as error:
+                self.log_func(f"Could not terminate browser descendant: {error}")
+        _, alive = self.psutil.wait_procs(list(self.descendants), timeout=2)
+        for process in alive:
+            try:
+                process.kill()
+            except self.psutil.NoSuchProcess:
+                pass
+            except self.psutil.Error as error:
+                self.log_func(f"Could not kill browser descendant: {error}")
+        _, alive = self.psutil.wait_procs(alive, timeout=2)
+        if alive:
+            self.log_func("Browser descendants did not exit; retaining their temporary profile")
+            return
+        try:
+            shutil.rmtree(self.profile)
+        except OSError as error:
+            self.log_func(f"Could not remove temporary browser profile: {error}")
+
+
+def _write_browser_log(request: Dict[str, Any], message: Any) -> None:
+    """Flush each redacted message so killing a job does not lose its diagnostics."""
+    with open(os.path.join(request["transport_dir"], "progress.jsonl"), "a", encoding="utf-8") as stream:
+        stream.write(json.dumps(_redact_log_text(message)) + "\n")
+
+
+def _browser_owner_alive(request: Dict[str, Any]) -> bool:
+    import psutil
+
+    try:
+        owner = psutil.Process(request["owner_pid"])
+        return owner.create_time() == request["owner_created"] and owner.is_running()
+    except psutil.NoSuchProcess:
+        return False
+
+
+def _supervise_browser_worker(request: Dict[str, Any]) -> Dict[str, Any]:
+    """Remain alive after Calibre cancels the caller, then reap its browser tree.
+
+    This process does no Qt rendering. Its heartbeat covers setup, navigation,
+    and quit, even when any of those blocks inside the actual browser worker.
+    """
+    from calibre.utils.ipc.simple_worker import two_part_fork_job
+
+    def log(message: Any) -> None:
+        _write_browser_log(request, message)
+
+    resources = _BrowserWorkerResources(request["worker_timeout"], log)
+    reason = "Browser worker failed"
+
+    def heartbeat() -> bool:
+        nonlocal reason
+        within_budget = resources.heartbeat()
+        if not _browser_owner_alive(request) or os.path.exists(os.path.join(request["transport_dir"], "cancel")):
+            reason = "Browser cancelled; stopping its worker and browser processes"
+            return False
+        if not within_budget:
+            reason = f"Browser exceeded its {request['worker_timeout']:g}s total time limit (including startup/navigation/quit)"
+            return False
+        return True
+
+    try:
+        if not _browser_owner_alive(request):
+            return {"page": None, "error_type": "BrowserFetchError", "error_message": "Caller exited"}
+        log(f"Browser time limit: {request['worker_timeout']:g}s including setup, navigation, and shutdown")
+        run_job = two_part_fork_job()
+        resources.watch(run_job.worker)
+        response = run_job(
+            __name__,
+            "_fetch_page_worker",
+            args=({**request, "user_data_dir": resources.profile},),
+            heartbeat=heartbeat,
+            no_output=True,
+        )["result"]
+        if not isinstance(response, dict):
+            raise BrowserFetchError("Browser worker returned an invalid response")
+        return response
+    except Exception as error:  # pylint: disable=broad-except
+        log(f"{reason}: {type(error).__name__}: {error}")
+        return {"page": None, "error_type": "BrowserFetchError", "error_message": reason}
+    finally:
+        resources.close()
+        if not _browser_owner_alive(request):
+            shutil.rmtree(request["transport_dir"], ignore_errors=True)
+
+
+def _fetch_page_via_calibre_worker(
+    request: Dict[str, Any], log_func: Optional[Callable], abort: Optional[Any] = None
+) -> Optional[str]:
+    """Stream progress from a supervised, disposable Calibre browser worker."""
+    import psutil
+    from calibre.utils.ipc.simple_worker import fork_job
+
+    def log(message: Any) -> None:
         safe_message = _redact_log_text(message)
         if log_func:
             log_func(safe_message)
         else:
-            print(safe_message)
+            print(safe_message, flush=True)
+
+    if abort is not None and abort.is_set():
+        raise BrowserFetchError("Browser cancelled before startup")
+    from .common_romanceio_transport import current_budget, remaining
+
+    abort = current_budget() or abort
+    worker_timeout = remaining(90 if request.get("backend") == "chrome" else 45)
+    owner = psutil.Process()
+    transport = tempfile.mkdtemp(prefix="calibre_sb_log_")
+    request = {
+        **request,
+        "transport_dir": transport,
+        "owner_pid": owner.pid,
+        "owner_created": owner.create_time(),
+        "worker_timeout": worker_timeout,
+    }
+    position = 0
+    next_read = 0.0
+
+    def progress(force: bool = False) -> bool:
+        nonlocal position, next_read
+        if abort is not None and abort.is_set():
+            with open(os.path.join(transport, "cancel"), "a", encoding="utf-8"):
+                pass
+        if not force and time.monotonic() < next_read:
+            return True
+        next_read = time.monotonic() + 0.1
+        try:
+            with open(os.path.join(transport, "progress.jsonl"), encoding="utf-8") as stream:
+                stream.seek(position)
+                while True:
+                    line = stream.readline()
+                    if not line.endswith("\n"):
+                        break
+                    log(json.loads(line))
+                    position = stream.tell()
+        except FileNotFoundError:
+            pass
+        # Never kill the supervisor on cancellation: it must finish cleanup.
+        # The supervisor enforces the deadline on the browser worker itself.
+        return True
 
     try:
-        from calibre.utils.ipc.simple_worker import fork_job
-
         response = fork_job(
             __name__,
-            "_fetch_page_worker",
+            "_supervise_browser_worker",
             args=(request,),
-            timeout=max(180, int(request.get("max_wait", 30)) + 120),
+            heartbeat=progress,
             no_output=True,
         )["result"]
     except Exception as error:  # pylint: disable=broad-except
-        _log(f"Browser worker failed: {type(error).__name__}: {error}")
-        return None
+        raise BrowserFetchError(f"Browser supervisor failed: {type(error).__name__}: {error}") from error
+    finally:
+        progress(force=True)
+        shutil.rmtree(transport, ignore_errors=True)
 
     if not isinstance(response, dict):
-        _log("Browser worker returned an invalid response")
-        return None
+        raise BrowserFetchError("Browser worker returned an invalid response")
     for message in response.get("logs") or []:
-        _log(message)
-
-    error_types = {
-        "ChromeNotInstalledError": ChromeNotInstalledError,
-        "RosettaNotInstalledError": RosettaNotInstalledError,
-        "SeleniumBaseImportError": SeleniumBaseImportError,
-    }
+        log(message)
     error_type = response.get("error_type")
-    if error_type in error_types:
-        raise error_types[error_type](_redact_log_text(response.get("error_message") or error_type))
-
+    if error_type:
+        raise BrowserFetchError(_redact_log_text(response.get("error_message") or error_type))
     page = response.get("page")
-    if page is not None and not isinstance(page, str):
-        _log("Browser worker returned a non-text page")
-        return None
+    if not isinstance(page, str) or not page:
+        raise BrowserFetchError("Browser did not return a page; see the preceding browser log")
     return page
 
 
@@ -1592,6 +1860,10 @@ def fetch_page(
     secondary_wait_element=None,
     max_wait=30,
     log_func=None,
+    abort=None,
+    allow_chrome_fallback=True,
+    prefer_chrome=False,
+    backend=None,
 ):
     """Fetch a page in an isolated worker when running as an installed plugin."""
     request = {
@@ -1602,11 +1874,59 @@ def fetch_page(
         "secondary_wait_element": secondary_wait_element,
         "max_wait": max_wait,
     }
-    if _is_installed_plugin_module(plugin_name):
-        return _fetch_page_via_calibre_worker(request, log_func)
-    # Repository tools and unit tests do not have Calibre's plugin loader. They
-    # run in a dedicated process already and retain the directly testable path.
-    return _fetch_page_in_process(log_func=log_func, **request)
+
+    from .common_romanceio_transport import current_budget, remaining
+    from urllib.parse import parse_qs, urlencode
+
+    budget = current_budget()
+    abort = budget or abort
+    # A browser may be called inside a JSON retry callback after a prior 429.
+    # Apply the same cooldown before startup, outside the browser worker budget.
+    from .common_romanceio_search_orchestrator import wait_for_rate_limit
+
+    if not wait_for_rate_limit(log_func or print, abort):
+        raise BrowserFetchError("Browser cancelled during rate-limit cooldown")
+    parsed_url = urlparse(url)
+    if parsed_url.path == "/json/search_books":
+        query = parse_qs(parsed_url.query).get("search", [""])[0]
+        request["search_fallback_url"] = f"{parsed_url.scheme}://{parsed_url.netloc}/search?" + urlencode({"q": query})
+    request["max_wait"] = remaining(max_wait)
+
+    def fetch(request):
+        if _is_installed_plugin_module(plugin_name):
+            return _fetch_page_via_calibre_worker(request, log_func, abort)
+        # Standalone Calibre diagnostics own their process already.
+        response = _fetch_page_worker(request)
+        for message in response["logs"]:
+            (log_func or print)(message)
+        if response["error_type"] or not response["page"]:
+            raise BrowserFetchError(response["error_message"] or "Browser returned no page")
+        return response["page"]
+
+    backends: Sequence[str] = ("chrome", "embedded") if prefer_chrome else ("embedded", "chrome")
+    if not allow_chrome_fallback:
+        backends = ("embedded",)
+    if backend is not None:
+        if backend not in ("embedded", "chrome"):
+            raise ValueError(f"Unknown browser backend: {backend}")
+        backends = (backend,)
+    for index, backend in enumerate(backends):
+        if budget and backend in budget.failed_browsers:
+            (log_func or print)(f"Skipping {backend}: its browser session already failed in this lookup")
+            continue
+        if abort is not None and abort.is_set():
+            raise BrowserFetchError("Browser cancelled before startup")
+        try:
+            return fetch({**request, "backend": backend})
+        except BrowserFetchError as error:
+            (log_func or print)(_redact_log_text(f"{backend.capitalize()} browser failed: {error}"))
+            if budget:
+                budget.failed_browsers.add(backend)
+            if (abort is not None and abort.is_set()) or index == len(backends) - 1:
+                raise
+            next_backend = backends[index + 1]
+            (log_func or print)(f"{backend.capitalize()} browser failed; trying {next_backend} once.")
+    raise BrowserFetchError("No untried browser remains for this lookup")
 
 
 def fetch_book_page_http(romanceio_id: str, log_func: Optional[Callable] = None, timeout: int = 30) -> tuple:
@@ -1630,17 +1950,14 @@ def fetch_book_page_http(romanceio_id: str, log_func: Optional[Callable] = None,
     Raises:
         RuntimeError: On network/connection errors (caller should retry or fall back)
     """
-    try:
-        from urllib.request import Request, urlopen
-        from urllib.error import HTTPError
-    except ImportError:
-        from urllib2 import Request, urlopen, HTTPError  # type: ignore[import-not-found,no-redef]
+    from urllib.request import Request
+    from urllib.error import HTTPError
 
     def _log(msg: str) -> None:
         if log_func:
             log_func(msg)
 
-    url = f"https://www.romance.io/books/{romanceio_id}/"
+    url = f"https://www.romance.io/books/{romanceio_id}"
     _log(f"Lightweight HTTP fetch: requesting {url}")
 
     headers = {
@@ -1652,10 +1969,18 @@ def fetch_book_page_http(romanceio_id: str, log_func: Optional[Callable] = None,
         "Accept-Language": "en-US,en;q=0.9",
     }
 
+    from .common_romanceio_session import clearance_headers, discard_clearance
+    from .common_romanceio_transport import HttpRateLimitError, open_request
+
+    cached_headers = clearance_headers(url)
+    headers.update(cached_headers)
+    if cached_headers:
+        _log("Using cached Cloudflare clearance for direct page HTTP request")
+
     try:
         req = Request(url, headers=headers)
-        response = urlopen(req, timeout=timeout)
-        html = response.read().decode("utf-8", errors="replace")
+        with open_request(req, timeout) as response:
+            html = response.read().decode("utf-8", errors="replace")
         _log(f"Lightweight HTTP fetch: received {len(html)} bytes")
 
         not_found_text = "the page you are looking for can't be found"
@@ -1665,11 +1990,11 @@ def fetch_book_page_http(romanceio_id: str, log_func: Optional[Callable] = None,
 
         if "book-stats" not in html:
             # Cloudflare returned a JS-challenge or interstitial page instead of the book page.
-            # Raising here causes the orchestrator to fall through to Chrome immediately
+            # Raising here causes the orchestrator to fall through to the browser fallback immediately
             # (after the configured number of retries).
             raise RuntimeError(
                 f"Lightweight HTTP fetch: page missing expected content for {romanceio_id} "
-                "(Cloudflare may be blocking plain HTTP requests - will fall back to Chrome)"
+                "(Cloudflare may be blocking plain HTTP requests - will try the next access method)"
             )
 
         return html, True
@@ -1681,22 +2006,24 @@ def fetch_book_page_http(romanceio_id: str, log_func: Optional[Callable] = None,
             _log(f"Lightweight HTTP fetch: 404 for {romanceio_id}")
             return None, False
         if e.code == 403:
+            discard_clearance(cached_headers.get("Cookie", ""))
             # Cloudflare or server is blocking plain HTTP requests to this page.
-            # Raise immediately without retrying - Chrome can bypass this.
-            raise RuntimeError(
+            # A typed failure lets the orchestrator skip futile HTTP retries.
+            raise HttpAccessDeniedError(
                 f"Lightweight HTTP fetch: 403 Forbidden for {romanceio_id} "
-                "(Cloudflare blocking plain HTTP - will fall back to Chrome)"
+                "(HTTP access denied - will try the next access method)"
             ) from e
         if e.code == 429:
-            # Rate limited. Raise so the orchestrator retries with delay,
-            # then falls back to Chrome if retries are exhausted.
-            raise RuntimeError(f"Lightweight HTTP fetch: 429 Too Many Requests for {romanceio_id}") from e
+            raise HttpRateLimitError(
+                f"Lightweight HTTP fetch: 429 Too Many Requests for {romanceio_id}",
+                retry_after=e.headers.get("Retry-After") if e.headers is not None else None,
+            ) from e
         raise RuntimeError(f"Lightweight HTTP fetch failed for {romanceio_id}: HTTP {e.code}") from e
     except Exception as e:
         raise RuntimeError(f"Lightweight HTTP fetch failed for {romanceio_id}: {type(e).__name__}: {e}") from e
 
 
-def fetch_romanceio_book_page(url, plugin_name, log=None):
+def fetch_romanceio_book_page(url, plugin_name, log=None, abort=None, prefer_chrome=False, backend=None):
     """
     Fetch a Romance.io book page with validation.
 
@@ -1739,10 +2066,13 @@ def fetch_romanceio_book_page(url, plugin_name, log=None):
         not_found_marker=_not_found_text,
         max_wait=60,
         log_func=log_msg,
+        abort=abort,
+        prefer_chrome=prefer_chrome,
+        backend=backend,
     )
 
     if not page_html:
-        log_error("Failed to fetch page (Chrome timed out or crashed - check terminal for details)")
+        log_error("Failed to fetch page (browser timed out or crashed - see the job log)")
         return None, False
 
     if _not_found_text in page_html.lower():

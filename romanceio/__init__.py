@@ -199,7 +199,15 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
                     from calibre_plugins.romanceio.common_romanceio_json_api import search_books_json  # type: ignore[import-not-found]  # pylint: disable=import-error
                     from calibre_plugins.romanceio.common_romanceio_search import find_best_json_match  # type: ignore[import-not-found]  # pylint: disable=import-error
 
-                    books = search_books_json(title, authors, min(timeout, 10), log_func)
+                    from calibre_plugins.romanceio.fetch_helper import fetch_page  # type: ignore[import-not-found]  # pylint: disable=import-error
+
+                    books = search_books_json(
+                        title,
+                        authors,
+                        min(timeout, 10),
+                        log_func,
+                        browser_fetch_func=lambda url: fetch_page(url, log_func=log_func, abort=abort),
+                    )
                     if books and len(books) > 0:
                         match_id = find_best_json_match(books, title, authors, log_func)
                         if match_id:
@@ -221,7 +229,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
                     from calibre_plugins.romanceio.common_romanceio_search import search_for_romanceio_id_with_details  # type: ignore[import-not-found]  # pylint: disable=import-error
 
                     def fetch_with_log(url, **kwargs):
-                        return fetch_page(url, log_func=log_func, **kwargs)
+                        return fetch_page(url, log_func=log_func, abort=abort, **kwargs)
 
                     match_id, match_title, match_authors = search_for_romanceio_id_with_details(
                         title, authors, fetch_with_log, log_func
@@ -242,6 +250,7 @@ class RomanceIO(Source):  # pylint: disable=abstract-method
                     log.info("Search completed but found no matching book")
             except (OSError, ValueError, RuntimeError) as e:
                 log.exception(f"Search failed with error: {type(e).__name__}: {e}")
+                return f"Romance.io search failed: {type(e).__name__}: {e}"
 
         if abort.is_set():
             return None
@@ -384,6 +393,7 @@ if __name__ == "__main__":
     )
 
     from common.test_data import TEST_BOOKS, verify_and_print_plugin
+    from common.metadata_live_checks import run_negative_identify, run_positive_identify
 
     def get_test_stats(results):
         """Calculate passed/failed counts from results list."""
@@ -551,7 +561,7 @@ if __name__ == "__main__":
             print(f"{'-'*80}")
 
             def run_test(q=query, exp=expected):
-                test_identify_plugin(RomanceIO.name, [(q, exp)])
+                run_positive_identify(test_identify_plugin, RomanceIO.name, [(q, exp)])
 
             success, needed_retry = run_test_with_retry(run_test, max_retries=MAX_RETRIES)
             test_results.append(success)
@@ -581,38 +591,11 @@ if __name__ == "__main__":
             print(f"{'-'*80}")
 
             def run_negative_test(q=query):
-                test_identify_plugin(RomanceIO.name, [(q, [])])
-                raise AssertionError("Expected no match but found results")
+                run_negative_identify(RomanceIO.name, q)
 
-            SUCCESS = False
-            for attempt in range(1, MAX_RETRIES + 1):
-                if attempt > 1:
-                    print(f"  > Retry attempt {attempt}/{MAX_RETRIES}")
-
-                try:
-                    run_negative_test()
-                    if attempt < MAX_RETRIES:
-                        print(f"\n  ✗ Expected no match but found results on attempt {attempt}, retrying after 2s...")
-                        time.sleep(2)
-                    else:
-                        SUCCESS = False
-                        break
-                except (SystemExit, AssertionError) as e:
-                    ERROR_MSG = str(e)
-                    if isinstance(e, SystemExit) or "No results" in ERROR_MSG or "no results" in ERROR_MSG.lower():
-                        SUCCESS = True
-                        if attempt > 1:
-                            NEGATIVE_RETRY_COUNT += 1
-                        break
-                    if attempt < MAX_RETRIES:
-                        print(f"\n  ✗ Unexpected error on attempt {attempt}, retrying after 2s...")
-                        time.sleep(2)
-                    else:
-                        SUCCESS = False
-                        break
-                except Exception:  # pylint: disable=broad-except
-                    SUCCESS = False
-                    break
+            SUCCESS, needed_retry = run_test_with_retry(run_negative_test, max_retries=MAX_RETRIES)
+            if needed_retry:
+                NEGATIVE_RETRY_COUNT += 1
 
             negative_test_results.append(SUCCESS)
             EXTRA_MSG = "Correctly found no match" if SUCCESS else "Expected no match but found results (or error)"

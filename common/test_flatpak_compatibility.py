@@ -1,17 +1,21 @@
 """Deterministic coverage for conservative Linux/Flatpak browser discovery."""
 
 import os
+import types
 from typing import List
 
 import pytest
 
 from common import run_installed_browser_smoke
+
 from common.common_romanceio_fetch_helper import (
     _browser_binary_is_runnable,
     _build_chrome_args,
     _fetch_page_in_process,
     _find_flatpak_chrome,
     browser_automation_unavailable_reason,
+    configure_browser_sandbox,
+    configure_legacy_uc_subprocess,
 )
 
 
@@ -159,6 +163,31 @@ def test_ci_window_argument_does_not_change_flatpak_sandboxing():
     assert "--no-sandbox" in args
     assert "--start-maximized" in args
     assert not any(arg.startswith("--window-position=") for arg in args)
+
+
+@pytest.mark.parametrize("inside_flatpak", (False, True))
+@pytest.mark.parametrize("version_info", ((3, 8), (3, 9), (3, 14)))
+def test_final_chrome_command_enforces_sandbox_and_preserves_legacy_stdio(inside_flatpak, version_info):
+    calls = []
+    subprocess_module = types.SimpleNamespace(PIPE=-1, DEVNULL=-3, Popen=lambda *a, **kw: calls.append((a, kw)))
+    undetected = types.SimpleNamespace(subprocess=subprocess_module)
+    configure_legacy_uc_subprocess(undetected, version_info)
+    configure_browser_sandbox(undetected, inside_flatpak)
+    command = ["chrome", "--no-sandbox", "--disable-setuid-sandbox", "--no-sandbox=true", "--user-data-dir=profile"]
+    undetected.subprocess.Popen(command, stdout=-1)
+    actual_command = calls[0][0][0]
+    assert actual_command == (command if inside_flatpak else ["chrome", "--user-data-dir=profile"])
+    assert calls[0][1]["stdout"] == (-1 if version_info == (3, 14) else -3)
+    assert len(command) == 5  # Do not mutate SeleniumBase's input.
+
+
+def test_final_chrome_command_rejects_uninspectable_shell_launch():
+    undetected = types.SimpleNamespace(
+        subprocess=types.SimpleNamespace(Popen=lambda *_a, **_kw: pytest.fail("launched"))
+    )
+    configure_browser_sandbox(undetected, False)
+    with pytest.raises(RuntimeError, match="explicit argument list"):
+        undetected.subprocess.Popen("chrome --no-sandbox", shell=True)
 
 
 def test_browser_smoke_managed_driver_does_not_require_runner_driver(monkeypatch):

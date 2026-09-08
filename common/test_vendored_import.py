@@ -29,6 +29,8 @@ import importlib.util
 from importlib import metadata
 import multiprocessing
 import os
+from pathlib import Path
+import subprocess
 import sys
 import threading
 import time
@@ -38,6 +40,7 @@ import zipfile
 import pytest
 
 from common import common_romanceio_fetch_helper as fetch_helper
+from common.test_installed_plugins import _assert_installed_origin as assert_installed_origin
 from common.common_romanceio_fetch_helper import (
     VENDORED_PACKAGES,
     VendoredModule,
@@ -46,6 +49,7 @@ from common.common_romanceio_fetch_helper import (
     clear_browser_vendor_modules,
     configure_browser_vendor_metadata,
     configure_browser_vendor_path,
+    configure_legacy_uc_subprocess,
     prepare_cached_chromedriver,
     prepare_uc_driver,
     record_driver_integrity,
@@ -59,6 +63,52 @@ from common.common_romanceio_fetch_helper import (
 _TEST_PKG = "_test_vendored_pkg"
 _TEST_PLUGIN = "_test_plugin"
 _ALIAS = f"calibre_plugins.{_TEST_PLUGIN}.{_TEST_PKG}"
+
+
+class _PluginMappingLoader(importlib.abc.Loader):
+    """Expose Calibre's plugin-origin mapping without loading any modules."""
+
+    def __init__(self, loaded_plugins):
+        self.loaded_plugins = loaded_plugins
+
+
+@pytest.mark.parametrize("plugin_name", ("romanceio", "romanceio_fields"))
+@pytest.mark.parametrize("child_name", ("", ".parse_html"))
+def test_installed_origin_accepts_legacy_loader_mapping(tmp_path, plugin_name, child_name):
+    plugin_path = str(tmp_path / f"{plugin_name}.zip")
+    module = types.ModuleType(f"calibre_plugins.{plugin_name}{child_name}")
+    module.__file__ = "<calibre Plugin Loader>"
+    module.__loader__ = _PluginMappingLoader({plugin_name: (plugin_path, {})})
+
+    assert_installed_origin(module, plugin_path)
+    with pytest.raises(AssertionError, match="did not load from its installed ZIP"):
+        assert_installed_origin(module, str(tmp_path / "different-plugin.zip"))
+
+
+@pytest.mark.parametrize("child_file", ("__init__.py", "parse_html.py"))
+def test_installed_origin_accepts_modern_virtual_path(tmp_path, child_file):
+    plugin_path = str(tmp_path / "Plugin.zip")
+    module = types.ModuleType("calibre_plugins.romanceio")
+    module.__file__ = os.path.join(plugin_path, child_file)
+    assert_installed_origin(module, plugin_path)
+
+
+@pytest.mark.parametrize("source", ("checkout", "prefix-sibling", "missing", "legacy-without-mapping"))
+def test_installed_origin_rejects_unverified_sources(tmp_path, source):
+    plugin_path = str(tmp_path / "Plugin.zip")
+    module = types.ModuleType("calibre_plugins.romanceio.parse_html")
+    if source == "legacy-without-mapping":
+        module.__file__ = "<calibre Plugin Loader>"
+    else:
+        # A loader mapping must not override a real checkout filename.
+        module.__loader__ = _PluginMappingLoader({"romanceio": (plugin_path, {})})
+        if source == "checkout":
+            module.__file__ = str(tmp_path / "checkout" / "parse_html.py")
+        elif source == "prefix-sibling":
+            module.__file__ = plugin_path + ".other/parse_html.py"
+
+    with pytest.raises(AssertionError, match="did not load from its installed ZIP"):
+        assert_installed_origin(module, plugin_path)
 
 
 def _prepare_cached_driver_in_process(stable_base, runtime_driver_path, start_event, ready_queue, result_queue):
@@ -214,6 +264,52 @@ def test_browser_vendor_source_finds_new_calibre_virtual_zip_path(tmp_path):
     )
 
     assert source == installed_zip
+
+
+def test_legacy_uc_subprocess_replaces_unconsumed_pipes_with_devnull():
+    """Legacy SeleniumBase must not block Chrome on full stdout/stderr pipes."""
+    pipe = object()
+    devnull = object()
+    calls = []
+
+    def popen(*args, **kwargs):
+        calls.append((args, kwargs))
+        return "process"
+
+    subprocess_module = types.SimpleNamespace(PIPE=pipe, DEVNULL=devnull, Popen=popen, SENTINEL="preserved")
+    undetected_module = types.SimpleNamespace(subprocess=subprocess_module)
+
+    assert configure_legacy_uc_subprocess(undetected_module, (3, 8)) is True
+    result = undetected_module.subprocess.Popen(
+        ["chrome"],
+        stdin=pipe,
+        stdout=pipe,
+        stderr=pipe,
+        close_fds=True,
+    )
+
+    assert result == "process"
+    assert undetected_module.subprocess.SENTINEL == "preserved"
+    assert calls == [
+        (
+            (["chrome"],),
+            {
+                "stdin": devnull,
+                "stdout": devnull,
+                "stderr": devnull,
+                "close_fds": True,
+            },
+        )
+    ]
+
+
+def test_current_uc_subprocess_is_not_modified():
+    """The already-correct current SeleniumBase branch remains untouched."""
+    subprocess_module = types.SimpleNamespace(Popen=lambda: None)
+    undetected_module = types.SimpleNamespace(subprocess=subprocess_module)
+
+    assert configure_legacy_uc_subprocess(undetected_module, (3, 11)) is False
+    assert undetected_module.subprocess is subprocess_module
 
 
 def test_vpf_intercepts_vendored_top_level_package():
@@ -379,7 +475,8 @@ def test_driver_cache_lock_timeout_does_not_touch_cache(tmp_path):
         )
 
 
-def test_driver_cache_recovers_from_corrupt_bytes(tmp_path):
+@pytest.mark.parametrize("corruption", ("driver", "checksum-text", "checksum-encoding"))
+def test_driver_cache_recovers_from_corrupt_bytes(tmp_path, corruption):
     stable_base = tmp_path / "stable"
     stable_base.mkdir()
     cached_driver = stable_base / "chromedriver"
@@ -387,7 +484,11 @@ def test_driver_cache_recovers_from_corrupt_bytes(tmp_path):
     runtime_driver.parent.mkdir()
     cached_driver.write_bytes(b"original driver")
     record_driver_integrity(str(cached_driver))
-    cached_driver.write_bytes(b"corrupt driver")
+    if corruption == "driver":
+        cached_driver.write_bytes(b"corrupt driver")
+    else:
+        checksum = stable_base / "chromedriver.sha256"
+        checksum.write_bytes(b"invalid checksum" if corruption == "checksum-text" else b"\xff" * 64)
     install_commands = []
 
     class ImmediateLock:
@@ -534,6 +635,119 @@ def test_driver_download_urls_reject_untrusted_origins(url):
         validate_driver_download_url(url)
 
 
+class _DownloadResponse:
+    def __init__(self, url, status_code=200, location=None):
+        self.url = url
+        self.status_code = status_code
+        self.headers = {} if location is None else {"Location": location}
+        self.closed = False
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+    def close(self):
+        self.closed = True
+
+
+def _download_installer(*responses):
+    pending = iter(responses)
+    calls = []
+
+    def get(url, **kwargs):
+        calls.append((url, kwargs))
+        assert kwargs.get("allow_redirects") is False
+        return next(pending)
+
+    installer = types.SimpleNamespace(
+        requests=types.SimpleNamespace(get=get),
+        get_proxy_info=lambda: (False, "http", None),
+    )
+    return installer, calls
+
+
+@pytest.mark.parametrize("status_code", (301, 302, 303, 307, 308))
+def test_driver_download_follows_validated_relative_and_cross_host_redirects(status_code):
+    start = "https://googlechromelabs.github.io/chrome-for-testing/start"
+    relative = "https://googlechromelabs.github.io/metadata"
+    final = "https://storage.googleapis.com/driver.zip"
+    responses = (
+        _DownloadResponse(start, status_code, "../metadata"),
+        _DownloadResponse(relative, status_code, "//storage.googleapis.com/driver.zip"),
+        _DownloadResponse(final),
+    )
+    installer, calls = _download_installer(*responses)
+
+    result = fetch_helper._secure_seleniumbase_request(installer, start, (1,))
+
+    assert result is responses[-1]
+    assert [url for url, _kwargs in calls] == [start, relative, final]
+    assert [response.closed for response in responses] == [True, True, False]
+
+
+@pytest.mark.parametrize(
+    "location",
+    (
+        "http://storage.googleapis.com/driver.zip",
+        "https://unapproved.example/driver.zip",
+        "//unapproved.example/driver.zip",
+        "https://user@storage.googleapis.com/driver.zip",
+        "https://storage.googleapis.com:444/driver.zip",
+    ),
+)
+def test_driver_download_rejects_redirect_before_contacting_destination(location):
+    start = "https://storage.googleapis.com/start"
+    redirect = _DownloadResponse(start, 302, location)
+    # If the unsafe intermediate hop were followed, it could redirect back to
+    # an approved final URL and evade a final-response-only check.
+    installer, calls = _download_installer(redirect, _DownloadResponse(start))
+
+    with pytest.raises(RuntimeError, match="Refusing"):
+        fetch_helper._secure_seleniumbase_request(installer, start, (1,))
+
+    assert [url for url, _kwargs in calls] == [start]
+    assert redirect.closed
+
+
+def test_driver_download_bounds_redirect_loops(monkeypatch):
+    monkeypatch.setattr(fetch_helper, "_MAX_DRIVER_DOWNLOAD_REDIRECTS", 2)
+    start = "https://storage.googleapis.com/start"
+    responses = [_DownloadResponse(start, 302, "/start") for _ in range(3)]
+    installer, calls = _download_installer(*responses)
+
+    with pytest.raises(RuntimeError, match="Too many ChromeDriver download redirects"):
+        fetch_helper._secure_seleniumbase_request(installer, start, (1,))
+
+    assert len(calls) == 3
+    assert all(response.closed for response in responses)
+
+
+def test_driver_download_rejects_redirect_without_location():
+    start = "https://storage.googleapis.com/start"
+    response = _DownloadResponse(start, 302)
+    installer, calls = _download_installer(response)
+
+    with pytest.raises(RuntimeError, match="no Location header"):
+        fetch_helper._secure_seleniumbase_request(installer, start, (1,))
+
+    assert len(calls) == 1
+    assert response.closed
+
+
+def test_driver_download_retries_http_failure_with_configured_timeout_and_proxy():
+    start = "https://storage.googleapis.com/start"
+    failed = _DownloadResponse(start, 503)
+    success = _DownloadResponse(start)
+    installer, calls = _download_installer(failed, success)
+    installer.get_proxy_info = lambda: (True, "https", "https://proxy.example")
+
+    assert fetch_helper._secure_seleniumbase_request(installer, start, (1, 2)) is success
+    assert [kwargs["timeout"] for _url, kwargs in calls] == [1, 2]
+    assert all(kwargs["proxies"] == {"https": "https://proxy.example"} for _url, kwargs in calls)
+    assert failed.closed
+    assert not success.closed
+
+
 def test_driver_integrity_record_detects_tampering(tmp_path):
     driver = tmp_path / "chromedriver"
     driver.write_bytes(b"trusted driver bytes")
@@ -573,7 +787,7 @@ def test_prepare_uc_driver_replaces_tampered_copy_and_records_exact_bytes(tmp_pa
 def test_installed_fetch_page_uses_isolated_calibre_worker(monkeypatch):
     requests = []
 
-    def fetch_in_worker(request, _log_func):
+    def fetch_in_worker(request, _log_func, _abort=None):
         requests.append(request)
         return "worker html"
 
@@ -599,6 +813,7 @@ def test_installed_fetch_page_uses_isolated_calibre_worker(monkeypatch):
     assert result == "worker html"
     assert requests == [
         {
+            "backend": "embedded",
             "url": "https://www.romance.io/books/example/",
             "plugin_name": "romanceio",
             "wait_for_element": "book-stats",
@@ -622,6 +837,101 @@ def test_worker_log_redaction_hides_home_and_temp_paths():
     assert "<temp>" in redacted
 
 
+@pytest.mark.parametrize("outcome", ("success", "timeout", "invalid-response"))
+def test_browser_worker_reaps_real_descendants_and_removes_parent_profile(tmp_path, monkeypatch, outcome):
+    """A worker exiting before Chrome must not orphan that browser or its profile."""
+    import psutil
+
+    real_mkdtemp = fetch_helper.tempfile.mkdtemp
+    monkeypatch.setattr(fetch_helper.tempfile, "mkdtemp", lambda **kw: real_mkdtemp(dir=str(tmp_path), **kw))
+    children = []
+    profiles = []
+    workers = []
+    marker = tmp_path / "child.pid"
+    script = (
+        "import subprocess, sys, time; from pathlib import Path; "
+        "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+        "Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(60)"
+    )
+
+    def create_job():
+        process = subprocess.Popen(
+            [sys.executable, "-c", script, str(marker)],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        workers.append(process)
+
+        def kill_worker():
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+
+        def run_job(_module, _function, args, heartbeat, no_output):
+            assert no_output
+            profiles.append(Path(args[0]["user_data_dir"]))
+            (profiles[-1] / "browser-data").write_bytes(b"temporary browser data")
+            deadline = time.monotonic() + 10
+            while not marker.exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            children.append(psutil.Process(int(marker.read_text())))
+            assert heartbeat()
+            # Reproduce Calibre terminating the worker before returning control.
+            kill_worker()
+            if outcome == "timeout":
+                raise RuntimeError("Worker appears to have hung")
+            if outcome == "invalid-response":
+                return {"result": None}
+            return {"result": {"page": "browser html", "logs": []}}
+
+        setattr(run_job, "worker", types.SimpleNamespace(pid=process.pid, kill=kill_worker))
+        return run_job
+
+    monkeypatch.setitem(
+        sys.modules, "calibre.utils.ipc.simple_worker", types.SimpleNamespace(two_part_fork_job=create_job)
+    )
+    try:
+        owner = psutil.Process()
+        result = fetch_helper._supervise_browser_worker(
+            {
+                "url": "https://example.invalid",
+                "plugin_name": "romanceio",
+                "transport_dir": str(tmp_path),
+                "worker_timeout": 30,
+                "owner_pid": owner.pid,
+                "owner_created": owner.create_time(),
+            }
+        )
+        assert result["page"] == ("browser html" if outcome == "success" else None)
+        if outcome != "success":
+            assert result["error_type"] == "BrowserFetchError"
+        assert profiles and not profiles[0].exists()
+        assert children and all(not process.is_running() for process in children)
+    finally:
+        for process in children:
+            if process.is_running():
+                process.kill()
+        for process in workers:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+
+
+def test_worker_heartbeat_captures_descendants_at_deadline(tmp_path, monkeypatch):
+    real_mkdtemp = fetch_helper.tempfile.mkdtemp
+    monkeypatch.setattr(fetch_helper.tempfile, "mkdtemp", lambda **kw: real_mkdtemp(dir=str(tmp_path), **kw))
+    resources = fetch_helper._BrowserWorkerResources(180, lambda _message: None)
+    scans = []
+    monkeypatch.setattr(resources, "_collect_descendants", lambda process: scans.append(process))
+    resources.next_scan = resources.deadline + 1
+    monkeypatch.setattr(fetch_helper.time, "monotonic", lambda: resources.deadline)
+    assert not resources.heartbeat()
+    assert scans == [None]
+    resources.close()
+
+
 @pytest.mark.parametrize("original_path", ("original-path-value", None))
 def test_fetch_page_restores_path_when_setup_fails(monkeypatch, original_path):
     """Temporary driver-path changes must not leak into Calibre's process."""
@@ -635,7 +945,10 @@ def test_fetch_page_restores_path_when_setup_fails(monkeypatch, original_path):
         raise RuntimeError("setup failed")
 
     monkeypatch.setattr(fetch_helper.tempfile, "mkdtemp", fail_after_mutating_path)
-    assert fetch_helper.fetch_page("https://example.invalid", _TEST_PLUGIN, log_func=lambda _message: None) is None
+    assert (
+        fetch_helper._fetch_page_in_process("https://example.invalid", _TEST_PLUGIN, log_func=lambda _message: None)
+        is None
+    )
 
     if original_path is None:
         assert "PATH" not in os.environ
@@ -648,7 +961,10 @@ def test_fetch_page_releases_import_lock_when_state_snapshot_fails(monkeypatch):
         raise RuntimeError("snapshot failed")
 
     monkeypatch.setattr(fetch_helper, "snapshot_browser_vendor_modules", fail_snapshot)
-    assert fetch_helper.fetch_page("https://example.invalid", _TEST_PLUGIN, log_func=lambda _message: None) is None
+    assert (
+        fetch_helper._fetch_page_in_process("https://example.invalid", _TEST_PLUGIN, log_func=lambda _message: None)
+        is None
+    )
 
     acquired = []
 
@@ -683,6 +999,25 @@ def test_nested_zip_distribution_metadata_is_discoverable(tmp_path):
         assert "browser_vendor/current" in str(distribution.locate_file("")).replace("\\", "/")
     finally:
         sys.meta_path[:] = original_meta_path
+
+
+def test_distribution_lookups_cache_metadata_and_preserve_branch_priority(tmp_path, monkeypatch):
+    zip_path = str(tmp_path / "plugin.zip")
+    with zipfile.ZipFile(zip_path, "w") as plugin_zip:
+        for branch, version in (("current", "2.0"), ("shared", "1.0")):
+            plugin_zip.writestr(
+                f"browser_vendor/{branch}/example_dist-{version}.dist-info/METADATA",
+                f"Metadata-Version: 2.1\nName: Example_Dist\nVersion: {version}\n",
+            )
+    finder = fetch_helper.BrowserVendorDistributionFinder(
+        zip_path, [zip_path + "/browser_vendor/current", zip_path + "/browser_vendor/shared"]
+    )
+    monkeypatch.setattr(zipfile, "ZipFile", lambda *_a, **_kw: pytest.fail("metadata lookup reopened the ZIP"))
+    for name in ("example-dist", "Example.Dist", "EXAMPLE_DIST"):
+        matches = list(finder.find_distributions(metadata.DistributionFinder.Context(name=name)))
+        assert [distribution.version for distribution in matches] == ["2.0", "1.0"]
+    assert len(list(finder.find_distributions())) == 2
+    assert list(finder.find_distributions(metadata.DistributionFinder.Context(name="missing"))) == []
 
 
 # ---------------------------------------------------------------------------
@@ -862,7 +1197,7 @@ def test_vpf_at_high_priority_with_broken_redirect_matches_python_import_behavio
 ):  # pylint: disable=redefined-outer-name
     """A legacy VPF blocks Python 3.11, but Python 3.12+ ignores ``find_module``.
 
-    Regression: this is what the user saw. VPF intercepts before zipimport can act,
+    Regression: a high-priority VPF intercepts before zipimport can act,
     load_module's calibre_plugins redirect fails, the fallback also fails, so the
     import errors even though the package is present in a zip on sys.path. Python
     3.12 removed the ``find_module`` fallback from ``sys.meta_path`` processing, so
@@ -908,3 +1243,143 @@ def test_fetch_page_strategy_bypasses_vpf_with_broken_redirect(vendored_zip):  #
         for _f in list(sys.meta_path):
             if isinstance(_f, VendoredPackageFinder):
                 sys.meta_path.remove(_f)
+
+
+@pytest.mark.parametrize("outcome", ("caller-killed", "deadline"))
+def test_supervisor_survives_caller_exit_and_reaps_browser(tmp_path, outcome):
+    """Kill the outer job, not just its child: cleanup must still execute."""
+    import psutil
+
+    script = tmp_path / "lifecycle.py"
+    script.write_text(
+        r"""import json, os, subprocess, sys, time, types
+from pathlib import Path
+import psutil
+from common import common_romanceio_fetch_helper as helper
+root = Path(sys.argv[2])
+flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+if sys.argv[1] == "caller":
+    owner = psutil.Process()
+    child = subprocess.Popen([sys.executable, __file__, "supervisor", str(root), str(owner.pid), str(owner.create_time()), sys.argv[3]], creationflags=flags)
+    (root / "supervisor.pid").write_text(str(child.pid))
+    time.sleep(60)
+else:
+    request = {"owner_pid": int(sys.argv[3]), "owner_created": float(sys.argv[4]),
+               "transport_dir": str(root / "transport"), "worker_timeout": float(sys.argv[5])}
+    def create_job():
+        code = "import subprocess, sys, time; from pathlib import Path; child=subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(60)"
+        process = subprocess.Popen([sys.executable, "-c", code, str(root / "browser.pid")], creationflags=flags)
+        (root / "worker.pid").write_text(str(process.pid))
+        def kill():
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+        def run(_module, _function, args, heartbeat, no_output):
+            (root / "profile").write_text(args[0]["user_data_dir"])
+            helper._write_browser_log(request, "Navigation started, still waiting")
+            while heartbeat():
+                time.sleep(.02)
+            raise RuntimeError("worker stopped")
+        run.worker = types.SimpleNamespace(pid=process.pid, kill=kill)
+        return run
+    sys.modules["calibre.utils.ipc.simple_worker"] = types.SimpleNamespace(two_part_fork_job=create_job)
+    result = helper._supervise_browser_worker(request)
+    temporary = root / "result.tmp"
+    temporary.write_text(json.dumps(result), encoding="utf-8")
+    os.replace(temporary, root / "result.json")
+""",
+        encoding="utf-8",
+    )
+    transport = tmp_path / "transport"
+    transport.mkdir()
+    env = os.environ.copy()
+    env["PYTHONPATH"] = os.pathsep.join((str(Path(__file__).resolve().parent.parent), env.get("PYTHONPATH", "")))
+    caller = subprocess.Popen(
+        [sys.executable, str(script), "caller", str(tmp_path), "60" if outcome == "caller-killed" else "2"],
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+    )
+    tracked = []
+    try:
+        deadline = time.monotonic() + 10
+        while not (tmp_path / "browser.pid").exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        for name in ("supervisor", "worker", "browser"):
+            tracked.append(psutil.Process(int((tmp_path / f"{name}.pid").read_text())))
+        # Progress must be visible before the browser returns or gets cancelled.
+        assert "Navigation started" in (transport / "progress.jsonl").read_text()
+        if outcome == "caller-killed":
+            caller.kill()
+            caller.wait(timeout=5)
+        deadline = time.monotonic() + 15
+        while not (tmp_path / "result.json").exists() and time.monotonic() < deadline:
+            time.sleep(0.02)
+        import json
+
+        result = json.loads((tmp_path / "result.json").read_text())
+        assert result["error_type"] == "BrowserFetchError"
+        assert ("cancelled" if outcome == "caller-killed" else "time limit") in result["error_message"]
+        assert not Path((tmp_path / "profile").read_text()).exists()
+        assert all(not process.is_running() for process in tracked[1:])
+        if outcome == "caller-killed":
+            assert not transport.exists()
+    finally:
+        if caller.poll() is None:
+            caller.kill()
+        caller.wait(timeout=5)
+        for process in tracked:
+            try:
+                process.kill()
+            except psutil.NoSuchProcess:
+                pass
+
+
+@pytest.mark.parametrize("no_window_flag", (0, 0x08000000))
+def test_driver_version_probe_does_not_create_a_console(monkeypatch, no_window_flag):
+    calls = []
+    monkeypatch.setattr(fetch_helper.subprocess, "CREATE_NO_WINDOW", no_window_flag, raising=False)
+
+    def run(command, **kwargs):
+        calls.append((command, kwargs))
+        return types.SimpleNamespace(returncode=0, stdout="ChromeDriver 152.0.7977.82")
+
+    monkeypatch.setattr(fetch_helper.subprocess, "run", run)
+    assert fetch_helper._executable_major_version("driver cache/chromedriver.exe") == 152
+    command, options = calls[0]
+    assert command == ["driver cache/chromedriver.exe", "--version"]
+    assert options["creationflags"] == no_window_flag
+    assert options["stdin"] == subprocess.DEVNULL
+    assert options["stdout"] == subprocess.PIPE
+    assert options["timeout"] == 5
+    assert not options.get("shell")
+
+
+def test_repeated_browser_setup_restores_colorama_streams_and_exception_hook(monkeypatch):
+    import io
+    from colorama.ansitowin32 import AnsiToWin32
+
+    monkeypatch.setattr(sys, "stdout", io.StringIO())
+    monkeypatch.setattr(sys, "stderr", io.StringIO())
+    original = sys.stdout, sys.stderr, sys.excepthook
+
+    def fail_after_import_side_effects(_plugin):
+        # SeleniumBase.__init__ calls colorama.init(autoreset=True), which
+        # creates these wrappers even on Linux when CI output is piped.
+        sys.stdout = AnsiToWin32(sys.stdout, autoreset=True).stream
+        sys.stderr = AnsiToWin32(sys.stderr, autoreset=True).stream
+        sys.excepthook = lambda *_args: None
+        raise RuntimeError("Browser setup failed after import")
+
+    monkeypatch.setattr(fetch_helper, "snapshot_browser_vendor_modules", fail_after_import_side_effects)
+    for _ in range(400):
+        assert (
+            fetch_helper._fetch_page_in_process("https://example.invalid", _TEST_PLUGIN, log_func=lambda _message: None)
+            is None
+        )
+        assert sys.stdout is original[0]
+        assert sys.stderr is original[1]
+        assert sys.excepthook is original[2]
+        sys.stdout.write("Next lookup is still able to log\n")

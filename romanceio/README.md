@@ -18,10 +18,10 @@ The stored `romanceio` identifier is the key that the companion [Romance.io Fiel
 
 **Preferences > Metadata download > Romance.io > Configure selected source**
 
-- **Get tags directly from website (slower but includes additional community tags)** - When checked, the plugin tries Chrome first to fetch the full set of community-voted tags that only appear after JavaScript runs. If that attempt fails, it continues with lightweight HTTP and then the legacy JSON details endpoint; Chrome is not retried. Leave unchecked (default) to use lightweight HTTP first, then Chrome, then legacy JSON.
+- **Get tags directly from website (slower but includes additional community tags)** - With this option checked, the plugin tries Chrome first. Unchecked, it first tries to download the book’s details and tags without a browser, then uses a browser if needed.
 
   > **Why do my tags look different from what I see on romance.io?**
-  > Romance.io displays two layers of tags: a core set (tropes, genres, etc.) available in the server-rendered page, and additional community-voted tags injected after JavaScript runs. The default lightweight HTTP fetch retrieves the core set. To get the community tags too, enable this option - but be aware it requires Chrome and is slower since a browser window will have to open for each book.
+  > The website's fuller tag lists can already be present in the HTML returned over HTTP; they do not necessarily require JavaScript. This setting retains Chrome-first fetching. Browser rendering takes longer per book and Chrome may open a window.
 
 - **Romance.io tag to Calibre tag mappings** - Controls how Romance.io tags are imported into Calibre's Tags field. Use the green "+" and red "-" buttons to add or remove mappings. Create one row for each Romance.io tag you want to map to one or more Calibre tags. The text you enter for the Romance.io tag must match how the tag looks on the website exactly. Any Romance.io tags that are not mapped will be ignored.
 
@@ -87,17 +87,9 @@ calibre-debug test_search_parity.py -- --live=all               # JSON search vs
 
 ![Calibre "Edit metadata" menu emphasizing the "Ids" field where users can manually enter the Romance.io ID](../images/Edit%20metadata%20-%20set%20ID.png)
 
-**Chrome is not installed ("Chrome is not installed - HTML metadata fallback is unavailable"):**
-- The plugin uses JSON search first. For book details it tries lightweight HTTP, then Chrome, with the legacy JSON details route last
-- Without Chrome, most books still download fine via the JSON API or lightweight HTTP fetch
-- Install Chrome from [google.com/chrome](https://www.google.com/chrome/) if you see this warning or downloads are failing
-- **Calibre installed as a Flatpak:** JSON search and lightweight webpage downloads still work. A Chrome/Chromium app installed as a separate Flatpak depends on its own `/app` runtime and cannot be used as Selenium's browser executable. The plugin ignores app launchers that cannot execute directly and continues with non-browser fallbacks. Use a native Chrome binary visible to Calibre if you need the browser fallback.
-- **Linux ARM64:** Chrome for Testing does not publish a compatible Linux ARM ChromeDriver. The plugin skips browser setup and continues with JSON/lightweight metadata, but browser-only community tags are unavailable.
-
-**Browser/chromedriver errors:**
-- Ensure Chrome is installed ([google.com/chrome](https://www.google.com/chrome/))
-- Check your internet connection
-- Check logs for errors
+**Cloudflare or browser errors:**
+- Check the download job log for the failed access method, error, or timeout. Cloudflare can reject both HTTP and browser requests.
+- Chrome is optional for HTTP and Calibre's built-in engine, but must be installed to use the Chrome fallback. See the [main README's browser requirements](../README.md#notes) for platform restrictions.
 
 ## Support
 
