@@ -3,7 +3,7 @@ six==1.17.0
 seleniumbase==4.52.4
 selenium==4.47.0
 fake-useragent==2.2.0
-psutil==7.1.3
+psutil==7.2.2
 fasteners==0.20  # Driver-cache regression tests
 
 # Development tools
