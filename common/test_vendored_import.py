@@ -838,7 +838,10 @@ def test_worker_log_redaction_hides_home_and_temp_paths():
 
 
 @pytest.mark.parametrize("outcome", ("success", "timeout", "invalid-response"))
-def test_browser_worker_reaps_real_descendants_and_removes_parent_profile(tmp_path, monkeypatch, outcome):
+@pytest.mark.parametrize("capture_output", (False, True))
+def test_browser_worker_reaps_real_descendants_and_removes_parent_profile(
+    tmp_path, monkeypatch, outcome, capture_output
+):
     """A worker exiting before Chrome must not orphan that browser or its profile."""
     import psutil
 
@@ -848,6 +851,7 @@ def test_browser_worker_reaps_real_descendants_and_removes_parent_profile(tmp_pa
     profiles = []
     workers = []
     marker = tmp_path / "child.pid"
+    native_log = tmp_path / "native.log"
     script = (
         "import subprocess, sys, time; from pathlib import Path; "
         "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
@@ -870,7 +874,9 @@ def test_browser_worker_reaps_real_descendants_and_removes_parent_profile(tmp_pa
             process.wait(timeout=5)
 
         def run_job(_module, _function, args, heartbeat, no_output):
-            assert no_output
+            assert no_output is not capture_output
+            if not no_output:
+                native_log.write_text("Native crash diagnostic", encoding="utf-8")
             profiles.append(Path(args[0]["user_data_dir"]))
             (profiles[-1] / "browser-data").write_bytes(b"temporary browser data")
             deadline = time.monotonic() + 10
@@ -886,7 +892,7 @@ def test_browser_worker_reaps_real_descendants_and_removes_parent_profile(tmp_pa
                 return {"result": None}
             return {"result": {"page": "browser html", "logs": []}}
 
-        setattr(run_job, "worker", types.SimpleNamespace(pid=process.pid, kill=kill_worker))
+        setattr(run_job, "worker", types.SimpleNamespace(pid=process.pid, kill=kill_worker, log_path=str(native_log)))
         return run_job
 
     monkeypatch.setitem(
@@ -902,6 +908,7 @@ def test_browser_worker_reaps_real_descendants_and_removes_parent_profile(tmp_pa
                 "worker_timeout": 30,
                 "owner_pid": owner.pid,
                 "owner_created": owner.create_time(),
+                "capture_worker_output": capture_output,
             }
         )
         assert result["page"] == ("browser html" if outcome == "success" else None)
@@ -909,6 +916,9 @@ def test_browser_worker_reaps_real_descendants_and_removes_parent_profile(tmp_pa
             assert result["error_type"] == "BrowserFetchError"
         assert profiles and not profiles[0].exists()
         assert children and all(not process.is_running() for process in children)
+        assert not native_log.exists()
+        progress = (tmp_path / "progress.jsonl").read_text(encoding="utf-8")
+        assert ("Native crash diagnostic" in progress) is (capture_output and outcome != "success")
     finally:
         for process in children:
             if process.is_running():
@@ -917,6 +927,27 @@ def test_browser_worker_reaps_real_descendants_and_removes_parent_profile(tmp_pa
             if process.poll() is None:
                 process.kill()
             process.wait(timeout=5)
+
+
+def test_native_worker_diagnostics_are_bounded_redacted_and_removed(tmp_path):
+    native_log = tmp_path / "native.log"
+    native_log.write_bytes(
+        b"discard this prefix" + b"x" * 20000 + os.path.expanduser("~").encode() + b"\xff\nFatal Qt error"
+    )
+    logs: list[str] = []
+    fetch_helper._finish_browser_worker_output(str(native_log), True, logs.append)
+    assert len(logs) == 1
+    assert "discard this prefix" not in logs[0]
+    assert os.path.expanduser("~").lower() not in logs[0].lower()
+    assert logs[0].endswith("Fatal Qt error")
+    assert len(logs[0]) < 16500
+    assert not native_log.exists()
+
+
+def test_missing_native_worker_output_does_not_mask_failure(tmp_path):
+    logs: list[str] = []
+    fetch_helper._finish_browser_worker_output(str(tmp_path / "missing.log"), True, logs.append)
+    assert logs == ["Could not read browser worker native output: FileNotFoundError"]
 
 
 def test_worker_heartbeat_captures_descendants_at_deadline(tmp_path, monkeypatch):

@@ -96,3 +96,36 @@ def test_existing_chrome_first_preference(monkeypatch):
     monkeypatch.setattr(helper, "_fetch_page_via_calibre_worker", fetch)
     assert helper.fetch_page("https://www.romance.io", "romanceio", prefer_chrome=True) == "Rendered details"
     assert calls == ["chrome", "embedded"]
+
+
+@pytest.mark.parametrize("backend", ("embedded", "chrome"))
+def test_smoke_accepts_only_expected_challenge_failure(backend):
+    from common.run_installed_browser_smoke import _verify_challenge_failure
+
+    if backend == "embedded":
+        message = "Embedded web engine timed out waiting for validated content or Cloudflare clearance"
+        logs = []
+    else:
+        message = "Browser did not return a page; see the preceding browser log"
+        logs = ["Chrome error: BrowserFetchError: Chrome did not return validated content within its navigation budget"]
+    _verify_challenge_failure(RuntimeError(message), backend, logs)
+
+
+@pytest.mark.parametrize("backend", ("embedded", "chrome"))
+@pytest.mark.parametrize("message", ("Browser worker failed", "Embedded web engine renderer exited unexpectedly"))
+def test_smoke_rejects_native_crash_as_challenge_failure(backend, message):
+    from common.run_installed_browser_smoke import _verify_challenge_failure
+
+    with pytest.raises(AssertionError, match="Challenge lookup failed unexpectedly"):
+        _verify_challenge_failure(RuntimeError(message), backend, [])
+
+
+def test_smoke_rejects_chrome_setup_failure():
+    from common.run_installed_browser_smoke import _verify_challenge_failure
+
+    with pytest.raises(AssertionError, match="Challenge lookup failed unexpectedly"):
+        _verify_challenge_failure(
+            RuntimeError("Browser did not return a page; see the preceding browser log"),
+            "chrome",
+            ["Chrome error: SessionNotCreatedException: Driver failed to start"],
+        )

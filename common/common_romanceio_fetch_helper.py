@@ -1720,6 +1720,28 @@ def _browser_owner_alive(request: Dict[str, Any]) -> bool:
         return False
 
 
+def _finish_browser_worker_output(log_path: Optional[str], failed: bool, log: Callable) -> None:
+    """Report bounded native diagnostics for opted-in smoke tests, then remove them."""
+    if not log_path:
+        return
+    try:
+        if failed:
+            with open(log_path, "rb") as stream:
+                size = stream.seek(0, os.SEEK_END)
+                stream.seek(max(0, size - 16384))
+                output = stream.read(16384).decode("utf-8", errors="replace").strip()
+            log(_redact_log_text("Browser worker native output (last 16 KiB):\n" + (output or "(empty)")))
+    except OSError as error:
+        log(f"Could not read browser worker native output: {type(error).__name__}")
+    finally:
+        try:
+            os.remove(log_path)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            log(f"Could not remove browser worker native output: {type(error).__name__}")
+
+
 def _supervise_browser_worker(request: Dict[str, Any]) -> Dict[str, Any]:
     """Remain alive after Calibre cancels the caller, then reap its browser tree.
 
@@ -1733,6 +1755,11 @@ def _supervise_browser_worker(request: Dict[str, Any]) -> Dict[str, Any]:
 
     resources = _BrowserWorkerResources(request["worker_timeout"], log)
     reason = "Browser worker failed"
+    # Only the local smoke harness opts in. Normal website fetches continue to
+    # discard native output, which may contain untrusted page diagnostics.
+    capture_output = bool(request.get("capture_worker_output"))
+    native_log_path = None
+    failed = True
 
     def heartbeat() -> bool:
         nonlocal reason
@@ -1750,24 +1777,32 @@ def _supervise_browser_worker(request: Dict[str, Any]) -> Dict[str, Any]:
             return {"page": None, "error_type": "BrowserFetchError", "error_message": "Caller exited"}
         log(f"Browser time limit: {request['worker_timeout']:g}s including setup, navigation, and shutdown")
         run_job = two_part_fork_job()
+        if capture_output:
+            native_log_path = run_job.worker.log_path
         resources.watch(run_job.worker)
         response = run_job(
             __name__,
             "_fetch_page_worker",
             args=({**request, "user_data_dir": resources.profile},),
             heartbeat=heartbeat,
-            no_output=True,
+            no_output=not capture_output,
         )["result"]
         if not isinstance(response, dict):
             raise BrowserFetchError("Browser worker returned an invalid response")
+        failed = bool(response.get("error_type")) or not response.get("page")
         return response
     except Exception as error:  # pylint: disable=broad-except
         log(f"{reason}: {type(error).__name__}: {error}")
+        if capture_output and resources.worker is not None:
+            log(f"Browser worker exit code before cleanup: {getattr(resources.worker, 'returncode', None)}")
         return {"page": None, "error_type": "BrowserFetchError", "error_message": reason}
     finally:
-        resources.close()
-        if not _browser_owner_alive(request):
-            shutil.rmtree(request["transport_dir"], ignore_errors=True)
+        try:
+            resources.close()
+        finally:
+            _finish_browser_worker_output(native_log_path, failed, log)
+            if not _browser_owner_alive(request):
+                shutil.rmtree(request["transport_dir"], ignore_errors=True)
 
 
 def _fetch_page_via_calibre_worker(

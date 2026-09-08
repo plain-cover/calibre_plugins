@@ -103,6 +103,20 @@ def _verify_flatpak_chrome(helper):
     return chrome_path
 
 
+def _verify_challenge_failure(error, backend, logs):
+    """A native crash or setup failure does not exercise challenge recovery."""
+    if backend == "embedded":
+        expected = "Embedded web engine timed out waiting for validated content or Cloudflare clearance"
+        assert str(error) == expected, f"Challenge lookup failed unexpectedly: {error}"
+    else:
+        expected = (
+            "Chrome error: BrowserFetchError: Chrome did not return validated content within its navigation budget"
+        )
+        assert (
+            str(error) == "Browser did not return a page; see the preceding browser log" and expected in logs
+        ), f"Challenge lookup failed unexpectedly: {error}"
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plugin", choices=sorted(PLUGINS))
@@ -168,7 +182,7 @@ def main():
         if backend == "embedded" and args.chrome_fallback:
             raise helper.BrowserFetchError("TEST: simulated embedded-engine failure")
         assert backend == args.backend or args.chrome_fallback, "Unexpected browser fallback in backend-only test"
-        return real_fetch(request, log, abort)
+        return real_fetch({**request, "capture_worker_output": True}, log, abort)
 
     _LocalPageHandler.body = html.encode("utf-8")
     server = _QuietHTTPServer(("127.0.0.1", 0), _LocalPageHandler)
@@ -219,15 +233,23 @@ def main():
             local_url = f"http://127.0.0.1:{server.server_port}/json/search_books?search=test"
         with patch.object(helper, "_fetch_page_via_calibre_worker", checked_fetch):
             if args.failure_first:
+                challenge_logs = []
+
+                def challenge_log(message):
+                    challenge_logs.append(message)
+                    print(message)
+
                 try:
                     helper.fetch_page(
                         f"http://127.0.0.1:{server.server_port}/challenge",
                         args.plugin,
                         max_wait=2,
-                        log_func=print,
+                        log_func=challenge_log,
                         backend=args.backend,
                     )
-                except helper.BrowserFetchError:
+                except helper.BrowserFetchError as error:
+                    _verify_challenge_failure(error, args.backend, challenge_logs)
+                    assert "/challenge" in _LocalPageHandler.paths, "Browser never requested the challenge fixture"
                     print("PASS: challenge failed explicitly; testing subsequent lookups in the same caller")
                 else:
                     raise AssertionError("Challenge was incorrectly accepted")
