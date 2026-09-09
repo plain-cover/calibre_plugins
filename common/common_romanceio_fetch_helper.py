@@ -1020,12 +1020,17 @@ def _build_chrome_args(user_data_dir: str, inside_flatpak: bool, in_ci: bool) ->
 
 
 class _LegacyUcSubprocessProxy:
-    """Use current SeleniumBase's quiet Chrome stdio behavior on legacy branches."""
+    """Use current SeleniumBase's quiet browser/driver stdio on legacy branches."""
 
     def __init__(self, subprocess_module: Any):
         self._subprocess_module = subprocess_module
 
     def __getattr__(self, name: str) -> Any:
+        # Legacy UC also passes subprocess.PIPE to Selenium's Service, which
+        # launches ChromeDriver through a different module's Popen. Redirect
+        # that handle at its source; intercepting UC's Popen alone misses it.
+        if name == "PIPE":
+            return self._subprocess_module.DEVNULL
         return getattr(self._subprocess_module, name)
 
     def Popen(self, *args: Any, **kwargs: Any) -> Any:  # pylint: disable=invalid-name
@@ -1631,17 +1636,27 @@ def _fetch_page_worker(request: Dict[str, Any]) -> Dict[str, Any]:
         from .common_romanceio_webengine import fetch_page as fetch_embedded_page
 
         if request.get("backend") == "chrome":
-            page = _fetch_page_in_process(
-                request["url"],
-                request["plugin_name"],
-                wait_for_element=request.get("wait_for_element"),
-                not_found_marker=request.get("not_found_marker"),
-                secondary_wait_element=request.get("secondary_wait_element"),
-                max_wait=request.get("max_wait", 30),
-                log_func=log,
-                user_data_dir=request.get("user_data_dir"),
-                search_fallback_url=request.get("search_fallback_url"),
-            )
+            try:
+                from calibre.constants import sanitize_env_vars
+            except ImportError:
+                from calibre.gui2 import sanitize_env_vars
+
+            # Chrome and ChromeDriver are external binaries: Calibre's bundled
+            # libraries can crash them before a WebDriver session is created.
+            # Cover version probes, launch, and reconnect in this disposable
+            # worker only; the embedded Qt worker needs Calibre's environment.
+            with sanitize_env_vars():
+                page = _fetch_page_in_process(
+                    request["url"],
+                    request["plugin_name"],
+                    wait_for_element=request.get("wait_for_element"),
+                    not_found_marker=request.get("not_found_marker"),
+                    secondary_wait_element=request.get("secondary_wait_element"),
+                    max_wait=request.get("max_wait", 30),
+                    log_func=log,
+                    user_data_dir=request.get("user_data_dir"),
+                    search_fallback_url=request.get("search_fallback_url"),
+                )
         else:
             page = fetch_embedded_page(request, log)
         return {"page": page, "logs": logs, "error_type": None, "error_message": None}

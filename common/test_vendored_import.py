@@ -289,6 +289,9 @@ def test_legacy_uc_subprocess_replaces_unconsumed_pipes_with_devnull():
     )
 
     assert result == "process"
+    # Service receives this value but launches through Selenium's own Popen.
+    assert undetected_module.subprocess.PIPE is devnull
+    assert subprocess_module.PIPE is pipe
     assert undetected_module.subprocess.SENTINEL == "preserved"
     assert calls == [
         (
@@ -310,6 +313,56 @@ def test_current_uc_subprocess_is_not_modified():
 
     assert configure_legacy_uc_subprocess(undetected_module, (3, 11)) is False
     assert undetected_module.subprocess is subprocess_module
+
+
+@pytest.mark.parametrize("version", [(3, 8), (3, 9)])
+def test_legacy_driver_output_cannot_fill_an_unread_pipe(version):
+    undetected_module = types.SimpleNamespace(subprocess=subprocess)
+    configure_legacy_uc_subprocess(undetected_module, version)
+    # Model Selenium Service: a different module launches with UC's log_output.
+    # Enough output to fill a pipe must not prevent the process from finishing.
+    with subprocess.Popen(
+        [sys.executable, "-c", "import os; os.write(1, b'x' * 1048576); os.write(2, b'x' * 1048576)"],
+        stdout=undetected_module.subprocess.PIPE,
+        stderr=undetected_module.subprocess.PIPE,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    ) as process:
+        try:
+            assert process.wait(timeout=5) == 0
+        finally:
+            if process.poll() is None:
+                process.kill()
+
+
+def test_lifecycle_tracks_renderer_when_macos_denies_command_line(capsys):
+    import psutil
+    from common.run_installed_browser_lifecycle import _observe_process
+
+    class Renderer:
+        pid = 123
+
+        def children(self, recursive):
+            assert recursive
+            return [child]
+
+        def name(self):
+            return "QtWebEngineProcess"
+
+        def cmdline(self):
+            raise psutil.AccessDenied(self.pid)
+
+    child = object()
+    renderer = Renderer()
+    tracked = {renderer}
+    names: set[str] = set()
+    profiles: set[Path] = set()
+    unreadable: set[Renderer] = set()
+    for _ in range(2):
+        _observe_process(renderer, tracked, names, profiles, unreadable)
+    assert tracked == {renderer, child}
+    assert names == {"qtwebengineprocess"}
+    assert unreadable == {renderer}
+    assert capsys.readouterr().out.count("still checking its exit") == 1
 
 
 def test_vpf_intercepts_vendored_top_level_package():
@@ -1478,3 +1531,41 @@ def test_worker_stack_diagnostics_are_opt_in_and_cancelled_on_failure(monkeypatc
     result = fetch_helper._fetch_page_worker({"capture_worker_output": capture})
     assert result["error_message"] == "renderer setup failed"
     assert calls == (["enable", ((20,), {"repeat": True}), "cancel"] if capture else [])
+
+
+@pytest.mark.parametrize("legacy", (False, True))
+@pytest.mark.parametrize("fail", (False, True))
+def test_chrome_worker_sanitizes_environment_and_restores_it(monkeypatch, legacy, fail):
+    from contextlib import contextmanager
+
+    monkeypatch.setenv("LD_LIBRARY_PATH", "/calibre/lib:/custom/lib")
+    calls = []
+
+    @contextmanager
+    def sanitize():
+        previous = os.environ["LD_LIBRARY_PATH"]
+        os.environ["LD_LIBRARY_PATH"] = "/custom/lib"
+        calls.append("sanitize")
+        try:
+            yield
+        finally:
+            os.environ["LD_LIBRARY_PATH"] = previous
+
+    constants = types.SimpleNamespace() if legacy else types.SimpleNamespace(sanitize_env_vars=sanitize)
+    monkeypatch.setitem(sys.modules, "calibre.constants", constants)
+    monkeypatch.setitem(sys.modules, "calibre.gui2", types.SimpleNamespace(sanitize_env_vars=sanitize))
+
+    def fetch(*_args, **_kwargs):
+        assert os.environ["LD_LIBRARY_PATH"] == "/custom/lib"
+        if fail:
+            raise RuntimeError("Chrome launch failed")
+        return "validated page"
+
+    monkeypatch.setattr(fetch_helper, "_fetch_page_in_process", fetch)
+    result = fetch_helper._fetch_page_worker(
+        {"backend": "chrome", "url": "http://127.0.0.1/fixture", "plugin_name": "romanceio_fields"}
+    )
+    assert calls == ["sanitize"]
+    assert os.environ["LD_LIBRARY_PATH"] == "/calibre/lib:/custom/lib"
+    assert result["error_message"] == ("Chrome launch failed" if fail else None)
+    assert result["page"] == (None if fail else "validated page")

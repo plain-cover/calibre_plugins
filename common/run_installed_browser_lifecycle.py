@@ -13,6 +13,29 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from typing import Set
+
+
+def _observe_process(process, tracked, process_names, profiles, unreadable):
+    import psutil
+
+    try:
+        tracked.update(process.children(recursive=True))
+        process_names.add(process.name().lower())
+    except psutil.NoSuchProcess:
+        return
+    try:
+        for arg in process.cmdline():
+            if arg.startswith("--user-data-dir="):
+                profiles.add(Path(arg.split("=", 1)[1]))
+    except psutil.NoSuchProcess:
+        pass
+    except psutil.AccessDenied:
+        # macOS may deny KERN_PROCARGS2 for a sandboxed Qt renderer. Its
+        # identity remains tracked and it must still exit before this passes.
+        if process not in unreadable:
+            print(f"Command-line inspection unavailable for PID {process.pid}; still checking its exit", flush=True)
+            unreadable.add(process)
 
 
 def main():
@@ -55,13 +78,19 @@ def main():
         "owner_pid": owner.pid,
         "owner_created": owner.create_time(),
     }
+    # Calibre shares its private temporary directory with forked workers.
+    # Observe supervisor-owned profiles here even if Qt's cmdline is unreadable
+    # (the off-the-record embedded profile has no --user-data-dir argument).
+    profile_root = Path(tempfile.gettempdir())
+    existing_profiles = set(profile_root.glob("calibre_sb_*"))
     run_job = two_part_fork_job()
     outer = psutil.Process(run_job.worker.pid)
     tracked = set()
     results = []
     errors = []
-    profiles = set()
-    process_names = set()
+    profiles: Set[Path] = set()
+    unreadable: Set[psutil.Process] = set()
+    process_names: Set[str] = set()
     output = ""
 
     def run():
@@ -85,14 +114,12 @@ def main():
             except psutil.NoSuchProcess:
                 pass
             for process in list(tracked):
-                try:
-                    tracked.update(process.children(recursive=True))
-                    process_names.add(process.name().lower())
-                    for arg in process.cmdline():
-                        if arg.startswith("--user-data-dir="):
-                            profiles.add(arg.split("=", 1)[1])
-                except psutil.NoSuchProcess:
-                    pass
+                _observe_process(process, tracked, process_names, profiles, unreadable)
+            profiles.update(
+                path
+                for path in profile_root.glob("calibre_sb_*")
+                if path not in existing_profiles and not path.name.startswith("calibre_sb_log_")
+            )
             log_path = Path(run_job.worker.log_path) if args.mode == "cancel" else Path(transport) / "progress.jsonl"
             if log_path.exists():
                 output = log_path.read_text(encoding="utf-8", errors="replace")
@@ -122,7 +149,9 @@ def main():
             raise AssertionError("Outer job did not finish")
         if not (all(not process.is_running() for process in tracked)):
             raise AssertionError("Browser descendants survived")
-        if not (all(not os.path.exists(profile) for profile in profiles)):
+        if not profiles:
+            raise AssertionError("No supervisor-owned browser profile observed")
+        if not (all(not profile.exists() for profile in profiles)):
             raise AssertionError("Browser profile survived cleanup")
         if args.mode == "cancel":
             if not (cancelled and errors):
