@@ -1016,16 +1016,61 @@ def test_browser_worker_reaps_real_descendants_and_removes_parent_profile(
 def test_native_worker_diagnostics_are_bounded_redacted_and_removed(tmp_path):
     native_log = tmp_path / "native.log"
     native_log.write_bytes(
-        b"discard this prefix" + b"x" * 20000 + os.path.expanduser("~").encode() + b"\xff\nFatal Qt error"
+        b"Chrome failed at startup" + b"x" * 50000 + os.path.expanduser("~").encode() + b"\xff\nFinal worker stack"
     )
     logs: list[str] = []
     fetch_helper._finish_browser_worker_output(str(native_log), True, logs.append)
     assert len(logs) == 1
-    assert "discard this prefix" not in logs[0]
+    assert "Chrome failed at startup" in logs[0]
+    assert "middle of log omitted" in logs[0]
     assert os.path.expanduser("~").lower() not in logs[0].lower()
-    assert logs[0].endswith("Fatal Qt error")
-    assert len(logs[0]) < 16500
+    assert logs[0].endswith("Final worker stack")
+    assert len(logs[0]) < 33000
     assert not native_log.exists()
+
+
+@pytest.mark.parametrize("size", (0, 100, 16384, 20000, 32768))
+def test_native_worker_diagnostics_preserve_short_logs_without_duplication(tmp_path, size):
+    native_log = tmp_path / "native.log"
+    native_log.write_bytes(b"x" * size)
+    logs: list[str] = []
+    fetch_helper._finish_browser_worker_output(str(native_log), True, logs.append)
+    output = logs[0].split("\n", 1)[1]
+    assert output == ("x" * size if size else "(empty)")
+    assert not native_log.exists()
+
+
+@pytest.mark.parametrize("fail", (False, True))
+def test_driver_startup_logging_is_scoped_and_restored(monkeypatch, tmp_path, fail):
+    calls = []
+
+    def original(*args, **kwargs):
+        calls.append((args, kwargs))
+        if fail:
+            raise RuntimeError("startup failed")
+        return "driver service"
+
+    module = types.SimpleNamespace(Service=original)
+    monkeypatch.setitem(sys.modules, "selenium.webdriver.chrome.service", module)
+    path = str(tmp_path / "chromedriver.log")
+    try:
+        with fetch_helper._capture_chromedriver_log(path):
+            module.Service(executable_path="driver", service_args=["--disable-build-check"], log_output=-3)
+    except RuntimeError:
+        assert fail
+    assert calls == [
+        ((), {"executable_path": "driver", "service_args": ["--disable-build-check", "--verbose"], "log_output": path})
+    ]
+    assert module.Service is original
+
+
+def test_driver_startup_logging_disabled_does_not_import_selenium(monkeypatch):
+    def unexpected(_name):
+        pytest.fail("Quiet fetch must not configure diagnostic logging")
+
+    monkeypatch.setattr(fetch_helper.importlib, "import_module", unexpected)
+    with fetch_helper._capture_chromedriver_log(None):
+        pass
 
 
 def test_missing_native_worker_output_does_not_mask_failure(tmp_path):

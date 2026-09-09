@@ -29,6 +29,7 @@ env:
 
 jobs:
   test:
+    name: Build, lint, and test plugins
     runs-on: ubuntu-24.04
     outputs:
       substantive_changes: ${{ steps.changes.outputs.substantive_changes }}

@@ -22,6 +22,7 @@ import threading
 import time
 import types
 import zipfile
+from contextlib import contextmanager
 from typing import Any, Callable, Dict, List, Optional, Sequence
 from urllib.parse import urljoin, urlparse
 
@@ -1104,6 +1105,29 @@ def configure_browser_sandbox(undetected_module: Any, inside_flatpak: bool, capt
         )
 
 
+@contextmanager
+def _capture_chromedriver_log(log_path):
+    """Capture startup negotiation separately from Python's repeated stack dumps."""
+    if not log_path:
+        yield
+        return
+    service_module: Any = importlib.import_module("selenium.webdriver.chrome.service")
+    original_service = service_module.Service
+
+    def diagnostic_service(*args, **kwargs):
+        kwargs["log_output"] = log_path
+        kwargs["service_args"] = [*(kwargs.get("service_args") or ()), "--verbose"]
+        return original_service(*args, **kwargs)
+
+    # Only the disposable worker's vendored service module is changed, and
+    # only during Driver construction. Selenium owns and closes the log file.
+    service_module.Service = diagnostic_service
+    try:
+        yield
+    finally:
+        service_module.Service = original_service
+
+
 def log_system_info(log_func: Optional[Callable[[str], None]] = None) -> None:
     """Log OS, Python, and Calibre version. Call once at the start of each job."""
 
@@ -1143,6 +1167,7 @@ def _fetch_page_in_process(
     user_data_dir=None,
     search_fallback_url=None,
     capture_worker_output=False,
+    chromedriver_log_path=None,
 ):
     """
     Fetch a page using SeleniumBase with Cloudflare bypass.
@@ -1455,12 +1480,13 @@ def _fetch_page_in_process(
             )
 
             _log("Starting Chrome (startup is included in the browser time limit)...")
-            driver = Driver(
-                uc=True,
-                headless=False,
-                chromium_arg=chrome_args,
-                binary_location=flatpak_chrome,
-            )
+            with _capture_chromedriver_log(chromedriver_log_path if capture_worker_output else None):
+                driver = Driver(
+                    uc=True,
+                    headless=False,
+                    chromium_arg=chrome_args,
+                    binary_location=flatpak_chrome,
+                )
 
             # SeleniumBase can replace uc_driver when it detects a Chrome-version
             # mismatch. Downloads are TLS/host restricted above; persist and verify
@@ -1671,6 +1697,11 @@ def _fetch_page_worker(request: Dict[str, Any]) -> Dict[str, Any]:
                     user_data_dir=request.get("user_data_dir"),
                     search_fallback_url=request.get("search_fallback_url"),
                     capture_worker_output=bool(request.get("capture_worker_output")),
+                    chromedriver_log_path=(
+                        os.path.join(request["transport_dir"], "chromedriver.log")
+                        if request.get("capture_worker_output") and request.get("transport_dir")
+                        else None
+                    ),
                 )
         else:
             page = fetch_embedded_page(request, log)
@@ -1806,7 +1837,9 @@ def _browser_owner_alive(request: Dict[str, Any]) -> bool:
         return False
 
 
-def _finish_browser_worker_output(log_path: Optional[str], failed: bool, log: Callable) -> None:
+def _finish_browser_worker_output(
+    log_path: Optional[str], failed: bool, log: Callable, label: str = "Browser worker native output"
+) -> None:
     """Report bounded native diagnostics for opted-in smoke tests, then remove them."""
     if not log_path:
         return
@@ -1814,9 +1847,15 @@ def _finish_browser_worker_output(log_path: Optional[str], failed: bool, log: Ca
         if failed:
             with open(log_path, "rb") as stream:
                 size = stream.seek(0, os.SEEK_END)
-                stream.seek(max(0, size - 16384))
-                output = stream.read(16384).decode("utf-8", errors="replace").strip()
-            log(_redact_log_text("Browser worker native output (last 16 KiB):\n" + (output or "(empty)")))
+                stream.seek(0)
+                output = stream.read(16384)
+                if size > 16384:
+                    stream.seek(max(16384, size - 16384))
+                    if size > 32768:
+                        output += b"\n... middle of log omitted ...\n"
+                    output += stream.read(16384)
+                decoded = output.decode("utf-8", errors="replace").strip()
+            log(_redact_log_text(f"{label} (first/last 16 KiB, up to 32 KiB):\n" + (decoded or "(empty)")))
     except OSError as error:
         log(f"Could not read browser worker native output: {type(error).__name__}")
     finally:
@@ -1887,6 +1926,13 @@ def _supervise_browser_worker(request: Dict[str, Any]) -> Dict[str, Any]:
             resources.close()
         finally:
             _finish_browser_worker_output(native_log_path, failed, log)
+            if capture_output and request.get("backend") == "chrome":
+                _finish_browser_worker_output(
+                    os.path.join(request["transport_dir"], "chromedriver.log"),
+                    failed,
+                    log,
+                    "ChromeDriver startup output",
+                )
             if not _browser_owner_alive(request):
                 shutil.rmtree(request["transport_dir"], ignore_errors=True)
 
