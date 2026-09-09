@@ -1022,6 +1022,8 @@ jobs:
     needs: test
     if: needs.test.outputs.substantive_changes == 'true'
     runs-on: ubuntu-24.04
+    env:
+      CALIBRE_5_RENDERER_IMAGE: ubuntu:20.04@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214
 
     steps:
     - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -1073,13 +1075,29 @@ jobs:
         "$CALIBRE_5_DIRECTORY/calibre-debug" -e common/test_release_zip_imports.py -- "$ROMANCEIO_FIELDS_ZIP"
         "$CALIBRE_5_DIRECTORY/calibre-debug" -e common/test_installed_plugins.py
 
+    - name: Pull pinned Calibre 5 renderer image
+      timeout-minutes: 4
+      run: |
+        for attempt in 1 2 3; do
+          if timeout --kill-after=5s 60s docker pull "$CALIBRE_5_RENDERER_IMAGE"; then
+            exit 0
+          fi
+          if [ "$attempt" -lt 3 ]; then
+            echo "::warning::Renderer image pull failed (attempt $attempt/3); retrying."
+            sleep "$((attempt * 5))"
+          fi
+        done
+        echo "::error::Unable to pull the pinned renderer image after 3 attempts."
+        exit 1
+
     - name: Required local embedded engine launch on minimum supported Calibre
       timeout-minutes: 5
       run: |
         # Qt bundled with Calibre 5.0 predates glibc 2.34's sandbox changes.
         # Use its contemporary userspace without disabling the Qt sandbox.
-        docker build -t calibre-5-renderer - <<'DOCKERFILE'
-        FROM ubuntu:20.04@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214
+        docker build --build-arg BASE_IMAGE="$CALIBRE_5_RENDERER_IMAGE" -t calibre-5-renderer - <<'DOCKERFILE'
+        ARG BASE_IMAGE
+        FROM ${BASE_IMAGE}
         RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
             libegl1 libopengl0 libgl1 libgl1-mesa-dri libxkbcommon-x11-0 libxcb-icccm4 \
             libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
