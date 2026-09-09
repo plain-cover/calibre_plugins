@@ -189,3 +189,24 @@ def test_frozen_calibre_checks_are_not_stripped(filename):
     assert not any(
         isinstance(node, ast.Assert) for node in ast.walk(tree)
     ), f"{filename}: Calibre strips assert statements; use an explicit exception for smoke checks"
+
+
+@pytest.mark.parametrize(
+    "page",
+    (
+        '<html><body data-peer-connections-blocked="false"></body></html>',
+        '<html><body><script>document.body.setAttribute("data-peer-connections-blocked", "true")</script></body></html>',
+        '<html><body><div data-peer-connections-blocked="true"></div></body></html>',
+    ),
+)
+def test_smoke_rejects_missing_or_failed_webrtc_check(page):
+    from common.run_installed_browser_smoke import _verify_webrtc_blocked
+
+    with pytest.raises(AssertionError, match="did not disable both WebRTC constructors"):
+        _verify_webrtc_blocked(page)
+
+
+def test_smoke_accepts_executed_webrtc_check():
+    from common.run_installed_browser_smoke import _verify_webrtc_blocked
+
+    _verify_webrtc_blocked('<html><body data-peer-connections-blocked="true"></body></html>')

@@ -118,6 +118,14 @@ def _verify_challenge_failure(error, backend, logs):
         raise AssertionError(f"Challenge lookup failed unexpectedly: {error}")
 
 
+def _verify_webrtc_blocked(page):
+    from lxml.html import fromstring
+
+    # Inspect the rendered DOM, not the JavaScript source containing the check.
+    if fromstring(page).xpath("//body/@data-peer-connections-blocked") != ["true"]:
+        raise AssertionError("Embedded browser did not disable both WebRTC constructors before page scripts ran")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plugin", choices=sorted(PLUGINS))
@@ -159,11 +167,8 @@ def main():
     marker = "calibre-installed-plugin-browser-smoke-pass"
     html = f"""<html><body><p>{'local fixture ' * 20}</p><script>
     alert('must not display'); confirm('must not display'); prompt('must not display');
-    if (typeof RTCPeerConnection !== 'undefined') {{
-    var pc = new RTCPeerConnection({{iceServers: []}});
-    pc.createDataChannel('network-check');
-    pc.createOffer().then(function(offer) {{ return pc.setLocalDescription(offer); }});
-    }}
+    document.body.setAttribute('data-peer-connections-blocked', String(
+        typeof RTCPeerConnection === 'undefined' && typeof webkitRTCPeerConnection === 'undefined'));
     setTimeout(function() {{ document.body.insertAdjacentHTML('beforeend', '<h1>{marker}</h1>'); }}, 1500);
     </script></body></html>"""
     if chrome:
@@ -201,6 +206,7 @@ def main():
     stopped = threading.Event()
     tracked = set()
     violations = set()
+    udp_endpoints = set()
     inaccessible: Set[int] = set()
 
     def monitor():
@@ -229,9 +235,12 @@ def main():
                         connections = getattr(process, "net_connections", None) or process.connections
                         for connection in connections(kind="inet") if check_sockets else ():
                             if connection.type == 2:
-                                violations.add(
-                                    f"Browser worker opened UDP socket: {process.name()}, "
-                                    f"local={connection.laddr}, remote={connection.raddr}"
+                                # UDP has no LISTEN state. Chromium's DNS probes
+                                # also bind sockets, and Windows omits their
+                                # remote addresses. Verify WebRTC in the page
+                                # instead of treating every UDP client as a server.
+                                udp_endpoints.add(
+                                    f"{process.name()}, local={connection.laddr}, remote={connection.raddr}"
                                 )
                             if connection.status == "LISTEN" and connection.laddr.ip not in ("127.0.0.1", "::1"):
                                 violations.add("Browser worker opened non-loopback TCP listener")
@@ -290,6 +299,8 @@ def main():
                 )
                 if not page or marker not in page:
                     raise AssertionError("A subsequent lookup failed after the challenge")
+                if not chrome:
+                    _verify_webrtc_blocked(page)
     finally:
         stopped.set()
         observer.join(timeout=5)
@@ -322,10 +333,13 @@ def main():
         print(f"PASS: {display_name} rendered JavaScript with Chrome only and cleaned up")
     else:
         print(f"PASS: {display_name} rendered JavaScript without dialogs, external Chrome, or surviving workers")
+        print("PASS: both WebRTC constructors were disabled before page scripts ran")
     if check_sockets:
         if inaccessible:
             print(f"Socket inspection limited: {len(inaccessible)} sandboxed Linux processes were inaccessible")
-        print("PASS: no browser UDP sockets or non-loopback TCP listeners observed in inspectable processes")
+        for endpoint in sorted(udp_endpoints):
+            print(f"Observed UDP endpoint (client/server role unavailable): {endpoint}")
+        print("PASS: no non-loopback TCP listeners observed in inspectable processes")
 
 
 if __name__ == "__main__":
