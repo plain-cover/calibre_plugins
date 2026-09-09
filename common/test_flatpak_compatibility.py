@@ -7,6 +7,7 @@ from typing import List
 import pytest
 
 from common import run_installed_browser_smoke
+from common import common_romanceio_fetch_helper as fetch_helper
 
 from common.common_romanceio_fetch_helper import (
     _browser_binary_is_runnable,
@@ -203,6 +204,70 @@ def test_opt_in_chrome_diagnostics_use_worker_log_without_pipes(version_info):
     configure_browser_sandbox(undetected, False)
     undetected.subprocess.Popen(["chrome"], stdout=-3, stderr=-3)
     assert calls[-1] == ((["chrome"],), {"stdout": -3, "stderr": -3})
+
+
+@pytest.mark.parametrize("translated,returncode", (("1\n", 0), ("0\n", 0), ("", 1), ("unexpected", 0)))
+def test_macos_browser_prefers_native_arch_only_under_rosetta(monkeypatch, translated, returncode):
+    probes = []
+    launches = []
+    monkeypatch.setattr(fetch_helper.sys, "platform", "darwin")
+
+    def run(command, **kwargs):
+        probes.append((command, kwargs))
+        return types.SimpleNamespace(stdout=translated, returncode=returncode)
+
+    monkeypatch.setattr(fetch_helper.subprocess, "run", run)
+    module = types.SimpleNamespace(Popen=lambda *a, **kw: launches.append((a, kw)))
+    undetected = types.SimpleNamespace(subprocess=module)
+    configure_browser_sandbox(undetected, False)
+    browser = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    command = [browser, "--no-sandbox", "--user-data-dir=profile"]
+    undetected.subprocess.Popen(command, close_fds=True)
+    expected = [browser, "--user-data-dir=profile"]
+    if translated.strip() == "1" and returncode == 0:
+        expected = ["/usr/bin/arch", "-arm64", "-x86_64", *expected]
+    assert launches == [((expected,), {"close_fds": True})]
+    assert command == [browser, "--no-sandbox", "--user-data-dir=profile"]
+    assert probes[0][0] == ["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"]
+    assert probes[0][1]["timeout"] == 5
+    assert not probes[0][1].get("shell")
+
+
+@pytest.mark.parametrize(
+    "failure", (OSError("sysctl unavailable"), fetch_helper.subprocess.TimeoutExpired("sysctl", 5))
+)
+def test_macos_arch_probe_failure_preserves_direct_launch(monkeypatch, failure):
+    monkeypatch.setattr(fetch_helper.sys, "platform", "darwin")
+
+    def fail(*_args, **_kwargs):
+        raise failure
+
+    monkeypatch.setattr(fetch_helper.subprocess, "run", fail)
+    command = ["chrome", "--user-data-dir=profile"]
+    assert fetch_helper._native_macos_browser_command(command) == command
+
+
+@pytest.mark.parametrize("platform_name", ("linux", "win32"))
+def test_non_macos_browser_does_not_probe_rosetta(monkeypatch, platform_name):
+    monkeypatch.setattr(fetch_helper.sys, "platform", platform_name)
+
+    def fail(*_args, **_kwargs):
+        pytest.fail("Unexpected macOS architecture probe")
+
+    monkeypatch.setattr(fetch_helper.subprocess, "run", fail)
+    assert fetch_helper._native_macos_browser_command(["chrome"]) == ["chrome"]
+
+
+def test_debug_port_is_available_while_another_browser_port_is_occupied():
+    import socket
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as occupied:
+        occupied.bind(("127.0.0.1", 0))
+        port = fetch_helper._browser_debug_port()
+        assert port != occupied.getsockname()[1]
+        assert 0 < port < 65536
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as available:
+            available.bind(("127.0.0.1", port))
 
 
 def test_browser_smoke_managed_driver_does_not_require_runner_driver(monkeypatch):

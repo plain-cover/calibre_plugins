@@ -15,6 +15,7 @@ import platform
 import plistlib
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -1062,6 +1063,36 @@ def configure_legacy_uc_subprocess(
     return True
 
 
+def _native_macos_browser_command(command: List[str]) -> List[str]:
+    """Prefer the ARM slice of a universal browser when Calibre runs in Rosetta."""
+    if sys.platform != "darwin":
+        return command
+    try:
+        translated = subprocess.run(
+            ["/usr/sbin/sysctl", "-in", "sysctl.proc_translated"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return command
+    if translated.returncode == 0 and translated.stdout.strip() == "1":
+        # arch execs the browser, preserving its PID for supervisor cleanup.
+        # Keep Intel as a fallback for browsers without an ARM slice.
+        return ["/usr/bin/arch", "-arm64", "-x86_64", *command]
+    return command
+
+
+def _browser_debug_port() -> int:
+    """Choose a free loopback port instead of UC's shared default of 9222."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        return int(listener.getsockname()[1])
+
+
 class _SandboxedChromeSubprocessProxy:
     """Enforce sandbox policy on SeleniumBase's final Chrome command line."""
 
@@ -1090,7 +1121,10 @@ class _SandboxedChromeSubprocessProxy:
             # file. Never create PIPEs here: no thread consumes those streams.
             kwargs["stdout"] = kwargs["stderr"] = 2
             command.append("--enable-logging=stderr")
-        return self._subprocess_module.Popen(command, **kwargs)
+        launch_command = _native_macos_browser_command(command)
+        if self.capture_output and launch_command != command:
+            print("Chrome launch: preferring ARM64 from a Rosetta caller", file=sys.stderr, flush=True)
+        return self._subprocess_module.Popen(launch_command, **kwargs)
 
 
 def configure_browser_sandbox(undetected_module: Any, inside_flatpak: bool, capture_output: bool = False) -> None:
@@ -1478,6 +1512,11 @@ def _fetch_page_in_process(
                 inside_flatpak=bool(os.environ.get("FLATPAK_ID")),
                 in_ci=bool(os.environ.get("CI")),
             )
+            debug_port = _browser_debug_port()
+            # Both vendored launchers propagate this argument to UC's
+            # debuggerAddress as well as Chrome's command line.
+            chrome_args.append(f"--remote-debugging-port={debug_port}")
+            _log(f"Chrome debugging endpoint: 127.0.0.1:{debug_port}")
 
             _log("Starting Chrome (startup is included in the browser time limit)...")
             with _capture_chromedriver_log(chromedriver_log_path if capture_worker_output else None):
