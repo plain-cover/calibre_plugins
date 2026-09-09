@@ -1068,9 +1068,10 @@ class _SandboxedChromeSubprocessProxy:
         {"--no-sandbox", "--disable-setuid-sandbox", "--disable-namespace-sandbox", "--disable-seccomp-filter-sandbox"}
     )
 
-    def __init__(self, subprocess_module: Any, inside_flatpak: bool):
+    def __init__(self, subprocess_module: Any, inside_flatpak: bool, capture_output: bool = False):
         self._subprocess_module = subprocess_module
         self.inside_flatpak = inside_flatpak
+        self.capture_output = capture_output
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._subprocess_module, name)
@@ -1083,16 +1084,24 @@ class _SandboxedChromeSubprocessProxy:
         command = list(args)
         if not self.inside_flatpak:
             command = [arg for arg in command if arg.split("=", 1)[0] not in self._UNSAFE_SWITCHES]
+        if self.capture_output:
+            # The disposable worker's stderr already points to Calibre's log
+            # file. Never create PIPEs here: no thread consumes those streams.
+            kwargs["stdout"] = kwargs["stderr"] = 2
+            command.append("--enable-logging=stderr")
         return self._subprocess_module.Popen(command, **kwargs)
 
 
-def configure_browser_sandbox(undetected_module: Any, inside_flatpak: bool) -> None:
+def configure_browser_sandbox(undetected_module: Any, inside_flatpak: bool, capture_output: bool = False) -> None:
     """Scope final-argument filtering to Chrome, without changing global subprocess."""
     subprocess_module = undetected_module.subprocess
     if isinstance(subprocess_module, _SandboxedChromeSubprocessProxy):
         subprocess_module.inside_flatpak = inside_flatpak
+        subprocess_module.capture_output = capture_output
     else:
-        undetected_module.subprocess = _SandboxedChromeSubprocessProxy(subprocess_module, inside_flatpak)
+        undetected_module.subprocess = _SandboxedChromeSubprocessProxy(
+            subprocess_module, inside_flatpak, capture_output
+        )
 
 
 def log_system_info(log_func: Optional[Callable[[str], None]] = None) -> None:
@@ -1133,6 +1142,7 @@ def _fetch_page_in_process(
     log_func=None,
     user_data_dir=None,
     search_fallback_url=None,
+    capture_worker_output=False,
 ):
     """
     Fetch a page using SeleniumBase with Cloudflare bypass.
@@ -1361,7 +1371,11 @@ def _fetch_page_in_process(
         undetected_module = importlib.import_module("seleniumbase.undetected")
         if configure_legacy_uc_subprocess(undetected_module):
             _log("Applied non-blocking Chrome stdio handling for legacy SeleniumBase")
-        configure_browser_sandbox(undetected_module, inside_flatpak=bool(os.environ.get("FLATPAK_ID")))
+        configure_browser_sandbox(
+            undetected_module,
+            inside_flatpak=bool(os.environ.get("FLATPAK_ID")),
+            capture_output=capture_worker_output,
+        )
 
         sb_install.DRIVER_DIR = sb_drivers_dir  # type: ignore[attr-defined]
         download_helper.downloads_path = downloads_dir  # type: ignore[attr-defined]
@@ -1656,6 +1670,7 @@ def _fetch_page_worker(request: Dict[str, Any]) -> Dict[str, Any]:
                     log_func=log,
                     user_data_dir=request.get("user_data_dir"),
                     search_fallback_url=request.get("search_fallback_url"),
+                    capture_worker_output=bool(request.get("capture_worker_output")),
                 )
         else:
             page = fetch_embedded_page(request, log)
@@ -1678,6 +1693,20 @@ def _fetch_page_worker(request: Dict[str, Any]) -> Dict[str, Any]:
 def _is_installed_plugin_module(plugin_name: str) -> bool:
     expected_name = f"calibre_plugins.{plugin_name}.common_romanceio_fetch_helper"
     return __name__ == expected_name
+
+
+def wait_for_browser_processes(processes: Sequence[Any], timeout: float) -> List[Any]:
+    """Wait for tracked identities, excluding PIDs already reused by another process."""
+    import psutil
+
+    # Windows Process.wait() opens a handle by PID without checking creation
+    # time. Selenium reconnects restart ChromeDriver frequently, so an exited
+    # driver's PID may already belong to a different, unrelated process.
+    pending = [process for process in processes if process.is_running()]
+    _, alive = psutil.wait_procs(pending, timeout=timeout)
+    # A PID can also be reused during the bounded wait. Never treat the new
+    # process as a surviving browser or try to kill it on that basis.
+    return [process for process in alive if process.is_running()]
 
 
 class _BrowserWorkerResources:
@@ -1743,7 +1772,7 @@ class _BrowserWorkerResources:
                 pass
             except self.psutil.Error as error:
                 self.log_func(f"Could not terminate browser descendant: {error}")
-        _, alive = self.psutil.wait_procs(list(self.descendants), timeout=2)
+        alive = wait_for_browser_processes(list(self.descendants), timeout=2)
         for process in alive:
             try:
                 process.kill()
@@ -1751,7 +1780,7 @@ class _BrowserWorkerResources:
                 pass
             except self.psutil.Error as error:
                 self.log_func(f"Could not kill browser descendant: {error}")
-        _, alive = self.psutil.wait_procs(alive, timeout=2)
+        alive = wait_for_browser_processes(alive, timeout=2)
         if alive:
             self.log_func("Browser descendants did not exit; retaining their temporary profile")
             return

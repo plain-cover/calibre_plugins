@@ -890,6 +890,37 @@ def test_worker_log_redaction_hides_home_and_temp_paths():
     assert "<temp>" in redacted
 
 
+def test_browser_wait_checks_identity_before_and_after_windows_wait(monkeypatch):
+    import psutil
+
+    class Process:
+        def __init__(self, pid, running):
+            self.pid = pid
+            self.running = running
+
+        def is_running(self):
+            return self.running
+
+    old_driver = Process(123, False)
+    new_driver = Process(123, True)
+    reused_during_wait = Process(456, True)
+    exited = Process(789, True)
+
+    def wait_procs(processes, timeout):
+        assert processes == [new_driver, reused_during_wait, exited]
+        assert timeout == 2
+        reused_during_wait.running = False
+        exited.running = False
+        # Windows may report the reused PID as alive because Process.wait()
+        # waits on a handle opened by PID, rather than by the stored identity.
+        return [exited], [new_driver, reused_during_wait]
+
+    monkeypatch.setattr(psutil, "wait_procs", wait_procs)
+    assert fetch_helper.wait_for_browser_processes([old_driver, new_driver, reused_during_wait, exited], timeout=2) == [
+        new_driver
+    ]
+
+
 @pytest.mark.parametrize("outcome", ("success", "timeout", "invalid-response"))
 @pytest.mark.parametrize("capture_output", (False, True))
 def test_browser_worker_reaps_real_descendants_and_removes_parent_profile(

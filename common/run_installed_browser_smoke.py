@@ -298,7 +298,7 @@ def main():
         server_thread.join(timeout=5)
     if violations:
         raise AssertionError(sorted(violations))
-    _, alive = psutil.wait_procs(list(tracked), timeout=5)
+    alive = helper.wait_for_browser_processes(list(tracked), timeout=5)
     if alive:
         raise AssertionError(f"Browser descendants survived cleanup: {[p.pid for p in alive]}")
     expected = ["embedded", "chrome"] if args.chrome_fallback else [args.backend] * (3 if args.failure_first else 1)

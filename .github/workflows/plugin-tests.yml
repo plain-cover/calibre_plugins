@@ -227,7 +227,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y libegl1 libopengl0 libxcb-cursor0 xdg-utils xz-utils
         archive="$RUNNER_TEMP/calibre-$CALIBRE_CURRENT_VERSION-x86_64.txz"
-        curl -fsSL \
+        curl -fsSL --retry 3 --retry-all-errors --connect-timeout 30 --max-time 300 \
           "https://download.calibre-ebook.com/$CALIBRE_CURRENT_VERSION/calibre-$CALIBRE_CURRENT_VERSION-x86_64.txz" \
           -o "$archive"
         python common/verify_sha512.py "$archive" "$CALIBRE_CURRENT_LINUX_SHA512"
@@ -580,7 +580,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y libegl1 libopengl0 libxcb-cursor0 xdg-utils xz-utils
         archive="$RUNNER_TEMP/calibre-$CALIBRE_CURRENT_VERSION-x86_64.txz"
-        curl -fsSL \
+        curl -fsSL --retry 3 --retry-all-errors --connect-timeout 30 --max-time 300 \
           "https://download.calibre-ebook.com/$CALIBRE_CURRENT_VERSION/calibre-$CALIBRE_CURRENT_VERSION-x86_64.txz" \
           -o "$archive"
         python common/verify_sha512.py "$archive" "$CALIBRE_CURRENT_LINUX_SHA512"
@@ -610,7 +610,7 @@ jobs:
       if: runner.os == 'macOS'
       run: |
         test "$(uname -m)" = "${{ matrix.architecture }}"
-        curl -fsSL \
+        curl -fsSL --retry 3 --retry-all-errors --connect-timeout 30 --max-time 300 \
           "https://download.calibre-ebook.com/$CALIBRE_CURRENT_VERSION/calibre-$CALIBRE_CURRENT_VERSION.dmg" \
           -o "$RUNNER_TEMP/calibre.dmg"
         python common/verify_sha512.py "$RUNNER_TEMP/calibre.dmg" "$CALIBRE_CURRENT_MACOS_SHA512"
@@ -856,7 +856,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y libegl1 libopengl0 libxcb-cursor0 xdg-utils xz-utils
         archive="$RUNNER_TEMP/calibre-$CALIBRE_CURRENT_VERSION-arm64.txz"
-        curl -fsSL \
+        curl -fsSL --retry 3 --retry-all-errors --connect-timeout 30 --max-time 300 \
           "https://download.calibre-ebook.com/$CALIBRE_CURRENT_VERSION/calibre-$CALIBRE_CURRENT_VERSION-arm64.txz" \
           -o "$archive"
         python3 common/verify_sha512.py "$archive" "$CALIBRE_CURRENT_LINUX_ARM64_SHA512"
@@ -982,7 +982,7 @@ jobs:
       if: runner.os == 'macOS'
       run: |
         test "$(uname -m)" = "${{ matrix.architecture }}"
-        curl -fsSL \
+        curl -fsSL --retry 3 --retry-all-errors --connect-timeout 30 --max-time 300 \
           "https://download.calibre-ebook.com/$CALIBRE_5_DESKTOP_VERSION/calibre-$CALIBRE_5_DESKTOP_VERSION.dmg" \
           -o "$RUNNER_TEMP/calibre-5.dmg"
         python3 common/verify_sha512.py "$RUNNER_TEMP/calibre-5.dmg" "$CALIBRE_5_MACOS_SHA512"
@@ -1051,7 +1051,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0 libxcb-shape0 xz-utils
         mkdir -p "$CALIBRE_5_DIRECTORY"
-        curl -fsSL \
+        curl -fsSL --retry 3 --retry-all-errors --connect-timeout 30 --max-time 300 \
           https://download.calibre-ebook.com/5.0.0/calibre-5.0.0-x86_64.txz \
           -o "$RUNNER_TEMP/calibre-5.0.0.txz"
         python3 common/verify_sha512.py "$RUNNER_TEMP/calibre-5.0.0.txz" "$CALIBRE_5_LINUX_SHA512"

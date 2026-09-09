@@ -190,6 +190,21 @@ def test_final_chrome_command_rejects_uninspectable_shell_launch():
         undetected.subprocess.Popen("chrome --no-sandbox", shell=True)
 
 
+@pytest.mark.parametrize("version_info", ((3, 8), (3, 14)))
+def test_opt_in_chrome_diagnostics_use_worker_log_without_pipes(version_info):
+    calls = []
+    module = types.SimpleNamespace(PIPE=-1, DEVNULL=-3, Popen=lambda *a, **kw: calls.append((a, kw)))
+    undetected = types.SimpleNamespace(subprocess=module)
+    configure_legacy_uc_subprocess(undetected, version_info)
+    configure_browser_sandbox(undetected, False, capture_output=True)
+    undetected.subprocess.Popen(["chrome", "--no-sandbox"], stdin=-3, stdout=-3, stderr=-3)
+    assert calls == [((["chrome", "--enable-logging=stderr"],), {"stdin": -3, "stdout": 2, "stderr": 2})]
+    # Reconfiguration restores ordinary quiet fetches in the same module.
+    configure_browser_sandbox(undetected, False)
+    undetected.subprocess.Popen(["chrome"], stdout=-3, stderr=-3)
+    assert calls[-1] == ((["chrome"],), {"stdout": -3, "stderr": -3})
+
+
 def test_browser_smoke_managed_driver_does_not_require_runner_driver(monkeypatch):
     monkeypatch.setattr(
         run_installed_browser_smoke,
