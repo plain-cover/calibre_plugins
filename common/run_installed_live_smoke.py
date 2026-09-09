@@ -34,21 +34,25 @@ def _load_installed_modules(plugin_path):
     for child_name in MODULE_NAMES:
         module = importlib.import_module(f"calibre_plugins.romanceio_fields.{child_name}")
         module_file = getattr(module, "__file__", None)
-        assert module_file, f"Installed production module has no origin: {child_name}"
+        if not (module_file):
+            raise AssertionError(f"Installed production module has no origin: {child_name}")
         normalized_module_path = os.path.normcase(os.path.abspath(module_file))
-        assert normalized_module_path.startswith(
-            normalized_plugin_path
-        ), f"{child_name} loaded from source instead of installed ZIP: {normalized_module_path}"
+        if not (normalized_module_path.startswith(normalized_plugin_path)):
+            raise AssertionError(f"{child_name} loaded from source instead of installed ZIP: {normalized_module_path}")
         modules[child_name] = module
     return modules
 
 
 def _assert_fields(fields):
-    assert isinstance(fields, dict), f"Expected parsed fields, got {type(fields).__name__}"
-    assert fields.get("star_rating") is not None, "Missing star rating"
-    assert fields.get("rating_count") is not None, "Missing rating count"
+    if not (isinstance(fields, dict)):
+        raise AssertionError(f"Expected parsed fields, got {type(fields).__name__}")
+    if not (fields.get("star_rating") is not None):
+        raise AssertionError("Missing star rating")
+    if not (fields.get("rating_count") is not None):
+        raise AssertionError("Missing rating count")
     tags = fields.get("tags")
-    assert isinstance(tags, list) and tags, "Missing Romance.io tags"
+    if not (isinstance(tags, list) and tags):
+        raise AssertionError("Missing Romance.io tags")
     return fields
 
 
@@ -122,10 +126,13 @@ def run_method(method, modules):
 
         @transport.lookup_budget
         def pooled(abort=None, log_func=_log):
-            assert abort is not None, "Lookup budget was not initialized"
-            assert not abort.is_set()
+            if not (abort is not None):
+                raise AssertionError("Lookup budget was not initialized")
+            if abort.is_set():
+                raise AssertionError("Lookup was unexpectedly cancelled")
             found = _search_json(modules, TEST_TITLE, TEST_AUTHORS, log_func)
-            assert found == EXPECTED_ROMANCEIO_ID
+            if not (found == EXPECTED_ROMANCEIO_ID):
+                raise AssertionError("Smoke check failed: found == EXPECTED_ROMANCEIO_ID")
             fields = _assert_fields(_fetch_ssr_fields(modules, found, log_func))
             _print_fields(fields)
 
@@ -140,16 +147,19 @@ def run_method(method, modules):
         def chrome_only(request, log, abort):
             # Force the production Chrome worker; Qt must not satisfy this check.
             attempts.append("chrome")
-            assert len(attempts) == 1, "Chrome-only smoke unexpectedly retried"
+            if not (len(attempts) == 1):
+                raise AssertionError("Chrome-only smoke unexpectedly retried")
             return real_fetch({**request, "backend": "chrome"}, log, abort)
 
         with patch.object(helper, "_fetch_page_via_calibre_worker", chrome_only):
             if method == "chrome-search":
                 romanceio_id = _search_embedded(modules, TEST_TITLE, TEST_AUTHORS, _log)
-                assert romanceio_id == EXPECTED_ROMANCEIO_ID, romanceio_id
+                if not (romanceio_id == EXPECTED_ROMANCEIO_ID):
+                    raise AssertionError(romanceio_id)
             else:
                 _print_fields(_assert_fields(_fetch_embedded_fields(modules, EXPECTED_ROMANCEIO_ID, _log)))
-        assert attempts == ["chrome"], attempts
+        if not (attempts == ["chrome"]):
+            raise AssertionError(attempts)
         print(f"PASS: installed Chrome-only production path completed: {method}")
         return
     if method == "json-clearance-reuse":
@@ -160,11 +170,13 @@ def run_method(method, modules):
             _log(message)
 
         first = _search_json(modules, TEST_TITLE, TEST_AUTHORS, capture, browser_fallback=True)
-        assert first == EXPECTED_ROMANCEIO_ID, first
+        if not (first == EXPECTED_ROMANCEIO_ID):
+            raise AssertionError(first)
         time.sleep(6)
         # No browser callback: these calls must succeed using direct HTTP only.
         second = _search_json(modules, TEST_TITLE, TEST_AUTHORS, _log)
-        assert second == EXPECTED_ROMANCEIO_ID, second
+        if not (second == EXPECTED_ROMANCEIO_ID):
+            raise AssertionError(second)
         time.sleep(6)
         _assert_fields(_fetch_ssr_fields(modules, EXPECTED_ROMANCEIO_ID, _log))
         if any("Saved temporary Cloudflare clearance" in message for message in messages):
@@ -186,17 +198,23 @@ def run_method(method, modules):
             timeout=180,
         )
         log_path = result["stdout_stderr"]
-        assert isinstance(log_path, str), "Calibre worker returned no log path"
+        if not (isinstance(log_path, str)):
+            raise AssertionError("Calibre worker returned no log path")
         try:
             with open(log_path, encoding="utf-8", errors="replace") as stream:
                 print(stream.read())
             book_results = result["result"]
-            assert isinstance(book_results, dict), book_results
+            if not (isinstance(book_results, dict)):
+                raise AssertionError(book_results)
             fields = book_results.get(1)
-            assert isinstance(fields, dict), fields
-            assert fields.get("StarRating"), fields
-            assert fields.get("RomanceTags"), fields
-            assert fields["__custom_fields_to_update__"] == ["StarRating", "RomanceTags"], fields
+            if not (isinstance(fields, dict)):
+                raise AssertionError(fields)
+            if not (fields.get("StarRating")):
+                raise AssertionError(fields)
+            if not (fields.get("RomanceTags")):
+                raise AssertionError(fields)
+            if not (fields["__custom_fields_to_update__"] == ["StarRating", "RomanceTags"]):
+                raise AssertionError(fields)
             print("PASS: installed Fields download job completed and returned ratings/tags")
         finally:
             try:
@@ -208,7 +226,8 @@ def run_method(method, modules):
         romanceio_id = _search_json(
             modules, TEST_TITLE, TEST_AUTHORS, _log, browser_fallback=method == "json-search-with-browser"
         )
-        assert romanceio_id == EXPECTED_ROMANCEIO_ID, f"Unexpected JSON search result: {romanceio_id!r}"
+        if not (romanceio_id == EXPECTED_ROMANCEIO_ID):
+            raise AssertionError(f"Unexpected JSON search result: {romanceio_id!r}")
         print(f"PASS: JSON search resolved {romanceio_id}")
         return
     if method == "json-details":
@@ -217,7 +236,8 @@ def run_method(method, modules):
         fields = _assert_fields(_fetch_ssr_fields(modules, EXPECTED_ROMANCEIO_ID, _log))
     elif method == "embedded-search":
         romanceio_id = _search_embedded(modules, TEST_TITLE, TEST_AUTHORS, _log)
-        assert romanceio_id == EXPECTED_ROMANCEIO_ID, f"Unexpected browser search result: {romanceio_id!r}"
+        if not (romanceio_id == EXPECTED_ROMANCEIO_ID):
+            raise AssertionError(f"Unexpected browser search result: {romanceio_id!r}")
         print(f"PASS: browser search (Qt first) resolved {romanceio_id}")
         return
     elif method == "embedded-details":
@@ -233,7 +253,8 @@ def run_method(method, modules):
             max_retries=1,
             retry_delay=0,
         )
-        assert romanceio_id == EXPECTED_ROMANCEIO_ID, f"Unexpected default search result: {romanceio_id!r}"
+        if not (romanceio_id == EXPECTED_ROMANCEIO_ID):
+            raise AssertionError(f"Unexpected default search result: {romanceio_id!r}")
         fields = _assert_fields(
             orchestrator.fetch_details_with_fallback(
                 romanceio_id,
@@ -271,7 +292,8 @@ def main():
     args = parser.parse_args()
 
     plugin = find_plugin("Romance.io Fields")
-    assert plugin is not None, "Romance.io Fields is not installed"
+    if not (plugin is not None):
+        raise AssertionError("Romance.io Fields is not installed")
     plugin_path = os.path.abspath(plugin.plugin_path)
     print(f"Installed plugin ZIP: {plugin_path}")
     run_method(args.method, _load_installed_modules(plugin_path))

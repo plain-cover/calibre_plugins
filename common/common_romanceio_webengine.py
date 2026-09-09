@@ -135,24 +135,27 @@ def page_ready(html, title, request):
 
 def fetch_page(request, log):
     """Return rendered HTML, with navigation and shutdown covered by supervision."""
+    # QTWEBENGINE_CHROMIUM_FLAGS overrides Calibre's --webEngineArgs, including
+    # its --disable-gpu default. Preserve software rendering: Calibre's headless
+    # platform has no OpenGL context and GPU initialization can crash the worker.
     # WebRTC ICE/STUN can bind UDP sockets and trigger Windows Firewall prompts.
     # Apply Qt's supported Chromium policy before initializing the engine. Normal
     # HTTPS downloads need neither peer-to-peer networking nor QUIC.
     flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
-        flags + " --force-webrtc-ip-handling-policy=disable_non_proxied_udp --disable-quic"
+        flags + " --disable-gpu --force-webrtc-ip-handling-policy=disable_non_proxied_udp --disable-quic"
     ).strip()
     from calibre.gui2 import must_use_qt
 
     try:
         from qt.core import QApplication, QTimer, QUrl, sip
-        from qt.webengine import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
+        from qt.webengine import QWebEnginePage, QWebEngineProfile, QWebEngineScript, QWebEngineSettings
     except ImportError:
         # Calibre 5 uses Qt 5 and predates the qt compatibility package.
         from PyQt5 import sip
         from PyQt5.QtCore import QTimer, QUrl
         from PyQt5.QtWidgets import QApplication
-        from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineProfile, QWebEngineSettings
+        from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineProfile, QWebEngineScript, QWebEngineSettings
 
     from .common_romanceio_fetch_helper import BrowserFetchError
     from .common_romanceio_session import save_clearance
@@ -162,6 +165,22 @@ def fetch_page(request, log):
     app.setQuitOnLastWindowClosed(False)
     log("Starting Calibre embedded web engine (no browser window)")
     profile = QWebEngineProfile(app)  # Off-the-record: no persistent browser profile.
+    # Metadata pages need JavaScript, but not peer-to-peer connections. The
+    # Chromium routing flag alone does not prevent ICE/mDNS sockets on all Qt
+    # versions. Remove both WebRTC constructors before site scripts can run.
+    script = QWebEngineScript()
+    script.setName("disable-peer-connections")
+    injection_points = getattr(QWebEngineScript, "InjectionPoint", QWebEngineScript)
+    worlds = getattr(QWebEngineScript, "ScriptWorldId", QWebEngineScript)
+    script.setInjectionPoint(injection_points.DocumentCreation)
+    script.setWorldId(worlds.MainWorld)
+    script.setRunsOnSubFrames(True)
+    script.setSourceCode(
+        "for (const name of ['RTCPeerConnection', 'webkitRTCPeerConnection']) {"
+        "Object.defineProperty(window, name, {value: undefined, writable: false, configurable: false});"
+        "}"
+    )
+    profile.scripts().insert(script)
     settings = profile.settings()
     attributes = getattr(QWebEngineSettings, "WebAttribute", QWebEngineSettings)
     for name in (
@@ -238,7 +257,8 @@ def fetch_page(request, log):
         state.update(pending=False, candidate=None, ready_since=None, title=None)
         route_deadline = deadline
         log(f"{error}; trying HTML search in the same embedded browser session")
-        page.load(QUrl(request["url"]))
+        # Leave the toHtml callback before replacing the current document.
+        QTimer.singleShot(0, lambda: page.load(QUrl(request["url"])))
 
     def inspect(html, generation):
         if generation != state["route"]:
@@ -287,12 +307,15 @@ def fetch_page(request, log):
     try:
         profile.cookieStore().cookieAdded.connect(cookie_added)
         page.renderProcessTerminated.connect(
-            lambda *_args: finish(error="Embedded web engine renderer exited unexpectedly")
+            lambda status, exit_code: finish(
+                error=f"Embedded web engine renderer exited unexpectedly (status={status}, exit code={exit_code})"
+            )
         )
         timer.timeout.connect(poll)
         timer.start(250)
         log(f"Navigating embedded web engine to {request['url']}")
-        page.load(QUrl(request["url"]))
+        # Start navigation from the event loop, after Qt finishes initialization.
+        QTimer.singleShot(0, lambda: page.load(QUrl(request["url"])))
         execute = getattr(app, "exec", None) or app.exec_
         execute()
         if state["error"] or not state["html"]:

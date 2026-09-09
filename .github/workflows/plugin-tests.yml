@@ -1074,7 +1074,25 @@ jobs:
 
     - name: Required local embedded engine launch on minimum supported Calibre
       timeout-minutes: 5
-      run: xvfb-run -a "$CALIBRE_5_DIRECTORY/calibre-debug" -e common/run_installed_browser_smoke.py -- romanceio_fields --search-routes
+      run: |
+        # Qt bundled with Calibre 5.0 predates glibc 2.34's sandbox changes.
+        # Use its contemporary userspace without disabling the Qt sandbox.
+        docker build -t calibre-5-renderer - <<'DOCKERFILE'
+        FROM ubuntu:20.04@sha256:8feb4d8ca5354def3d8fce243717141ce31e2c428701f6682bd2fafe15388214
+        RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+            libegl1 libopengl0 libgl1-mesa-dri libxkbcommon-x11-0 libxcb-icccm4 \
+            libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 \
+            libxcb-xinerama0 libxcb-xfixes0 libxcb-shape0 libfontconfig1 libnss3 \
+            libdbus-1-3 libxcomposite1 libxdamage1 libxrandr2 libxtst6 libxi6 \
+            libasound2 libx11-xcb1 && rm -rf /var/lib/apt/lists/*
+        DOCKERFILE
+        docker run --rm --init --user "$(id -u):$(id -g)" \
+          --mount "type=bind,source=$GITHUB_WORKSPACE,target=$GITHUB_WORKSPACE,readonly" \
+          --mount "type=bind,source=$CALIBRE_5_DIRECTORY,target=$CALIBRE_5_DIRECTORY,readonly" \
+          --mount "type=bind,source=$CALIBRE_CONFIG_DIRECTORY,target=$CALIBRE_CONFIG_DIRECTORY" \
+          --workdir "$GITHUB_WORKSPACE" --env CALIBRE_CONFIG_DIRECTORY \
+          calibre-5-renderer "$CALIBRE_5_DIRECTORY/calibre-debug" \
+          -e common/run_installed_browser_smoke.py -- romanceio_fields --search-routes
 
     - name: Required local Chrome launch on minimum supported Calibre
       timeout-minutes: 5

@@ -1,9 +1,37 @@
 """Validate readiness without importing Qt or opening a browser."""
 
-from typing import List
+from typing import Any, Dict, List
 
 import pytest
 from common.common_romanceio_webengine import page_ready
+
+
+@pytest.mark.parametrize("existing_flags", ("", "--disable-logging"))
+def test_embedded_worker_disables_gpu_before_importing_qt(monkeypatch, existing_flags):
+    import builtins
+    import os
+    from common.common_romanceio_webengine import fetch_page
+
+    monkeypatch.setenv("QTWEBENGINE_CHROMIUM_FLAGS", existing_flags)
+    original_import = builtins.__import__
+
+    class QtImportReached(Exception):
+        pass
+
+    def checked_import(name, *args, **kwargs):
+        if name == "calibre.gui2":
+            flags = os.environ["QTWEBENGINE_CHROMIUM_FLAGS"].split()
+            assert "--disable-gpu" in flags
+            assert "--force-webrtc-ip-handling-policy=disable_non_proxied_udp" in flags
+            assert "--disable-quic" in flags
+            assert set(existing_flags.split()).issubset(flags)
+            assert "--no-sandbox" not in flags
+            raise QtImportReached()
+        return original_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", checked_import)
+    with pytest.raises(QtImportReached):
+        fetch_page({"url": "http://127.0.0.1/fixture"}, lambda _message: None)
 
 
 def document(body):
@@ -129,3 +157,35 @@ def test_smoke_rejects_chrome_setup_failure():
             "chrome",
             ["Chrome error: SessionNotCreatedException: Driver failed to start"],
         )
+
+
+@pytest.mark.parametrize("optimize", (1, 2))
+def test_smoke_rejects_worker_crashes_with_optimized_python(optimize):
+    import inspect
+    from common.run_installed_browser_smoke import _verify_challenge_failure
+
+    namespace: Dict[str, Any] = {}
+    code = compile(inspect.getsource(_verify_challenge_failure), "smoke_check", "exec", optimize=optimize)
+    exec(code, namespace)  # pylint: disable=exec-used
+    with pytest.raises(AssertionError, match="Challenge lookup failed unexpectedly"):
+        namespace["_verify_challenge_failure"](RuntimeError("Browser worker failed"), "embedded", [])
+
+
+@pytest.mark.parametrize(
+    "filename",
+    (
+        "run_installed_browser_smoke.py",
+        "run_installed_browser_lifecycle.py",
+        "run_installed_live_smoke.py",
+        "test_installed_plugins.py",
+        "test_release_zip_imports.py",
+    ),
+)
+def test_frozen_calibre_checks_are_not_stripped(filename):
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path(__file__).with_name(filename).read_text(encoding="utf-8"))
+    assert not any(
+        isinstance(node, ast.Assert) for node in ast.walk(tree)
+    ), f"{filename}: Calibre strips assert statements; use an explicit exception for smoke checks"

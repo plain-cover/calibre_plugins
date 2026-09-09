@@ -106,22 +106,35 @@ def main():
             if not thread.is_alive() and all(not process.is_running() for process in tracked):
                 break
             time.sleep(0.1)
-        assert "Starting Calibre embedded web engine" in output, output
-        assert "Navigating embedded web engine to" in output, output
-        assert tracked, "No worker descendants observed"
-        assert not any(
-            "chromedriver" in name or name in ("chrome.exe", "chrome", "uc_driver.exe") for name in process_names
-        ), process_names
-        assert not thread.is_alive(), "Outer job did not finish"
-        assert all(not process.is_running() for process in tracked), "Browser descendants survived"
-        assert all(not os.path.exists(profile) for profile in profiles), "Browser profile survived cleanup"
+        if not ("Starting Calibre embedded web engine" in output):
+            raise AssertionError(output)
+        if not ("Navigating embedded web engine to" in output):
+            raise AssertionError(output)
+        if not (tracked):
+            raise AssertionError("No worker descendants observed")
+        if not (
+            not any(
+                "chromedriver" in name or name in ("chrome.exe", "chrome", "uc_driver.exe") for name in process_names
+            )
+        ):
+            raise AssertionError(process_names)
+        if not (not thread.is_alive()):
+            raise AssertionError("Outer job did not finish")
+        if not (all(not process.is_running() for process in tracked)):
+            raise AssertionError("Browser descendants survived")
+        if not (all(not os.path.exists(profile) for profile in profiles)):
+            raise AssertionError("Browser profile survived cleanup")
         if args.mode == "cancel":
-            assert cancelled and errors, (cancelled, errors)
+            if not (cancelled and errors):
+                raise AssertionError((cancelled, errors))
         else:
-            assert not errors, errors
+            if not (not errors):
+                raise AssertionError(errors)
             response = results[0]["result"]
-            assert response["error_type"] == "BrowserFetchError", response
-            assert "time limit" in response["error_message"], response
+            if not (response["error_type"] == "BrowserFetchError"):
+                raise AssertionError(response)
+            if not ("time limit" in response["error_message"]):
+                raise AssertionError(response)
         print(
             f"PASS: {args.mode}: job stopped, browser descendants exited, and profiles removed ({time.monotonic()-started:.1f}s)"
         )

@@ -39,17 +39,21 @@ def main():
         "common_romanceio_search_orchestrator",
     ):
         module = importlib.import_module(f"{package_name}.{name}")
-        assert module.__file__, name
+        if not (module.__file__):
+            raise AssertionError(name)
         origin = os.path.normcase(os.path.abspath(module.__file__))
-        assert origin.startswith(os.path.normcase(zip_path) + os.sep), origin
-    assert not any(name == "seleniumbase" or name.startswith("seleniumbase.") for name in sys.modules)
+        if not (origin.startswith(os.path.normcase(zip_path) + os.sep)):
+            raise AssertionError(origin)
+    if any(name == "seleniumbase" or name.startswith("seleniumbase.") for name in sys.modules):
+        raise AssertionError("Shared runtime imports unexpectedly loaded SeleniumBase")
     print("PASS: shared runtime imports without loading Selenium")
     if not args.pure_python_only and not args.skip_qt:
         try:
             from qt.webengine import QWebEnginePage, QWebEngineProfile
         except ImportError:
             from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineProfile
-        assert QWebEnginePage and QWebEngineProfile
+        if not (QWebEnginePage and QWebEngineProfile):
+            raise AssertionError("Smoke check failed: QWebEnginePage and QWebEngineProfile")
     sys.path.insert(0, zip_path)
 
     helper = importlib.import_module("common_romanceio_fetch_helper")
@@ -87,16 +91,24 @@ def main():
     seleniumbase_origin = _origin(seleniumbase).replace("\\", "/")
     selenium_origin = _origin(selenium).replace("\\", "/")
     filelock_origin = _origin(filelock).replace("\\", "/")
-    assert expected_seleniumbase in seleniumbase_origin, seleniumbase_origin
-    assert expected_runtime in selenium_origin, selenium_origin
+    if not (expected_seleniumbase in seleniumbase_origin):
+        raise AssertionError(seleniumbase_origin)
+    if not (expected_runtime in selenium_origin):
+        raise AssertionError(selenium_origin)
     for dependency in (filelock, requests, typing_extensions, websockets):
         dependency_origin = _origin(dependency).replace("\\", "/")
-        assert (
-            expected_runtime in dependency_origin
-        ), f"{dependency.__name__} used the wrong runtime branch: {dependency_origin}"
+        if dependency is typing_extensions and type(dependency.__loader__).__module__ == "bypy_importer":
+            # Calibre's frozen importer precedes ZIP paths for this module.
+            # The browser-stack imports above exercise its required APIs.
+            print(f"Using Calibre's frozen typing_extensions: {dependency_origin}")
+            continue
+        if not (expected_runtime in dependency_origin):
+            raise AssertionError(f"{dependency.__name__} used the wrong runtime branch: {dependency_origin}")
     expected_urllib3 = expected_runtime if expected_branch == "current" else "browser_vendor/shared"
-    assert expected_urllib3 in _origin(urllib3).replace("\\", "/"), _origin(urllib3)
-    assert socks_support.SOCKSProxyManager is not None
+    if not (expected_urllib3 in _origin(urllib3).replace("\\", "/")):
+        raise AssertionError(_origin(urllib3))
+    if not (socks_support.SOCKSProxyManager is not None):
+        raise AssertionError("Smoke check failed: socks_support.SOCKSProxyManager is not None")
 
     distribution_expectations = {
         "seleniumbase": expected_seleniumbase.rsplit("/seleniumbase", 1)[0],
@@ -106,12 +118,13 @@ def main():
     }
     for distribution_name, expected_path in distribution_expectations.items():
         distribution_path = str(metadata.distribution(distribution_name).locate_file("")).replace("\\", "/")
-        assert (
-            expected_path in distribution_path
-        ), f"{distribution_name} metadata used the wrong runtime branch: {distribution_path}"
+        if not (expected_path in distribution_path):
+            raise AssertionError(f"{distribution_name} metadata used the wrong runtime branch: {distribution_path}")
     if not args.pure_python_only:
-        assert not _origin(lxml).startswith(zip_path), f"lxml must come from Calibre: {_origin(lxml)}"
-        assert not _origin(psutil).startswith(zip_path), f"psutil must come from Calibre: {_origin(psutil)}"
+        if _origin(lxml).startswith(zip_path):
+            raise AssertionError(f"lxml must come from Calibre: {_origin(lxml)}")
+        if _origin(psutil).startswith(zip_path):
+            raise AssertionError(f"psutil must come from Calibre: {_origin(psutil)}")
 
     print(f"PASS: SeleniumBase imports from release ZIP: {zip_path}")
     print(f"  vendor paths: {vendor_paths}")

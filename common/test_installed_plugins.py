@@ -30,9 +30,8 @@ def _origin(module):
 def _assert_installed_origin(module, plugin_path):
     module_path = _origin(module)
     expected_path = os.path.normcase(os.path.abspath(plugin_path))
-    assert module_path == expected_path or module_path.startswith(
-        expected_path + os.sep
-    ), f"{module.__name__} did not load from its installed ZIP: {module_path}"
+    if not (module_path == expected_path or module_path.startswith(expected_path + os.sep)):
+        raise AssertionError(f"{module.__name__} did not load from its installed ZIP: {module_path}")
 
 
 def _verify_existing_detail_setting(import_name):
@@ -69,11 +68,15 @@ def _verify_existing_detail_setting(import_name):
             worker._fetch_html_lightweight = http
             with patch.object(cfg, "plugin_prefs", {cfg.STORE_NAME: {cfg.KEY_PREFER_HTML: preferred}}):
                 worker.get_details()
-        assert calls == (
-            [("browser", "chrome"), ("http", None), ("browser", "embedded")]
-            if preferred
-            else [("http", None), ("browser", None)]
-        ), calls
+        if not (
+            calls
+            == (
+                [("browser", "chrome"), ("http", None), ("browser", "embedded")]
+                if preferred
+                else [("http", None), ("browser", None)]
+            )
+        ):
+            raise AssertionError(calls)
     print(f"PASS: {import_name} preserves the existing website-tags setting and Chrome-first detail order")
 
 
@@ -86,8 +89,10 @@ def _verify_chrome_worker_isolation(installed_plugin_paths):
         module_name = f"calibre_plugins.{import_name}.common_romanceio_fetch_helper"
         helper = importlib.import_module(module_name)
         source = fork_job(module_name, "resolve_browser_vendor_source", args=(import_name,), no_output=True)["result"]
-        assert isinstance(source, str), f"Browser vendor source is not a path: {source!r}"
-        assert os.path.normcase(os.path.abspath(source)) == os.path.normcase(plugin_path), source
+        if not (isinstance(source, str)):
+            raise AssertionError(f"Browser vendor source is not a path: {source!r}")
+        if not (os.path.normcase(os.path.abspath(source)) == os.path.normcase(plugin_path)):
+            raise AssertionError(source)
         previous_home = os.environ.get("CALIBRE_SELENIUM_HOME")
         try:
             with tempfile.TemporaryDirectory(prefix="chrome-worker-check-") as transport:
@@ -109,17 +114,23 @@ def _verify_chrome_worker_isolation(installed_plugin_paths):
                 result = fork_job(
                     module_name, "_supervise_browser_worker", args=(request,), timeout=40, no_output=True
                 )["result"]
-                assert isinstance(result, dict), result
+                if not (isinstance(result, dict)):
+                    raise AssertionError(result)
                 output = "\n".join(
                     json.loads(line)
                     for line in (Path(transport) / "progress.jsonl").read_text(encoding="utf-8").splitlines()
                 )
-                assert result.get("page", "missing") is None, result
+                if not (result.get("page", "missing") is None):
+                    raise AssertionError(result)
                 reason = helper.browser_automation_unavailable_reason()
-                assert (reason or "Top-level error in fetch_page") in output, output
-                assert "Starting Chrome" not in output, output
-                assert "Starting Calibre embedded web engine" not in output, output
-                assert "Browser worker failed" not in output, output
+                if not ((reason or "Top-level error in fetch_page") in output):
+                    raise AssertionError(output)
+                if not ("Starting Chrome" not in output):
+                    raise AssertionError(output)
+                if not ("Starting Calibre embedded web engine" not in output):
+                    raise AssertionError(output)
+                if not ("Browser worker failed" not in output):
+                    raise AssertionError(output)
                 if reason:
                     print(f"PASS: unsupported Chrome platform failed safely: {reason}")
         finally:
@@ -138,7 +149,8 @@ def _verify_search_failure_reporting():
     from calibre.utils.logging import ThreadSafeLog
 
     plugin = find_plugin("Romance.io")
-    assert plugin is not None, "Romance.io is not installed"
+    if not (plugin is not None):
+        raise AssertionError("Romance.io is not installed")
     api = importlib.import_module("calibre_plugins.romanceio.common_romanceio_json_api")
     helper = importlib.import_module("calibre_plugins.romanceio.fetch_helper")
     orchestrator = importlib.import_module("calibre_plugins.romanceio.common_romanceio_search_orchestrator")
@@ -161,11 +173,14 @@ def _verify_search_failure_reporting():
         results: Queue[Any] = Queue()
         with patch.object(api, "search_books_json", search), patch.object(helper, "fetch_page", browser):
             error = plugin.identify(ThreadSafeLog(), results, Event(), title="Absent", authors=["Test Author"])
-        assert results.empty()
+        if not (results.empty()):
+            raise AssertionError("Smoke check failed: results.empty()")
         if outcome == "empty":
-            assert error is None, error
+            if not (error is None):
+                raise AssertionError(error)
         else:
-            assert error and "search failed" in error.lower(), error
+            if not (error and "search failed" in error.lower()):
+                raise AssertionError(error)
     print("PASS: installed identify reports failures and subsequent confirmed-empty lookups recover")
 
 
@@ -177,16 +192,22 @@ def main():
     installed_plugin_paths = {}
     for display_name, import_name, expected_version, expected_minimum, plugin_modules in PLUGINS:
         plugin = find_plugin(display_name)
-        assert plugin is not None, f"{display_name} is not installed"
+        if not (plugin is not None):
+            raise AssertionError(f"{display_name} is not installed")
 
         plugin_path = os.path.abspath(plugin.plugin_path)
         installed_plugin_paths[import_name] = plugin_path
-        assert zipfile.is_zipfile(plugin_path), f"Installed plugin is not a ZIP: {plugin_path}"
-        assert tuple(plugin.version) == expected_version, (display_name, plugin.version)
-        assert tuple(plugin.minimum_calibre_version) == expected_minimum, (
-            display_name,
-            plugin.minimum_calibre_version,
-        )
+        if not (zipfile.is_zipfile(plugin_path)):
+            raise AssertionError(f"Installed plugin is not a ZIP: {plugin_path}")
+        if not (tuple(plugin.version) == expected_version):
+            raise AssertionError((display_name, plugin.version))
+        if not (tuple(plugin.minimum_calibre_version) == expected_minimum):
+            raise AssertionError(
+                (
+                    display_name,
+                    plugin.minimum_calibre_version,
+                )
+            )
 
         module = importlib.import_module(f"calibre_plugins.{import_name}")
         _assert_installed_origin(module, plugin_path)
@@ -206,7 +227,8 @@ def main():
             _assert_installed_origin(imported, plugin_path)
             if child_module == "common_romanceio_fetch_helper":
                 browser_source = os.path.normcase(os.path.abspath(imported.resolve_browser_vendor_source(import_name)))
-                assert browser_source == os.path.normcase(plugin_path), browser_source
+                if not (browser_source == os.path.normcase(plugin_path)):
+                    raise AssertionError(browser_source)
 
         _verify_existing_detail_setting(import_name)
         print(f"PASS: {display_name} v{'.'.join(map(str, expected_version))}: {plugin_path}")
@@ -226,7 +248,8 @@ def main():
             ),
             no_output=True,
         )["result"]
-        assert result is True, f"Nested worker did not run installed WebEngine code: {import_name}"
+        if not (result is True):
+            raise AssertionError(f"Nested worker did not run installed WebEngine code: {import_name}")
     print("PASS: both nested Calibre workers executed the installed embedded-engine module")
     _verify_search_failure_reporting()
     _verify_chrome_worker_isolation(installed_plugin_paths)
