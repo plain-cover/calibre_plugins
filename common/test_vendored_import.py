@@ -1414,3 +1414,67 @@ def test_repeated_browser_setup_restores_colorama_streams_and_exception_hook(mon
         assert sys.stderr is original[1]
         assert sys.excepthook is original[2]
         sys.stdout.write("Next lookup is still able to log\n")
+
+
+@pytest.mark.parametrize("version", ["149.0.7827.0", "bad version", 149, None])
+def test_macos_browser_version_reads_bundle_without_launching_chrome(monkeypatch, version):
+    import io
+    import plistlib
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    calls = []
+
+    def original(browser):
+        calls.append(browser)
+        return "fallback"
+
+    detector = SimpleNamespace(get_browser_version_from_os=original)
+    data = plistlib.dumps({"CFBundleShortVersionString": version} if version is not None else {})
+    monkeypatch.setattr("builtins.open", lambda *_args, **_kwargs: io.BytesIO(data))
+    fetch_helper.configure_macos_browser_detection(detector)
+    assert detector.get_browser_version_from_os("google-chrome") == (
+        version if isinstance(version, str) and version[0].isdigit() else None
+    )
+    assert calls == []
+    assert detector.get_browser_version_from_os("edge") == "fallback"
+    assert calls == ["edge"]
+
+
+def test_macos_browser_version_missing_bundle_does_not_run_shell_probe(monkeypatch):
+    from types import SimpleNamespace
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+
+    def missing(*_args, **_kwargs):
+        raise FileNotFoundError()
+
+    def forbidden(_browser):
+        raise AssertionError("Chrome version probing must not launch a process on macOS")
+
+    monkeypatch.setattr("builtins.open", missing)
+    detector = SimpleNamespace(get_browser_version_from_os=forbidden)
+    fetch_helper.configure_macos_browser_detection(detector)
+    assert detector.get_browser_version_from_os("google-chrome") is None
+
+
+@pytest.mark.parametrize("capture", (False, True))
+def test_worker_stack_diagnostics_are_opt_in_and_cancelled_on_failure(monkeypatch, capture):
+    from types import SimpleNamespace
+    from common import common_romanceio_webengine as webengine
+
+    calls: list[object] = []
+    diagnostics = SimpleNamespace(
+        enable=lambda: calls.append("enable"),
+        dump_traceback_later=lambda *args, **kwargs: calls.append((args, kwargs)),
+        cancel_dump_traceback_later=lambda: calls.append("cancel"),
+    )
+    monkeypatch.setitem(sys.modules, "faulthandler", diagnostics)
+
+    def fail(_request, _log):
+        raise RuntimeError("renderer setup failed")
+
+    monkeypatch.setattr(webengine, "fetch_page", fail)
+    result = fetch_helper._fetch_page_worker({"capture_worker_output": capture})
+    assert result["error_message"] == "renderer setup failed"
+    assert calls == (["enable", ((20,), {"repeat": True}), "cancel"] if capture else [])

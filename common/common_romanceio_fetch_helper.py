@@ -12,6 +12,7 @@ import json
 from importlib import metadata as importlib_metadata
 import os
 import platform
+import plistlib
 import re
 import shutil
 import subprocess
@@ -936,6 +937,32 @@ def _installed_browser_major_version(detect_b_ver: Any, binary_location: Optiona
     return int(match.group(1)) if match else None
 
 
+def configure_macos_browser_detection(detect_b_ver: Any) -> None:
+    """Read Chrome's bundle version without launching Chrome to probe it."""
+    if sys.platform != "darwin":
+        return
+    original = detect_b_ver.get_browser_version_from_os
+
+    def version_from_os(browser_type):
+        if browser_type != "google-chrome":
+            return original(browser_type)
+        for directory in ("/Applications", os.path.expanduser("~/Applications")):
+            path = os.path.join(directory, "Google Chrome.app", "Contents", "Info.plist")
+            try:
+                with open(path, "rb") as stream:
+                    info = plistlib.load(stream)
+                version = info.get("CFBundleShortVersionString", "") if isinstance(info, dict) else ""
+                if isinstance(version, str) and re.fullmatch(r"\d+(?:\.\d+){2,3}", version):
+                    return version
+            except (OSError, ValueError, plistlib.InvalidFileException):
+                continue
+        return None
+
+    # SeleniumBase calls this again while preparing the driver. Replace its
+    # shared detector so that those calls also avoid unbounded shell probes.
+    detect_b_ver.get_browser_version_from_os = version_from_os
+
+
 def _find_flatpak_chrome() -> Optional[str]:
     """Return a directly runnable Chrome binary from Flatpak storage, if any.
 
@@ -1322,6 +1349,7 @@ def _fetch_page_in_process(
         # on an explicit set of Google-owned TLS origins, including redirects.
         configure_secure_driver_downloads(sb_install)
         detect_b_ver = importlib.import_module("seleniumbase.core.detect_b_ver")
+        configure_macos_browser_detection(detect_b_ver)
         download_helper = importlib.import_module("seleniumbase.core.download_helper")
         fasteners_module = importlib.import_module("fasteners")
         patcher = importlib.import_module("seleniumbase.undetected.patcher")
@@ -1334,7 +1362,9 @@ def _fetch_page_in_process(
         download_helper.downloads_path = downloads_dir  # type: ignore[attr-defined]
         patcher.Patcher.data_path = sb_drivers_dir
 
+        _log("Loading Chrome launcher")
         browser_launcher = importlib.import_module("seleniumbase.core.browser_launcher")
+        _log("Chrome launcher loaded; detecting installed browser version")
 
         is_windows = platform.system() == "Windows"
         uc_driver_name = "uc_driver.exe" if is_windows else "uc_driver"
@@ -1588,6 +1618,15 @@ def _fetch_page_worker(request: Dict[str, Any]) -> Dict[str, Any]:
         else:
             logs.append(message)
 
+    diagnostics = None
+    if request.get("capture_worker_output"):
+        import faulthandler
+
+        diagnostics = faulthandler
+        diagnostics.enable()
+        # Opt-in local CI fixtures only. A hung import/version probe otherwise
+        # leaves no Python traceback when the supervisor terminates the worker.
+        diagnostics.dump_traceback_later(20, repeat=True)
     try:
         from .common_romanceio_webengine import fetch_page as fetch_embedded_page
 
@@ -1616,6 +1655,9 @@ def _fetch_page_worker(request: Dict[str, Any]) -> Dict[str, Any]:
             "error_type": "BrowserFetchError",
             "error_message": str(error),
         }
+    finally:
+        if diagnostics is not None:
+            diagnostics.cancel_dump_traceback_later()
 
 
 def _is_installed_plugin_module(plugin_name: str) -> bool:

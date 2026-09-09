@@ -286,6 +286,7 @@ def main():
                     log_func=print,
                     allow_chrome_fallback=chrome,
                     prefer_chrome=args.backend == "chrome",
+                    backend=None if args.chrome_fallback else args.backend,
                 )
                 if not page or marker not in page:
                     raise AssertionError("A subsequent lookup failed after the challenge")
