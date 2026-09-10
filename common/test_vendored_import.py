@@ -1096,7 +1096,8 @@ def test_lifecycle_timeout_probe_captures_supervisor_stacks_and_cancels_timer(mo
     response = {"error_type": "BrowserFetchError", "error_message": "time limit"}
 
     def supervise(received):
-        assert received is request
+        assert received == {**request, "capture_worker_output": True}
+        assert "capture_worker_output" not in request
         if fails:
             raise RuntimeError("supervisor failed")
         return response

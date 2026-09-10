@@ -48,7 +48,9 @@ def _timeout_probe(request):
     faulthandler.dump_traceback_later(request["worker_timeout"] + 5, repeat=True)
     try:
         helper = importlib.import_module("calibre_plugins.romanceio_fields.common_romanceio_fetch_helper")
-        return helper._supervise_browser_worker(request)
+        # The supervisor's own log cannot explain a native crash in the nested
+        # browser worker. Retain that worker's diagnostics for this local test.
+        return helper._supervise_browser_worker({**request, "capture_worker_output": True})
     finally:
         faulthandler.cancel_dump_traceback_later()
 
