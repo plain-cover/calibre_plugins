@@ -6,6 +6,7 @@ Run with calibre-debug -e common/run_installed_browser_lifecycle.py -- cancel
 
 import argparse
 import importlib
+import inspect
 import os
 import shutil
 import tempfile
@@ -36,6 +37,20 @@ def _observe_process(process, tracked, process_names, profiles, unreadable):
         if process not in unreadable:
             print(f"Command-line inspection unavailable for PID {process.pid}; still checking its exit", flush=True)
             unreadable.add(process)
+
+
+def _timeout_probe(request):
+    """Capture supervisor stalls as well as browser stalls in this local test."""
+    import faulthandler
+    import importlib
+
+    faulthandler.enable()
+    faulthandler.dump_traceback_later(request["worker_timeout"] + 5, repeat=True)
+    try:
+        helper = importlib.import_module("calibre_plugins.romanceio_fields.common_romanceio_fetch_helper")
+        return helper._supervise_browser_worker(request)
+    finally:
+        faulthandler.cancel_dump_traceback_later()
 
 
 def main():
@@ -98,7 +113,16 @@ def main():
             if args.mode == "cancel":
                 results.append(run_job(helper.__name__, "fetch_page", args=(request["url"], "romanceio_fields")))
             else:
-                results.append(run_job(helper.__name__, "_supervise_browser_worker", args=(request,)))
+                # Calibre loads the installed plugin inside the wrapper. Keeping
+                # the watchdog in the test also captures a hung plugin import.
+                results.append(
+                    run_job(
+                        inspect.getsource(_timeout_probe),
+                        "_timeout_probe",
+                        args=(request,),
+                        module_is_source_code=True,
+                    )
+                )
         except Exception as error:  # pylint: disable=broad-except
             errors.append(error)
 
@@ -107,6 +131,7 @@ def main():
     cancelled = False
     started = time.monotonic()
     previous = ""
+    passed = False
     try:
         while time.monotonic() - started < 45:
             try:
@@ -167,8 +192,12 @@ def main():
         print(
             f"PASS: {args.mode}: job stopped, browser descendants exited, and profiles removed ({time.monotonic()-started:.1f}s)"
         )
+        passed = True
     finally:
         run_job.worker.kill()
+        helper._finish_browser_worker_output(
+            run_job.worker.log_path, not passed, print, label="Outer job native output"
+        )
         for process in tracked:
             try:
                 process.kill()

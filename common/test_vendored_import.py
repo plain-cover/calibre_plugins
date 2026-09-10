@@ -1079,6 +1079,44 @@ def test_missing_native_worker_output_does_not_mask_failure(tmp_path):
     assert logs == ["Could not read browser worker native output: FileNotFoundError"]
 
 
+@pytest.mark.parametrize("fails", (False, True))
+def test_lifecycle_timeout_probe_captures_supervisor_stacks_and_cancels_timer(monkeypatch, fails):
+    import inspect
+    from typing import Any
+    from common.run_installed_browser_lifecycle import _timeout_probe
+
+    calls: list[object] = []
+    diagnostics = types.SimpleNamespace(
+        enable=lambda: calls.append("enable"),
+        dump_traceback_later=lambda delay, repeat: calls.append((delay, repeat)),
+        cancel_dump_traceback_later=lambda: calls.append("cancel"),
+    )
+    monkeypatch.setitem(sys.modules, "faulthandler", diagnostics)
+    request = {"worker_timeout": 20}
+    response = {"error_type": "BrowserFetchError", "error_message": "time limit"}
+
+    def supervise(received):
+        assert received is request
+        if fails:
+            raise RuntimeError("supervisor failed")
+        return response
+
+    monkeypatch.setitem(
+        sys.modules,
+        "calibre_plugins.romanceio_fields.common_romanceio_fetch_helper",
+        types.SimpleNamespace(_supervise_browser_worker=supervise),
+    )
+    # Calibre executes this function's source in a fresh module namespace.
+    namespace: dict[str, Any] = {}
+    exec(inspect.getsource(_timeout_probe), namespace)  # pylint: disable=exec-used
+    if fails:
+        with pytest.raises(RuntimeError, match="supervisor failed"):
+            namespace["_timeout_probe"](request)
+    else:
+        assert namespace["_timeout_probe"](request) is response
+    assert calls == ["enable", (25, True), "cancel"]
+
+
 def test_worker_heartbeat_captures_descendants_at_deadline(tmp_path, monkeypatch):
     real_mkdtemp = fetch_helper.tempfile.mkdtemp
     monkeypatch.setattr(fetch_helper.tempfile, "mkdtemp", lambda **kw: real_mkdtemp(dir=str(tmp_path), **kw))
