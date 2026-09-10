@@ -14,12 +14,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     env:
-      CALIBRE_CONFIG_DIRECTORY: ${{ runner.temp }}/taxonomy-calibre-config
-      CALIBRE_DIRECTORY: ${{ runner.temp }}/taxonomy-calibre
       # Keep these pins in sync with plugin-tests.yml.
       CALIBRE_CURRENT_VERSION: "9.14.0"
       CALIBRE_CURRENT_LINUX_SHA512: "d1a162d472dfbc3b74946809a979197121277150efe9e2172786843573c89dab542ce2bad98164c5d788420d2b9d8caea208cfe82c5016b3db09c0ed3ef3fc37"
     steps:
+      - name: Configure isolated Calibre paths
+        run: |
+          echo "CALIBRE_CONFIG_DIRECTORY=$RUNNER_TEMP/taxonomy-calibre-config" >> "$GITHUB_ENV"
+          echo "CALIBRE_DIRECTORY=$RUNNER_TEMP/taxonomy-calibre" >> "$GITHUB_ENV"
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
