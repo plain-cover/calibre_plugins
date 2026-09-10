@@ -43,8 +43,10 @@ _MIN_JSON_INTERVAL = "_MIN_JSON_INTERVAL_SECS"
 
 
 @pytest.fixture(autouse=True)
-def clear_orchestrator_state():
+def clear_orchestrator_state(monkeypatch, tmp_path):
     """Reset all module-level state before and after every test."""
+    monkeypatch.setenv("CALIBRE_SELENIUM_HOME", str(tmp_path))
+    monkeypatch.setattr(_orchestrator_mod, "_retry_after_until", 0.0)
     getattr(_orchestrator_mod, _DEAD_SET).clear()
     setattr(_orchestrator_mod, _RATE_LIMIT_TIME, 0.0)
     setattr(_orchestrator_mod, _LAST_JSON_REQUEST_TIME, {})
@@ -170,18 +172,23 @@ def test_book_not_found_does_not_retry():
     assert not any("retry attempt" in msg.lower() for msg in logs)
 
 
-def test_fetch_details_book_not_found_falls_through_to_html():
-    """On JsonApiBookNotFoundError, fetch_details_with_fallback must try HTML without marking endpoint dead."""
+def test_fetch_details_html_success_avoids_json_book_details():
+    """A working HTML detail method must avoid the known-failing JSON details request."""
     html_called = []
+    json_called = []
 
     def html_fetch(romanceio_id, _log_func):
         html_called.append(romanceio_id)
         return "html_result"
 
-    log_func, logs = _collecting_log()
+    def json_fetch(romanceio_id, _log_func):
+        json_called.append(romanceio_id)
+        return "json_result"
+
+    log_func, _ = _collecting_log()
     result = fetch_details_with_fallback(
         romanceio_id="abc123",
-        json_fetch_func=_raise_book_not_found,
+        json_fetch_func=json_fetch,
         html_fetch_func=html_fetch,
         log_func=log_func,
         max_retries=3,
@@ -189,36 +196,42 @@ def test_fetch_details_book_not_found_falls_through_to_html():
     )
 
     assert result == "html_result"
-    assert html_called == ["abc123"], "HTML fallback should have been called exactly once"
-    assert any("falling back" in msg.lower() for msg in logs)
-    assert not _is_endpoint_dead(JSON_BOOKS_URL_PREFIX), "Books endpoint must NOT be marked dead for a per-book 404"
+    assert html_called == ["abc123"]
+    assert not json_called, "JSON book details must stay unused when HTML succeeds"
 
 
-def test_fetch_details_404_falls_through_to_html():
-    """On JSON endpoint 404 (JsonApiEndpointError), fetch_details_with_fallback should try HTML scraping."""
+def test_fetch_details_book_not_found_is_graceful_after_html_failure():
+    """A final JSON per-book 404 is graceful and does not mark the endpoint dead."""
     html_called = []
+    json_called = []
 
     def html_fetch(romanceio_id, _log_func):
         html_called.append(romanceio_id)
-        return "html_result"
+        return None
+
+    def json_fetch(romanceio_id, log_func):
+        json_called.append(romanceio_id)
+        return _raise_book_not_found(romanceio_id, log_func)
 
     log_func, logs = _collecting_log()
     result = fetch_details_with_fallback(
         romanceio_id="abc123",
-        json_fetch_func=_raise_404,
+        json_fetch_func=json_fetch,
         html_fetch_func=html_fetch,
         log_func=log_func,
         max_retries=3,
         retry_delay=0,
     )
 
-    assert result == "html_result"
-    assert html_called == ["abc123"], "HTML fallback should have been called exactly once"
-    assert any("falling back" in msg.lower() for msg in logs)
+    assert result is None
+    assert html_called == ["abc123"]
+    assert json_called == ["abc123"]
+    assert any("final fallback" in msg.lower() for msg in logs)
+    assert not _is_endpoint_dead(JSON_BOOKS_URL_PREFIX), "A per-book 404 must not mark the endpoint dead"
 
 
 def test_fetch_details_404_html_also_fails_returns_none():
-    """On JSON 404 + HTML failure, result is None with no unhandled exception."""
+    """An endpoint 404 in the final JSON slot is cached without escaping."""
     log_func, _ = _collecting_log()
     result = fetch_details_with_fallback(
         romanceio_id="abc123",
@@ -230,6 +243,7 @@ def test_fetch_details_404_html_also_fails_returns_none():
     )
 
     assert result is None
+    assert _is_endpoint_dead(JSON_BOOKS_URL_PREFIX)
 
 
 # ---------------------------------------------------------------------------
@@ -238,9 +252,10 @@ def test_fetch_details_404_html_also_fails_returns_none():
 
 
 def test_lightweight_fetch_used_before_chrome():
-    """When lightweight_html_fetch_func is provided and succeeds, Chrome is never called."""
+    """When lightweight HTML succeeds, neither Chrome nor JSON is called."""
     chrome_called = []
     lightweight_called = []
+    json_called = []
 
     def lightweight_html(rid, _log_func):
         lightweight_called.append(rid)
@@ -250,10 +265,14 @@ def test_lightweight_fetch_used_before_chrome():
         chrome_called.append(rid)
         return "chrome_result"
 
+    def json_fetch(rid, _log_func):
+        json_called.append(rid)
+        return "json_result"
+
     log_func, _ = _collecting_log()
     result = fetch_details_with_fallback(
         romanceio_id="abc123",
-        json_fetch_func=_raise_404,
+        json_fetch_func=json_fetch,
         lightweight_html_fetch_func=lightweight_html,
         html_fetch_func=chrome_html,
         log_func=log_func,
@@ -264,11 +283,13 @@ def test_lightweight_fetch_used_before_chrome():
     assert result == "lightweight_result"
     assert lightweight_called == ["abc123"]
     assert not chrome_called, "Chrome must NOT be called when lightweight fetch succeeds"
+    assert not json_called, "JSON details must NOT be called when lightweight fetch succeeds"
 
 
 def test_lightweight_fetch_failure_falls_through_to_chrome():
-    """If lightweight fetch raises, Chrome HTML should still be tried."""
+    """If lightweight fetch raises, Chrome is next and JSON remains unused on success."""
     chrome_called = []
+    json_called = []
 
     def lightweight_html(rid, _log_func):
         raise RuntimeError("Cloudflare blocking plain HTTP")
@@ -277,10 +298,14 @@ def test_lightweight_fetch_failure_falls_through_to_chrome():
         chrome_called.append(rid)
         return "chrome_result"
 
+    def json_fetch(rid, _log_func):
+        json_called.append(rid)
+        return "json_result"
+
     log_func, logs = _collecting_log()
     result = fetch_details_with_fallback(
         romanceio_id="abc123",
-        json_fetch_func=_raise_404,
+        json_fetch_func=json_fetch,
         lightweight_html_fetch_func=lightweight_html,
         html_fetch_func=chrome_html,
         log_func=log_func,
@@ -290,21 +315,27 @@ def test_lightweight_fetch_failure_falls_through_to_chrome():
 
     assert result == "chrome_result"
     assert chrome_called == ["abc123"]
+    assert not json_called
     assert any("chrome" in msg.lower() or "falling back" in msg.lower() for msg in logs)
 
 
-def test_no_lightweight_func_goes_straight_to_chrome():
-    """Without lightweight_html_fetch_func, Chrome is tried immediately after JSON fails."""
+def test_no_lightweight_func_goes_to_chrome_before_json():
+    """Without lightweight HTML, Chrome is still preferred over JSON details."""
     chrome_called = []
+    json_called = []
 
     def chrome_html(rid, _log_func):
         chrome_called.append(rid)
         return "chrome_result"
 
+    def json_fetch(rid, _log_func):
+        json_called.append(rid)
+        return "json_result"
+
     log_func, _ = _collecting_log()
     result = fetch_details_with_fallback(
         romanceio_id="abc123",
-        json_fetch_func=_raise_404,
+        json_fetch_func=json_fetch,
         html_fetch_func=chrome_html,
         log_func=log_func,
         max_retries=3,
@@ -313,6 +344,68 @@ def test_no_lightweight_func_goes_straight_to_chrome():
 
     assert result == "chrome_result"
     assert chrome_called == ["abc123"]
+    assert not json_called
+
+
+def test_detail_fallback_order_is_lightweight_then_chrome_then_json():
+    """All technical failures must reach JSON details only after both HTML methods."""
+    calls = []
+
+    def lightweight_html(rid, _log_func):
+        calls.append(("lightweight", rid))
+        raise RuntimeError("plain HTTP unavailable")
+
+    def chrome_html(rid, _log_func):
+        calls.append(("chrome", rid))
+        raise RuntimeError("Chrome unavailable")
+
+    def json_fetch(rid, _log_func):
+        calls.append(("json", rid))
+        return "json_result"
+
+    result = fetch_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=json_fetch,
+        lightweight_html_fetch_func=lightweight_html,
+        html_fetch_func=chrome_html,
+        log_func=lambda _: None,
+        max_retries=1,
+        retry_delay=0,
+    )
+
+    assert result == "json_result"
+    assert calls == [("lightweight", "abc123"), ("chrome", "abc123"), ("json", "abc123")]
+
+
+def test_prefer_chrome_changes_order_without_retrying_chrome_after_ssr_failure():
+    """The preference changes ordering, not the number of Chrome method slots."""
+    calls = []
+
+    def lightweight_html(rid, _log_func):
+        calls.append(("lightweight", rid))
+        raise RuntimeError("plain HTTP unavailable")
+
+    def chrome_html(rid, _log_func):
+        calls.append(("chrome", rid))
+        raise RuntimeError("Chrome unavailable")
+
+    def json_fetch(rid, _log_func):
+        calls.append(("json", rid))
+        return "json_result"
+
+    result = fetch_details_with_fallback(
+        romanceio_id="abc123",
+        json_fetch_func=json_fetch,
+        lightweight_html_fetch_func=lightweight_html,
+        html_fetch_func=chrome_html,
+        log_func=lambda _: None,
+        max_retries=1,
+        retry_delay=0,
+        prefer_chrome=True,
+    )
+
+    assert result == "json_result"
+    assert calls == [("chrome", "abc123"), ("lightweight", "abc123"), ("json", "abc123")]
 
 
 # ---------------------------------------------------------------------------
@@ -377,7 +470,8 @@ def test_chrome_not_installed_does_not_retry():
 
     assert len(attempts) == 1, f"Expected 1 attempt, got {len(attempts)}"
     assert result == SearchResult(success=False, result=None)
-    assert any("chrome is not installed" in msg.lower() for msg in logs)
+    assert any("Chrome browser unavailable" in msg for msg in logs)
+    assert not any("google.com/chrome" in msg for msg in logs)
     assert not any("retry attempt" in msg.lower() for msg in logs)
 
 
@@ -503,7 +597,7 @@ def test_search_not_skipped_when_only_books_endpoint_dead():
 
 
 def test_fetch_details_skips_json_when_books_endpoint_dead():
-    """fetch_details_with_fallback skips JSON when the books endpoint is marked dead."""
+    """The final JSON fallback is skipped when the books endpoint is marked dead."""
     _mark_endpoint_dead(JSON_BOOKS_URL_PREFIX)
     json_called = []
 
@@ -515,7 +609,7 @@ def test_fetch_details_skips_json_when_books_endpoint_dead():
 
     def html_fetch(romanceio_id, _log):
         html_called.append(romanceio_id)
-        return "html_result"
+        return None
 
     log_func, _ = _collecting_log()
     result = fetch_details_with_fallback(
@@ -528,8 +622,8 @@ def test_fetch_details_skips_json_when_books_endpoint_dead():
     )
 
     assert not json_called, "JSON fetch must not be called when books endpoint is known-dead"
-    assert html_called == ["abc123"], "HTML fallback must still be called"
-    assert result == "html_result"
+    assert html_called == ["abc123"], "HTML must still be attempted before the dead JSON slot"
+    assert result is None
 
 
 def test_fetch_details_not_skipped_when_only_search_endpoint_dead():
@@ -643,7 +737,7 @@ def _mock_time_and_sleep(initial_time: float) -> Iterator[tuple[list[float], lis
     def mock_time() -> float:
         return fake_clock[0]
 
-    _orchestrator_mod.time.sleep = mock_sleep
+    _orchestrator_mod.time.sleep = mock_sleep  # type: ignore[assignment]
     _orchestrator_mod.time.time = mock_time
     try:
         yield slept, fake_clock
@@ -727,7 +821,7 @@ def test_maybe_wait_no_sleep_without_prior_429():
         def mock_sleep(secs: float) -> None:
             slept.append(secs)
 
-        _orchestrator_mod.time.sleep = mock_sleep
+        _orchestrator_mod.time.sleep = mock_sleep  # type: ignore[assignment]
         try:
             getattr(_orchestrator_mod, _THROTTLE)(lambda _: None, JSON_SEARCH_URL_PREFIX)
             assert not slept, "Should not sleep when no prior 429 and min interval is zeroed"
@@ -789,16 +883,16 @@ def test_403_does_not_retry():
     assert result == SearchResult(success=False, result=None)
 
 
-def test_403_marks_all_endpoints_dead():
-    """A 403 must mark BOTH search and books endpoints dead for this session."""
+def test_403_does_not_mark_endpoints_dead():
+    """Access denial must not prevent later HTTP recovery or poison other endpoints."""
 
     def func():
         raise JsonApiAccessDeniedError("HTTP Error 403: Forbidden")
 
     _retry_with_delay(func, "JSON API search", max_retries=3, retry_delay=0, log_func=lambda _: None)
 
-    assert _is_endpoint_dead(JSON_SEARCH_URL_PREFIX), "Search endpoint must be marked dead after 403"
-    assert _is_endpoint_dead(JSON_BOOKS_URL_PREFIX), "Books endpoint must be marked dead after 403"
+    assert not _is_endpoint_dead(JSON_SEARCH_URL_PREFIX)
+    assert not _is_endpoint_dead(JSON_BOOKS_URL_PREFIX)
 
 
 def test_403_logs_cloudflare_message():
@@ -836,13 +930,13 @@ def test_403_search_with_fallback_falls_through_to_html():
     assert html_called, "HTML search must be called after JSON returns 403"
 
 
-def test_403_fetch_details_falls_through_to_html():
-    """fetch_details_with_fallback must fall through to HTML when JSON returns 403."""
+def test_403_in_final_detail_fallback_is_graceful():
+    """A final JSON 403 is graceful without disabling unrelated endpoints."""
     html_called = []
 
     def html_fetch(romanceio_id, _log_func):
         html_called.append(romanceio_id)
-        return {"title": "some book"}
+        return None
 
     log_func, _ = _collecting_log()
     result = fetch_details_with_fallback(
@@ -854,12 +948,14 @@ def test_403_fetch_details_falls_through_to_html():
         retry_delay=0,
     )
 
-    assert result == {"title": "some book"}, "HTML fallback result must be returned after 403"
-    assert html_called == ["abc123"], "HTML fetch must be called after JSON returns 403"
+    assert result is None
+    assert html_called == ["abc123"]
+    assert not _is_endpoint_dead(JSON_SEARCH_URL_PREFIX)
+    assert not _is_endpoint_dead(JSON_BOOKS_URL_PREFIX)
 
 
-def test_403_subsequent_books_skip_json():
-    """After a 403, both search and detail JSON calls must be skipped for all subsequent books."""
+def test_403_subsequent_books_can_recover_http():
+    """A later book can use HTTP again after a browser has refreshed clearance."""
     # Simulate: first book triggers 403 during search
     search_count = []
     fetch_count = []
@@ -883,12 +979,12 @@ def test_403_subsequent_books_skip_json():
     # First book - triggers 403, falls back to HTML
     search_with_fallback("Book 1", ["Author"], json_search, html_search, log_func, max_retries=1, retry_delay=0)
 
-    # After 403, both endpoints are dead, so entire JSON is skipped for subsequent books
+    # A later book must be allowed to retry HTTP with updated session state.
     search_with_fallback("Book 2", ["Author"], json_search, html_search, log_func, max_retries=1, retry_delay=0)
     fetch_details_with_fallback("abc456", json_fetch, html_fetch, log_func, max_retries=1, retry_delay=0)
 
-    assert search_count == [1], f"JSON search called {len(search_count)} times, expected exactly 1 (on first book)"
-    assert not fetch_count, "JSON fetch must not be called after 403 marked endpoints dead"
+    assert search_count == [1, 1]
+    assert not fetch_count, "Successful HTML details should still avoid legacy JSON"
 
 
 # ---------------------------------------------------------------------------
@@ -954,9 +1050,166 @@ def test_throttle_returns_immediately_when_abort_already_set():
 
     slept: list[float] = []
     original_sleep = _orchestrator_mod.time.sleep
-    _orchestrator_mod.time.sleep = slept.append
+    _orchestrator_mod.time.sleep = slept.append  # type: ignore[assignment]
     try:
         getattr(_orchestrator_mod, _THROTTLE)(lambda _: None, JSON_SEARCH_URL_PREFIX, abort)
         assert not slept, f"Must not sleep when abort is already set, but slept for: {slept}"
     finally:
         _orchestrator_mod.time.sleep = original_sleep
+
+
+def test_browser_timeout_does_not_relaunch_chrome():
+    from common.common_romanceio_fetch_helper import BrowserFetchError
+
+    attempts = []
+
+    def browser():
+        attempts.append(1)
+        raise BrowserFetchError("Navigation exceeded its time limit")
+
+    result = _retry_with_delay(browser, "Chrome", 3, 0, lambda _msg: None)
+    assert not result.success
+    assert len(attempts) == 1
+
+
+def test_http_403_falls_back_without_repeating_blocked_request(monkeypatch):
+    from email.message import Message
+    from urllib.error import HTTPError
+    from common.common_romanceio_fetch_helper import fetch_book_page_http
+
+    attempts = []
+
+    def blocked(request, *_args, **_kwargs):
+        attempts.append(request.full_url)
+        raise HTTPError(request.full_url, 403, "Forbidden", Message(), None)
+
+    monkeypatch.setattr("common.common_romanceio_transport.open_request", blocked)
+    result = _retry_with_delay(lambda: fetch_book_page_http("book-id"), "HTTP", 3, 0, lambda _msg: None)
+    assert not result.success
+    assert len(attempts) == 1
+
+
+def test_json_search_does_not_start_browser_when_http_succeeds(monkeypatch):
+    from common import common_romanceio_json_api as api
+
+    monkeypatch.setattr(api, "_make_json_request", lambda *_args: {"success": True, "books": []})
+
+    def browser(_url):
+        pytest.fail("Successful HTTP must not start Chrome")
+
+    assert api.search_books_json("Title", browser_fetch_func=browser) == []
+
+
+def test_json_search_leaves_later_http_retry_decision_to_transport(monkeypatch):
+    from common import common_romanceio_json_api as api
+
+    calls = []
+
+    def request(*_args):
+        calls.append("http")
+        if len(calls) == 1:
+            raise JsonApiAccessDeniedError("403 Forbidden")
+        return {"success": True, "books": []}
+
+    def browser(_url):
+        calls.append("browser")
+        return '<pre>{"success":true,"books":[]}</pre>'
+
+    monkeypatch.setattr(api, "_make_json_request", request)
+    for _ in range(2):
+        assert api.search_books_json("Title", browser_fetch_func=browser) == []
+    assert calls == ["http", "browser", "http"]
+
+
+@pytest.mark.parametrize(
+    "page",
+    [
+        "<html><title>Just a moment</title></html>",
+        "<pre>Not JSON</pre>",
+        '<pre>{"success":true,"books":"invalid"}</pre>',
+        '<pre>{"success":true,"books":[null]}</pre>',
+        '<pre>{"success":false}</pre>',
+    ],
+)
+def test_bad_browser_json_falls_back_to_html_without_browser_retries(monkeypatch, page):
+    from common import common_romanceio_json_api as api
+
+    browser_calls = []
+
+    def blocked(*_args):
+        raise JsonApiAccessDeniedError("403 Forbidden")
+
+    def browser(url):
+        browser_calls.append(url)
+        return page
+
+    monkeypatch.setattr(api, "_make_json_request", blocked)
+    result = search_with_fallback(
+        "Title",
+        [],
+        lambda title, authors, log: api.search_books_json(title, authors, log_func=log, browser_fetch_func=browser),
+        lambda *_args: "html-match",
+        log_func=lambda _msg: None,
+    )
+    assert result == "html-match"
+    assert len(browser_calls) == 1
+
+
+def test_valid_empty_browser_json_does_not_fall_back_to_html(monkeypatch):
+    from common import common_romanceio_json_api as api
+
+    def blocked(*_args):
+        raise JsonApiAccessDeniedError("403 Forbidden")
+
+    monkeypatch.setattr(api, "_make_json_request", blocked)
+
+    def json_search(title, authors, log):
+        books = api.search_books_json(
+            title, authors, log_func=log, browser_fetch_func=lambda _url: '<pre>{"success":true,"books":[]}</pre>'
+        )
+        assert books == []
+        return None
+
+    def html_search(*_args):
+        pytest.fail("A valid empty JSON response must not trigger HTML search")
+
+    assert search_with_fallback("Title", [], json_search, html_search, log_func=lambda _msg: None) is None
+
+
+def test_json_search_404_does_not_start_browser_json(monkeypatch):
+    from common import common_romanceio_json_api as api
+
+    def missing(*_args):
+        raise JsonApiEndpointError("404 Not Found")
+
+    def browser(_url):
+        pytest.fail("Retired endpoints must not trigger browser JSON requests")
+
+    monkeypatch.setattr(api, "_make_json_request", missing)
+    with pytest.raises(JsonApiEndpointError):
+        api.search_books_json("Title", browser_fetch_func=browser)
+
+
+def test_exhausted_search_is_not_a_confirmed_absence():
+    def fail(*_args):
+        raise _orchestrator_mod.BrowserFetchError("Cloudflare challenge timed out")
+
+    with pytest.raises(_orchestrator_mod.SearchFailedError, match="no-match status is unknown"):
+        search_with_fallback("Absent", [], fail, fail, max_retries=1, log_func=lambda _msg: None)
+
+
+def test_recursion_fails_once_with_traceback_and_next_lookup_is_clean():
+    calls: list[int] = []
+    logs: list[str] = []
+
+    def broken(*_args):
+        calls.append(1)
+        raise RecursionError("simulated recursive import")
+
+    with pytest.raises(RecursionError):
+        search_with_fallback("Title", [], broken, broken, log_func=logs.append)
+    assert calls == [1]
+    assert any("Traceback" in entry and "simulated recursive import" in entry for entry in logs)
+    _orchestrator_mod._last_json_request_time.clear()
+    assert search_with_fallback("Next", [], lambda *_args: None, broken, log_func=logs.append) is None
+    assert calls == [1]

@@ -1,5 +1,5 @@
 import os
-from typing import cast, Any
+from typing import cast, Any, Dict
 from calibre.constants import iswindows, numeric_version as calibre_version
 from calibre.utils.config import config_dir
 
@@ -9,7 +9,7 @@ except ImportError:
     from PyQt5.Qt import QIcon, QPixmap
 
 # Plugin state for icon resource management
-_plugin_state: dict[str, Any] = {"name": None, "resources": {}}
+_plugin_state: Dict[str, Any] = {"name": None, "resources": {}}
 
 
 def set_plugin_icon_resources(name, resources):

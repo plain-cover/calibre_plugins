@@ -8,7 +8,7 @@ A Calibre interface action plugin that fetches Romance.io-specific data (steam r
 
 1. Searches [Romance.io](https://www.romance.io/) for books matching the title and author and, if found, stores the book's Romance.io ID
 2. Loads each book's Romance.io data to extract steam rating, star rating, vote count, and community tags
-3. Preserves the existing combined tag output and, when configured, copies Romance.io general tags, content warnings, geography, and format tags into separate columns
+3. Reads the full page tag lists and, when configured, copies Romance.io general tags, content warnings, geography, and format tags into separate columns
 4. Filters the combined tags by the maximum count setting; categorized columns receive their complete matching groups
 5. Writes values into the user-configured custom columns and optionally adds steam and star ratings to Calibre's standard Tags field
 6. Optionally prompts before saving
@@ -21,7 +21,7 @@ A Calibre interface action plugin that fetches Romance.io-specific data (steam r
 |---|---|---|
 | Refresh existing fields | ✓ checked | Re-download all fields even if already set (ID is never overwritten) |
 | Prompt to save | ☐ unchecked | Show confirmation dialog before writing to library |
-| Get tags directly from website (slower but includes additional community tags) | ☐ unchecked | Try the browser first to get the full JS-rendered tag set including community-voted tags; falls back to the normal JSON → lightweight HTTP → Chrome path if the browser is unavailable |
+| Get tags directly from website (slower but includes additional community tags) | ☐ unchecked | With this option checked, the plugin tries Chrome first. Unchecked, it first tries to download the book’s details and tags without a browser, then uses a browser if needed. |
 | Add steam rating to Calibre Tags | ☐ unchecked | Add a tag like `Romance.io steam: 3` |
 | Add star rating to Calibre Tags | ☐ unchecked | Add a tag like `Romance.io stars: 4.3` |
 | Steam column | - | Lookup name of your steam rating column |
@@ -117,13 +117,13 @@ Leave any field blank if you do not want the plugin to populate that column.
 Additional customization settings:
 - **Refresh existing fields when downloading from Romance.io** - When checked (default), all configured fields are updated with the latest data from Romance.io, even if they already have values. The Romance.io ID is never overwritten to avoid unnecessary searches. To change or re-download the ID, manually delete it from the book's identifiers. Uncheck if you have manually edited field values and don't want them overwritten.
 - **Prompt to save fields after downloading** - At the end of the download process, user can confirm if they would like to add the downloaded metadata for all selected books
-- **Get tags directly from website (slower but includes additional community tags)** - When checked, the plugin tries to open the Romance.io page in a Chrome browser first. This gives you the full community-voted tag set that is only available after JavaScript renders the page. If the browser is unavailable or fails, the plugin resumes the normal JSON → lightweight HTTP → Chrome fallback path. Unchecked (default): the plugin starts with JSON, which is faster and works without Chrome for most users.
+- **Get tags directly from website (slower but includes additional community tags)** - With this option checked, the plugin tries Chrome first. Unchecked, it first tries to download the book’s details and tags without a browser, then uses a browser if needed.
 - **Add steam rating to Calibre Tags** - Adds a tag like `Romance.io steam: 3` to Calibre's standard Tags field. This works without a steam-rating custom column. Existing tags are preserved, and re-running the plugin replaces only its own previous steam tag.
 - **Add star rating to Calibre Tags** - Adds a tag like `Romance.io stars: 4.3` to Calibre's standard Tags field. This works without a star-rating custom column. Existing tags are preserved, and re-running the plugin replaces only its own previous star tag.
 - **Maximum combined tags to download** - Maximum number written to the combined tags column (default: 50); categorized columns remain complete
 - **Categorized tag columns** - Optional additional destinations for general tags, content warnings, geography, and format tags. JSON tags are categorized with a taxonomy bundled with the plugin, so these columns do not add a webpage request or require Chrome. The groups do not change the combined tags column and are not truncated by the combined maximum-tags setting. Format tags will contain detailed length and series tags that the combined column omits.
   > **Why do my tags look different from what I see on Romance.io?**
-  > Romance.io displays two layers of tags: a core set (tropes, genres, etc.) stored in their database and returned by the API, and additional community-voted tags injected into the page by JavaScript after it loads. The default fast fetch (JSON API / lightweight HTTP) retrieves only the core set. To get the community tags too, enable this option - but be aware it requires Chrome and is slower since a browser window will have to open for each book.
+  > HTTP and browser fetching use the same full topic lists and ordering when those lists are present in the page. The shorter description list is a fallback for pages without populated topic lists. Your maximum-tags setting still limits the combined column; separate category columns remain untruncated. This setting retains Chrome-first fetching. Browser rendering takes longer per book and Chrome may open a window.
 
 ## Usage
 
@@ -141,7 +141,7 @@ With the optional category columns configured, the original combined tags remain
 
 ![Populated Calibre library columns showing combined Romance.io Tags alongside separate General Tags, Content Warnings, Format Tags, and Geography Tags](../images/Calibre%20optional%20tag%20category%20columns.png)
 
-> **Note:** Occasionally a browser window may open if the JSON API and lightweight HTTP both fail for a book - just ignore it and let the plugin work. Don't close the window or click anything on the page.
+> **Note:** Chrome may open a minimized window when its fallback is needed or the direct website-tags setting is enabled. Let the plugin close it; to stop downloading, cancel the Calibre job.
 
 ### Updating Existing Books
 
@@ -173,7 +173,7 @@ The plugin needs to know the Romance.io ID for each book. Either:
 
 This plugin:
 1. Gets the Romance.io ID from the book's identifiers or searches for it
-2. Fetches the book's Romance.io detail page - first trying the JSON API, then a lightweight HTTP request, then via Chrome as a final fallback if needed
+2. Fetches book details in the order selected by **Get tags directly from website**, as described under Configuration; legacy JSON is the final fallback
 3. Parses the response to extract steam rating, star rating, rating count, and tags
 4. Filters and formats tags based on your settings
 5. Updates your custom columns and configured rating tags with the downloaded data
@@ -188,7 +188,7 @@ The **Maximum combined tags** setting keeps the first tags in the order Romance.
 cd romanceio_fields && ./build.sh
 ```
 
-`build.sh` runs `setup_deps.sh` (vendors dependencies), then `build.py` (copies `common/` files with rewritten imports, creates `Romance.io Fields.zip`).
+`build.sh` verifies the dependency-input fingerprint, runs `setup_deps.sh` with pip's `--require-hashes` mode when the SHA-256-locked vendor trees need rebuilding, then runs `build.py` (copies `common/` files with rewritten imports and creates `Romance.io Fields.zip`).
 
 ## Testing
 
@@ -228,6 +228,19 @@ calibre-debug test_json_html_parse_matches.py -- --live         # 1 live book
 calibre-debug test_json_html_parse_matches.py -- --live=<id>    # Specific book ID
 ```
 
+After building and installing the release ZIP, run the focused production-path smokes from the repository root. The `embedded-*` modes try Qt first and retain the production Chrome fallback; the `chrome-*` modes require Chrome without Qt fallback:
+
+```bash
+calibre-debug -e common/run_installed_live_smoke.py -- json-search
+calibre-debug -e common/run_installed_live_smoke.py -- json-details
+calibre-debug -e common/run_installed_live_smoke.py -- ssr-details
+calibre-debug -e common/run_installed_live_smoke.py -- embedded-search
+calibre-debug -e common/run_installed_live_smoke.py -- embedded-details
+calibre-debug -e common/run_installed_live_smoke.py -- chrome-search
+calibre-debug -e common/run_installed_live_smoke.py -- chrome-details
+calibre-debug -e common/run_installed_live_smoke.py -- default
+```
+
 > `test_json_search_matching.py`, `test_tag_slug_conversion.py`, and `test_html_sanitizer.py` are copied from `common/` during build.
 
 ## Tag Limiting Detail
@@ -247,18 +260,12 @@ The plugin preserves the order supplied by Romance.io and takes the first `max_t
 - Check that your custom columns are created and mapped correctly in plugin settings
 - Verify the lookup names match exactly (case-sensitive)
 
-**Chrome is not installed ("Chrome is not installed - HTML metadata fallback is unavailable"):**
-- The plugin tries the JSON API first, then a lightweight HTTP fetch, and only uses Chrome as a final fallback
-- Categorized JSON tags use the bundled taxonomy and do not require Chrome or an extra HTTP request
-- Without Chrome, most books still download fine via the JSON API or lightweight HTTP fetch
-- Install Chrome from [google.com/chrome](https://www.google.com/chrome/) if you see this warning or downloads are failing
-- **Linux with Chrome installed as a flatpak:** the plugin can find Chrome automatically, but if Calibre is also a flatpak you need to run this once in a terminal and restart Calibre:
-  ```
-  flatpak override --user --filesystem=/var/lib/flatpak:ro com.calibre_ebook.calibre
-  ```
+**Cloudflare or browser errors:**
+- Check the download job log for the failed access method, error, or timeout. Cloudflare can reject both HTTP and browser requests.
+- Chrome is optional for HTTP and Calibre's built-in engine, but must be installed to use the Chrome fallback. See the [main README's browser requirements](../README.md#notes) for platform restrictions.
 
 **Slow performance:**
-- Most books download in seconds via the JSON API or a lightweight HTTP fetch. Chrome (via browser automation) is only used as a last resort when those methods fail, and takes 10-30 seconds per book
+- Leave **Get tags directly from website** unchecked to try lightweight HTTP first, including the full tag lists present in the response. Browser startup and handling Cloudflare challenges take longer; the job log shows which method is running.
 
 ## Support
 

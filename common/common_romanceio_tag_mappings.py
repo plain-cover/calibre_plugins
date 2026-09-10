@@ -12,7 +12,7 @@ from .common_romanceio_tag_categories import SPECIAL_TAG_CATEGORIES
 
 # Mapping from JSON API tag slugs to UI/display names.
 # To update both display names and categories: python common/update_tag_mappings.py
-# Last tag mapping update: 2026-08-03
+# Last tag mapping update: 2026-09-08
 # Number of topic tags seen during the same update. This includes identity
 # mappings, which are intentionally omitted from JSON_TO_UI_TAG_MAP.
 TOPIC_TAG_COUNT = 387

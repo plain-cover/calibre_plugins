@@ -176,7 +176,7 @@ Under **Rating tag options**, enable **Add steam rating to Calibre Tags** and/or
 
 ## Installation
 
-The two plugins are independent - install one or both depending on which features you want.
+The two plugins are independent - install one or both depending on which features you want. Both require Calibre 5.0 or newer.
 
 In Calibre, go to **Preferences > Plugins > Get new plugins**, search for "Romance.io", select the plugin(s) you want, and click **Install**. Restart Calibre when prompted.
 
@@ -190,14 +190,11 @@ For the Romance.io Fields plugin, you may have an extra step to ensure the plugi
 
 **You can process one book or many at once.** Select any number of books and click the Romance.io plugin button in the main Calibre toolbar to download in bulk. The download will run in the background and alert you when it's done. You can track the job's progress in the bottom-right corner of the Calibre window.
 
-**A browser window may open during downloads.** The plugin tries the Romance.io JSON API first, then a lightweight webpage request, and uses Chrome only as a final fallback. Categorized JSON tags use a taxonomy bundled with the plugin, so configuring category columns does not add a webpage request or require Chrome. Browser-based lookups can take ~5-30 seconds per book.
+**Chrome is optional.** By default, searches and book details use direct HTTP first. If needed, the plugin tries Calibre's built-in web engine invisibly, then installed Chrome, which may open a minimized window. Successful browser requests can save temporary Cloudflare clearance for later HTTP requests. The **Get tags directly from website (slower but includes additional community tags)** setting tries Chrome first for book details. The legacy JSON details endpoint remains the final fallback.
 
-**Chrome is required only for the browser-based metadata fallback and the full community-voted tag set.** Without Chrome, the plugin can still use the JSON API and lightweight webpage requests. Install Chrome from [google.com/chrome](https://www.google.com/chrome/) if you want the final fallback or full community tags. Chrome doesn't need to be your default browser, it just needs to be installed. On Apple Silicon Macs (M1/M2/M3/M4), Chrome's browser automation also requires Rosetta 2 - if that's missing, the plugin's job log will tell you how to install it.
+Browser attempts have time limits and are cleaned up when the job is cancelled. Progress and failures appear in the job log. No access method is guaranteed to pass every Cloudflare challenge.
 
-**Linux with Chrome installed as a flatpak:** the plugin can find and use a flatpak-installed Chrome automatically. If Calibre is also a flatpak, you need to run this once in a terminal and restart Calibre:
-```
-flatpak override --user --filesystem=/var/lib/flatpak:ro com.calibre_ebook.calibre
-```
+**Chrome fallback requirements:** Chrome does not need to be your default browser. If you want this fallback, install it from [google.com/chrome](https://www.google.com/chrome/). On Apple Silicon, follow the job log's Rosetta instructions if prompted. The plugin skips Chrome on Linux ARM64. For Calibre Flatpak, Chrome must be a directly runnable native binary visible inside Calibre's sandbox; a separate Chrome/Chromium Flatpak launcher cannot be used. These restrictions do not apply to Calibre's built-in web engine or direct HTTP.
 
 **Wrong book matched, or your title/author in Calibre intentionally differs from Romance.io?** The automatic search matches by title and author - if your library uses a different edition name, spelling, or you've renamed the book, the search may fail or pick the wrong result. That's fine: you can still manually link any book to its Romance.io page. Find the book on [Romance.io](https://romance.io) and open its **book detail page** (not the series page - the URL should contain `/books/`), then copy the ID from the URL (e.g. `5484ecd47a5936fb0405756c` from `romance.io/books/5484ecd47a5936fb0405756c/...`). In Calibre, open **Edit metadata** for the book, go to the **Ids** field, and add `romanceio:5484ecd47a5936fb0405756c`. After saving, the link to Romance.io will work in the book details panel, and Romance.io Fields will be able to download data for the book.
 
@@ -230,9 +227,11 @@ calibre-debug -g
 
 `build.sh` vendors dependencies and copies shared code from `common/` before zipping the plugin. Run it for both plugins before launching. See [romanceio/README.md](romanceio/README.md) and [romanceio_fields/README.md](romanceio_fields/README.md) for per-plugin build details and test commands.
 
-The **Romance.io Tag Updates (Weekly Maintenance Check)** GitHub Actions workflow compares the bundled display-name and category mappings with Romance.io's live taxonomy using plain HTTP. A failure labeled **Romance.io tag taxonomy changed** means the site data changed and the mappings need a routine refresh with `python common/update_tag_mappings.py`; it does not mean the general test pipeline broke.
+The **Romance.io Tag Updates (Weekly Maintenance Check)** GitHub Actions workflow compares the bundled display-name and category mappings with Romance.io's live taxonomy using HTTP first, then the installed plugin's Qt and Chrome recovery paths if needed. An access failure means the check could not run; it is not evidence that the mappings changed. A failure labeled **Romance.io tag taxonomy changed** means the site data changed and the mappings need a routine refresh with `python common/update_tag_mappings.py`; it does not mean the general test pipeline broke.
 
 ### Why are dependencies bundled in the zip?
 
-Calibre runs plugins in its own embedded Python environment - you can't install packages at runtime with pip. So all dependencies (seleniumbase, lxml, requests, etc.) are installed into the plugin folder at build time and bundled into the zip. See [common/README.md](common/README.md) for details on the shared code layer.
+Calibre runs plugins in its own embedded Python environment - you can't install packages at runtime with pip. Pure-Python browser dependencies are bundled into the zip, while native packages such as `lxml` and `psutil` come from Calibre so one release zip remains portable across Windows, macOS, regular Linux, and Calibre's Flatpak build. Calibre also supplies Qt WebEngine for rendering without installed Chrome. See [common/README.md](common/README.md) for details on the shared code layer.
+
+The main GitHub Actions workflow builds each plugin ZIP once, then installs that exact artifact into isolated Calibre configurations on Ubuntu x86_64/ARM64, Windows, Apple Silicon and Intel macOS, and the real Calibre Flatpak. It also tests Calibre 5.0 Linux and Calibre 5.44 Windows/macOS, imports shared runtime modules and the full Chrome startup path with an actual Python 3.9 interpreter, and audits each bundled branch against its minimum Python syntax. Installation, zipimport, dependency-origin, nested worker isolation, minimum-version behavior, local Qt and Chrome rendering, browser cleanup, and deterministic tests are required. Chrome launch checks remain in place alongside Qt checks; Linux ARM verifies graceful rejection of unsupported Chrome setup. Method-specific checks that contact Romance.io remain visible but non-blocking because third-party and Cloudflare decisions are not repository regressions.
 

@@ -11,7 +11,7 @@ from calibre_plugins.romanceio.parse_html import (  # type: ignore[import-not-fo
 )
 
 # Cap for JSON API and lightweight HTTP fetch timeouts.
-# Keeps individual requests short so retries and Chrome fallback fit within self.timeout.
+# Keeps individual requests short so retries and browser fallback can observe self.timeout.
 _JSON_TIMEOUT_SECS: int = 10
 
 
@@ -41,7 +41,7 @@ class Worker(Thread):
             self.log.exception(f"get_details failed for url: {self.url!r}")
 
     def get_details(self):
-        """Fetch book details, trying JSON API first, then falling back to HTML scraping."""
+        """Fetch book details, preferring HTML and retaining JSON as a final fallback."""
         try:
             romanceio_id = parse_romanceio_id(self.url)
             if not romanceio_id:
@@ -51,7 +51,8 @@ class Worker(Thread):
             self.log.exception(f"Error parsing Romance.io id from url: {self.url!r}")
             return
 
-        # Use orchestrator to try JSON first, then HTML fallback with retries
+        # The website-tags setting selects HTTP-first or Chrome-first details.
+        # The legacy JSON book-details endpoint remains the final fallback.
         from calibre_plugins.romanceio.common_romanceio_search_orchestrator import (  # type: ignore[import-not-found]  # pylint: disable=import-error
             fetch_details_with_fallback,
             _is_book_not_found,
@@ -61,37 +62,24 @@ class Worker(Thread):
             cfg.KEY_PREFER_HTML, cfg.DEFAULT_STORE_VALUES[cfg.KEY_PREFER_HTML]
         )
 
-        if prefer_html:
-            # Try Chrome first for the full JS-rendered tag set.
-            # On technical failure fall through to the normal JSON -> SSR orchestrator.
-            # On a genuine 404 stop immediately.
-            if self.abort is not None and self.abort.is_set():
-                return
-            self.log.info(f"prefer_html=True: fetching Chrome HTML directly for {romanceio_id}")
-            try:
-                chrome_root = self._fetch_html(romanceio_id, self.log.info)
-                if _is_book_not_found(chrome_root):
-                    self.log.info(f"Romance.io ID {romanceio_id} was not found on the website (404)")
-                    return
-                self._build_metadata_from_html(chrome_root)
-                return
-            except Exception as e:  # pylint: disable=broad-except
-                self.log.info(f"Chrome fetch failed ({type(e).__name__}: {e}), falling back to JSON/SSR")
-
         result = fetch_details_with_fallback(
             romanceio_id=romanceio_id,
             json_fetch_func=self._fetch_json,
             lightweight_html_fetch_func=self._fetch_html_lightweight,
-            html_fetch_func=self._fetch_html,
+            html_fetch_func=lambda book_id, log: self._fetch_html(
+                book_id, log, backend="embedded" if prefer_html else None
+            ),
+            chrome_fetch_func=lambda book_id, log: self._fetch_html(book_id, log, backend="chrome"),
             log_func=self.log.info,
             max_retries=3,
             retry_delay=2.0,
             abort=self.abort,
+            prefer_chrome=prefer_html,
         )
 
         if result is None:
             # Both JSON API and HTML scraping failed. If we captured basic metadata
-            # from the search step (e.g. Chrome not installed), emit a minimal result
+            # from the search step (e.g. browsers unavailable), emit a minimal result
             # so the book still appears as a Romance.io match in calibre.
             fallback_title = self.search_fallback.get("title", "")
             fallback_authors = self.search_fallback.get("authors", [])
@@ -116,7 +104,7 @@ class Worker(Thread):
         if isinstance(result, dict):
             self._build_metadata_from_json(romanceio_id, result)
         else:
-            # It's an HTML root element (either SSR from lightweight fetch or JS-rendered from Chrome)
+            # It's an HTML root element (either SSR from lightweight fetch or JS-rendered from browser)
             self._build_metadata_from_html(result)
 
     def _fetch_json(self, romanceio_id, log_func):
@@ -128,17 +116,20 @@ class Worker(Thread):
             Exception on technical failure (network, parsing, etc.)
         """
         from calibre_plugins.romanceio.common_romanceio_json_api import get_book_details_json  # type: ignore[import-not-found]  # pylint: disable=import-error
+        from calibre_plugins.romanceio.common_romanceio_validation import is_usable_book_detail_json  # type: ignore[import-not-found]  # pylint: disable=import-error
 
         book_json = get_book_details_json(
             romanceio_id, log_func=log_func, timeout=min(self.timeout, _JSON_TIMEOUT_SECS)
         )
+        if book_json is not None and not is_usable_book_detail_json(book_json, romanceio_id):
+            raise ValueError(f"JSON API returned an unusable detail payload for {romanceio_id}")
         return book_json
 
     def _fetch_html_lightweight(self, romanceio_id, log_func):
-        """Fetch and parse HTML page using a lightweight HTTP GET (no Chrome).
+        """Fetch and parse HTML page using a lightweight HTTP GET (no browser).
 
         Romance.io renders book pages server-side, so all metadata is available
-        without JavaScript execution. Much faster than Chrome and requires no installation.
+        without JavaScript execution or browser startup.
 
         Returns:
             lxml root element if successful, _BookNotFound if book not found
@@ -150,6 +141,7 @@ class Worker(Thread):
             fetch_book_page_http,
             parse_html_from_selenium,
         )
+        from calibre_plugins.romanceio.common_romanceio_validation import is_usable_book_detail_html  # type: ignore[import-not-found]  # pylint: disable=import-error
 
         log_func(f"Lightweight HTTP fetch: requesting book page for {romanceio_id}")
         raw_html, is_valid = fetch_book_page_http(
@@ -169,10 +161,13 @@ class Worker(Thread):
                 log_func(f"Lightweight HTTP fetch: got search results page for {romanceio_id}")
                 return _BookNotFound()
 
+        if not is_usable_book_detail_html(root):
+            raise ValueError(f"Lightweight HTTP returned an unusable detail page for {romanceio_id}")
+
         return root
 
-    def _fetch_html(self, romanceio_id, log_func):
-        """Fetch and parse HTML page for book details via Chrome browser automation.
+    def _fetch_html(self, romanceio_id, log_func, backend=None):
+        """Fetch and parse HTML page for book details via supervised browser rendering.
 
         Returns:
             lxml root element if successful, _BookNotFound if book not found
@@ -184,13 +179,16 @@ class Worker(Thread):
             fetch_romanceio_book_page,
             parse_html_from_selenium,
         )
+        from calibre_plugins.romanceio.common_romanceio_validation import is_usable_book_detail_html  # type: ignore[import-not-found]  # pylint: disable=import-error
 
         log_func(f"HTML fetch: requesting book page for {romanceio_id}")
-        page_html, is_valid = fetch_romanceio_book_page(self.url, plugin_name="romanceio", log=log_func)
+        page_html, is_valid = fetch_romanceio_book_page(
+            self.url, plugin_name="romanceio", log=log_func, abort=self.abort, backend=backend
+        )
 
         if not is_valid:
             if not page_html:
-                raise RuntimeError(f"Chrome failed to fetch page for {romanceio_id}: {self.url}")
+                raise RuntimeError(f"Browser failed to fetch page for {romanceio_id}: {self.url}")
             log_func(f"HTML fetch: page is invalid (404 or wrong content) for {romanceio_id}")
             return _BookNotFound()
 
@@ -209,6 +207,9 @@ class Worker(Thread):
             msg = tostring(errmsg, method="text", encoding="unicode").strip()
             raise RuntimeError(f"Page contains error: {msg}")
 
+        if not is_usable_book_detail_html(root):
+            raise ValueError(f"Browser returned an unusable detail page for {romanceio_id}")
+
         log_func(f"HTML fetch: page validated, extracting metadata for {romanceio_id}")
         return root
 
@@ -216,7 +217,7 @@ class Worker(Thread):
         """Build a minimal Metadata object from search-result data when full detail fetch fails.
 
         This ensures the book still appears as a Romance.io match in calibre even when
-        Chrome is not installed (or any other permanent detail-fetch failure), so the
+        browsers are unavailable (or any other permanent detail-fetch failure), so the
         user at least gets the ID link and cover.
         """
         mi = Metadata(title, authors)

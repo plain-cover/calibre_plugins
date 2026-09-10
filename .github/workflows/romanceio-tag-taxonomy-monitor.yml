@@ -2,7 +2,7 @@ name: Romance.io Tag Updates (Weekly Maintenance Check)
 
 on:
   schedule:
-    - cron: "17 13 * * 1"  # Weekly on Monday; two plain HTTP requests, no browser.
+    - cron: "17 13 * * 1"  # Weekly on Monday; HTTP first, browsers only for recovery.
   workflow_dispatch:
 
 permissions:
@@ -11,12 +11,33 @@ permissions:
 jobs:
   detect-romanceio-tag-changes:
     name: Detect Romance.io tag taxonomy changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      CALIBRE_CONFIG_DIRECTORY: ${{ runner.temp }}/taxonomy-calibre-config
+      CALIBRE_DIRECTORY: ${{ runner.temp }}/taxonomy-calibre
+      # Keep these pins in sync with plugin-tests.yml.
+      CALIBRE_CURRENT_VERSION: "9.14.0"
+      CALIBRE_CURRENT_LINUX_SHA512: "d1a162d472dfbc3b74946809a979197121277150efe9e2172786843573c89dab542ce2bad98164c5d788420d2b9d8caea208cfe82c5016b3db09c0ed3ef3fc37"
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: "3.11"
+      - name: Install verified Calibre for supervised browser recovery
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libegl1 libopengl0 libxcb-cursor0 xdg-utils xz-utils xvfb
+          archive="$RUNNER_TEMP/calibre-taxonomy.txz"
+          curl -fsSL \
+            "https://download.calibre-ebook.com/$CALIBRE_CURRENT_VERSION/calibre-$CALIBRE_CURRENT_VERSION-x86_64.txz" \
+            -o "$archive"
+          python common/verify_sha512.py "$archive" "$CALIBRE_CURRENT_LINUX_SHA512"
+          mkdir -p "$CALIBRE_DIRECTORY"
+          tar -xJf "$archive" -C "$CALIBRE_DIRECTORY"
+          echo "$CALIBRE_DIRECTORY" >> "$GITHUB_PATH"
+      - name: Build and install the Fields plugin
+        run: bash romanceio_fields/build.sh
       - name: Compare live Romance.io tags with bundled plugin mappings
-        run: python common/check_romanceio_tag_taxonomy.py --live
+        timeout-minutes: 10
+        run: xvfb-run -a calibre-debug -e common/check_romanceio_tag_taxonomy.py -- --live --browser-fallback

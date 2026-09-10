@@ -1,20 +1,10 @@
 """Test Romance.io SSR HTML field parsing (lightweight HTTP fetch path).
 
-The lightweight HTTP fetch path (fetch_book_page_http) retrieves the server-side
-rendered HTML without Chrome. This file verifies:
-
-1. parse_tags_from_description() - extracts tags from the <meta name="description">
-   attribute; these match the JSON API 'tropes' field exactly.
-2. parse_fields_from_ssr_html() - combines book-stats-based rating parsers (same as
-   Chrome) with description-based combined tags and embedded categorized tags.
-3. SSR vs JSON API parity - tags from SSR == tags from JSON API (same underlying source).
-4. SSR vs Chrome comparison - ratings are identical; SSR tags are a subset of Chrome tags.
-
-Static HTML test data files were captured via Chrome and contain BOTH:
-  - The <meta name="description"> SSR content (server-side, same as plain HTTP response)
-  - The server-provided tagged_topics category data and rendered tagged-topic elements
-This makes them the correct ground truth for SSR tests: the description text is SSR,
-the embedded object preserves categories, and the rendered count gives the Chrome upper bound.
+HTTP and browser parsing must retain the same topic lists from the same HTML.
+Description slugs remain a fallback for older/minimal pages, and are checked
+against the recorded JSON API data independently. Static browser-captured pages
+exercise the parser contract; the dated live access audit checks which elements
+are actually present in HTTP responses.
 
 To run:
     calibre-debug -e test_http_fields_parsing.py
@@ -277,35 +267,22 @@ def _test_ssr_rating_count_matches_chrome(book: StaticTestBook) -> None:
     print(f"(count={ssr['rating_count']})", end=" ")
 
 
-def _test_ssr_tags_match_json_api(book: StaticTestBook) -> None:
-    """SSR tags (from description) must exactly match JSON API tags."""
+def _test_ssr_tags_include_json_api(book: StaticTestBook) -> None:
+    """Full page tags retain the core tags present in the paired JSON fixture."""
     root = _load_html(book.html_filename)
-    ssr = parse_fields_from_ssr_html(root)
-    book_json = _load_json_book(book.json_filename)
-    json_fields = parse_fields_from_json(book_json)
-
-    ssr_set = set(ssr["tags"])
-    json_set = set(json_fields["tags"])
-    missing = json_set - ssr_set
-    extra = ssr_set - json_set
-    assert not missing and not extra, (
-        f"SSR tags differ from JSON API tags.\n"
-        f"  Missing from SSR ({len(missing)}): {sorted(missing)}\n"
-        f"  Extra in SSR ({len(extra)}): {sorted(extra)}"
-    )
-    print(f"({len(ssr_set)} tags, exact JSON match)", end=" ")
+    ssr = parse_fields_from_ssr_html(root, max_tags=1000)
+    json_fields = parse_fields_from_json(_load_json_book(book.json_filename))
+    missing = set(json_fields["tags"]) - set(ssr["tags"])
+    assert not missing, f"Core tags missing from HTTP HTML: {sorted(missing)}"
 
 
-def _test_ssr_tags_subset_of_chrome(book: StaticTestBook) -> None:
-    """Every SSR tag should also appear in Chrome's larger tag set."""
+def _test_ssr_tags_match_chrome(book: StaticTestBook) -> None:
+    """Transport must not change full tag membership or ordering."""
     root = _load_html(book.html_filename)
-    ssr = parse_fields_from_ssr_html(root)
+    ssr = parse_fields_from_ssr_html(root, max_tags=1000)
     chrome = parse_fields_from_html(root, max_tags=1000)
-    ssr_set = set(ssr["tags"])
-    chrome_set = set(chrome["tags"])
-    not_in_chrome = ssr_set - chrome_set
-    assert not not_in_chrome, f"SSR tags not found in Chrome tag set: {sorted(not_in_chrome)}"
-    print(f"(SSR {len(ssr_set)} ⊆ Chrome {len(chrome_set)})", end=" ")
+    assert ssr["tags"] == chrome["tags"]
+    print(f"({len(ssr['tags'])} tags, same order)", end=" ")
 
 
 def _test_ssr_max_tags_limiting(book: StaticTestBook) -> None:
@@ -530,7 +507,7 @@ def _test_edge_partial_categories_merge_description_fallback() -> None:
 
 
 def _test_ssr_category_columns_match_visible_page_groups() -> None:
-    """SSR category copies use page groups without changing combined tags."""
+    """Full page tags must survive even when the description omits them."""
     root = fromstring(
         "<html><head>"
         '<meta name="description" content="\'A Book\' is tagged as slow burn.">'
@@ -548,8 +525,24 @@ def _test_ssr_category_columns_match_visible_page_groups() -> None:
 
     fields = parse_fields_from_ssr_html(root)
 
-    assert fields["tags"] == ["slow burn"]
+    assert fields["tags"] == ["slow burn", "community favorite"]
     assert fields["general_tags"] == ["slow burn", "community favorite"]
+    limited = parse_fields_from_ssr_html(root, max_tags=1)
+    assert limited["tags"] == ["slow burn"]
+    assert limited["general_tags"] == fields["general_tags"]
+    assert parse_fields_from_ssr_html(root, max_tags=0)["tags"] == []
+
+
+def _test_description_fallback_without_topic_lists() -> None:
+    """Minimal HTML still supplies mapped tags without a browser request."""
+    root = fromstring(
+        '<html><head><meta name="description" '
+        'content="A Book is tagged as from hate to love, slow burn."></head>'
+        '<body><ul id="valid-topics-list"></ul></body></html>'
+    )
+    fields = parse_fields_from_ssr_html(root)
+    assert fields["tags"] == ["enemies to lovers", "slow burn"]
+    assert parse_fields_from_html(root, max_tags=100) == fields
 
 
 def _test_edge_format_category_order_is_stable() -> None:
@@ -624,6 +617,7 @@ def run_edge_case_tests() -> None:
         _test_edge_partial_categories_merge_description_fallback,
     )
     _run("SSR categories mirror visible page groups", _test_ssr_category_columns_match_visible_page_groups)
+    _run("description fallback without populated lists", _test_description_fallback_without_topic_lists)
     _run("format tags retain rendered order", _test_edge_format_category_order_is_stable)
     _run("no-ratings page: star_rating is None", _test_edge_no_ratings_star_is_none)
     _run("no-ratings page: rating_count is 0", _test_edge_no_ratings_count_is_zero)
@@ -665,8 +659,8 @@ def run_all_tests() -> None:
         _run(f"{book.name}: SSR steam == Chrome steam", lambda b=book: _test_ssr_steam_rating_matches_chrome(b))
         _run(f"{book.name}: SSR star ≈ Chrome star", lambda b=book: _test_ssr_star_rating_matches_chrome(b))
         _run(f"{book.name}: SSR count == Chrome count", lambda b=book: _test_ssr_rating_count_matches_chrome(b))
-        _run(f"{book.name}: SSR tags == JSON API tags", lambda b=book: _test_ssr_tags_match_json_api(b))
-        _run(f"{book.name}: SSR tags ⊆ Chrome tags", lambda b=book: _test_ssr_tags_subset_of_chrome(b))
+        _run(f"{book.name}: SSR tags include JSON API tags", lambda b=book: _test_ssr_tags_include_json_api(b))
+        _run(f"{book.name}: SSR tags ⊆ Chrome tags", lambda b=book: _test_ssr_tags_match_chrome(b))
         _run(f"{book.name}: max_tags limiting works", lambda b=book: _test_ssr_max_tags_limiting(b))
         _run(f"{book.name}: no steam text in SSR tags", lambda b=book: _test_ssr_no_steam_text_in_tags(b))
         _run(f"{book.name}: steam in range 1-5 or None", lambda b=book: _test_ssr_valid_steam_range(b))
