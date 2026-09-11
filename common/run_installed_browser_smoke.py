@@ -126,6 +126,26 @@ def _verify_webrtc_blocked(page):
         raise AssertionError("Embedded browser did not disable both WebRTC constructors before page scripts ran")
 
 
+def _is_caller_exit_helper(process, owner_pid, unreadable):
+    """Exclude only an identified Calibre helper that lives until caller exit."""
+    import psutil
+
+    if process.ppid() != owner_pid:
+        return False
+    try:
+        command = process.cmdline()
+    except psutil.AccessDenied:
+        if sys.platform != "darwin":
+            raise
+        # macOS can deny KERN_PROCARGS2 even when process identity and exit
+        # remain inspectable. An unidentified process must stay tracked.
+        if process not in unreadable:
+            print(f"Command-line inspection unavailable for PID {process.pid}; still checking its exit", flush=True)
+            unreadable.add(process)
+        return False
+    return command[1:] == ["--pipe-worker", "from calibre.utils.safe_atexit import main; main()"]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plugin", choices=sorted(PLUGINS))
@@ -208,6 +228,7 @@ def main():
     violations = set()
     udp_endpoints = set()
     inaccessible: Set[int] = set()
+    unreadable: Set[psutil.Process] = set()
 
     def monitor():
         while not stopped.is_set():
@@ -215,10 +236,7 @@ def main():
                 tracked.update(owner.children(recursive=True))
                 for process in list(tracked):
                     try:
-                        if process.ppid() == owner.pid and process.cmdline()[1:] == [
-                            "--pipe-worker",
-                            "from calibre.utils.safe_atexit import main; main()",
-                        ]:
+                        if _is_caller_exit_helper(process, owner.pid, unreadable):
                             # Calibre starts this caller-owned helper lazily on
                             # its first fork; it lives until the caller exits.
                             tracked.discard(process)
@@ -254,7 +272,7 @@ def main():
                         # and report the coverage limit explicitly.
                         inaccessible.add(process.pid)
             except psutil.Error as error:
-                violations.add("Could not inspect browser networking: " + type(error).__name__)
+                violations.add("Could not inspect browser processes: " + type(error).__name__)
             stopped.wait(0.05)
 
     observer = threading.Thread(target=monitor, daemon=True)

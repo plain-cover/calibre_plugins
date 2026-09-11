@@ -210,3 +210,60 @@ def test_smoke_accepts_executed_webrtc_check():
     from common.run_installed_browser_smoke import _verify_webrtc_blocked
 
     _verify_webrtc_blocked('<html><body data-peer-connections-blocked="true"></body></html>')
+
+
+@pytest.mark.parametrize("platform_name", ("darwin", "win32", "linux"))
+def test_smoke_keeps_macos_process_with_unreadable_command_line(monkeypatch, capsys, platform_name):
+    import psutil
+    from common import run_installed_browser_smoke as smoke
+
+    class Process:
+        pid = 123
+
+        def ppid(self):
+            return 42
+
+        def cmdline(self):
+            raise psutil.AccessDenied(self.pid)
+
+    monkeypatch.setattr(smoke.sys, "platform", platform_name)
+    process = Process()
+    unreadable: set = set()
+    if platform_name == "darwin":
+        for _ in range(2):
+            assert not smoke._is_caller_exit_helper(process, 42, unreadable)
+        assert unreadable == {process}
+        assert capsys.readouterr().out.count("still checking its exit") == 1
+    else:
+        with pytest.raises(psutil.AccessDenied):
+            smoke._is_caller_exit_helper(process, 42, unreadable)
+        assert not unreadable
+
+
+@pytest.mark.parametrize("direct_child,exit_helper", ((True, True), (True, False), (False, True)))
+def test_smoke_excludes_only_identified_caller_exit_helper(direct_child, exit_helper):
+    from common.run_installed_browser_smoke import _is_caller_exit_helper
+
+    class Process:
+        def ppid(self):
+            return 42 if direct_child else 99
+
+        def cmdline(self):
+            assert direct_child, "Do not inspect command lines of deeper descendants"
+            command = "from calibre.utils.safe_atexit import main; main()" if exit_helper else "browser_worker()"
+            return ["calibre-debug", "--pipe-worker", command]
+
+    assert _is_caller_exit_helper(Process(), 42, set()) is (direct_child and exit_helper)
+
+
+def test_smoke_does_not_ignore_macos_parent_inspection_failure(monkeypatch):
+    import psutil
+    from common import run_installed_browser_smoke as smoke
+
+    class Process:
+        def ppid(self):
+            raise psutil.AccessDenied(123)
+
+    monkeypatch.setattr(smoke.sys, "platform", "darwin")
+    with pytest.raises(psutil.AccessDenied):
+        smoke._is_caller_exit_helper(Process(), 42, set())
