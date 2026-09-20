@@ -939,7 +939,9 @@ def test_browser_worker_reaps_real_descendants_and_removes_parent_profile(
     script = (
         "import subprocess, sys, time; from pathlib import Path; "
         "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
-        "Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(60)"
+        # Existence is the parent's ready signal; publish only the complete PID.
+        "marker = Path(sys.argv[1]); pending = marker.with_suffix('.tmp'); "
+        "pending.write_text(str(child.pid)); pending.replace(marker); time.sleep(60)"
     )
 
     def create_job():
@@ -1582,6 +1584,18 @@ def test_repeated_browser_setup_restores_colorama_streams_and_exception_hook(mon
         assert sys.stderr is original[1]
         assert sys.excepthook is original[2]
         sys.stdout.write("Next lookup is still able to log\n")
+
+
+def test_browser_failure_is_not_replaced_with_an_empty_page(monkeypatch):
+    error = fetch_helper.BrowserFetchError("Chrome verification challenge did not clear within its navigation budget")
+
+    def fail(_plugin):
+        raise error
+
+    monkeypatch.setattr(fetch_helper, "snapshot_browser_vendor_modules", fail)
+    with pytest.raises(fetch_helper.BrowserFetchError) as caught:
+        fetch_helper._fetch_page_in_process("https://example.invalid", _TEST_PLUGIN, log_func=lambda _message: None)
+    assert caught.value is error
 
 
 @pytest.mark.parametrize("version", ["149.0.7827.0", "bad version", 149, None])
