@@ -79,7 +79,8 @@ def navigate_chrome(driver, request, log):
             driver.set_script_timeout(min(30, budget))
             # Reattaching after only one second can interrupt Cloudflare's
             # verification. Let Chrome finish loading without WebDriver first.
-            driver.uc_open_with_reconnect(route["url"], reconnect_time=min(_CHROME_RECONNECT_SECONDS, budget))
+            # Reserve half of a short budget for reattachment and validation.
+            driver.uc_open_with_reconnect(route["url"], reconnect_time=min(_CHROME_RECONNECT_SECONDS, budget / 2))
             while time.monotonic() < route_deadline:
                 html = driver.page_source
                 title = driver.title
@@ -99,7 +100,7 @@ def navigate_chrome(driver, request, log):
                         log("Chrome verification challenge remains; disconnecting WebDriver while Chrome waits")
                         # Reuse this browser/profile and its in-progress
                         # verification, rather than navigating or relaunching.
-                        driver.reconnect(timeout=min(_CHROME_RECONNECT_SECONDS, remaining))
+                        driver.reconnect(timeout=min(_CHROME_RECONNECT_SECONDS, remaining / 2))
                         remaining = route_deadline - time.monotonic()
                         if remaining <= 0:
                             break
@@ -107,7 +108,7 @@ def navigate_chrome(driver, request, log):
                         driver.set_page_load_timeout(min(30, remaining))
                         driver.set_script_timeout(min(30, remaining))
                         continue
-                time.sleep(0.25)
+                time.sleep(min(0.25, max(0, route_deadline - time.monotonic())))
         except Exception as error:
             log(f"Chrome navigation failed ({type(error).__name__})")
             last_failure = f"Chrome navigation failed ({type(error).__name__})"

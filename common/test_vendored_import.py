@@ -36,6 +36,7 @@ import threading
 import time
 import types
 import zipfile
+from unittest.mock import Mock
 
 import pytest
 
@@ -1596,6 +1597,73 @@ def test_browser_failure_is_not_replaced_with_an_empty_page(monkeypatch):
     with pytest.raises(fetch_helper.BrowserFetchError) as caught:
         fetch_helper._fetch_page_in_process("https://example.invalid", _TEST_PLUGIN, log_func=lambda _message: None)
     assert caught.value is error
+
+
+def test_navigation_failure_propagates_after_driver_cleanup(monkeypatch, tmp_path):
+    from common import common_romanceio_webengine as engine
+
+    error = fetch_helper.BrowserFetchError("Chrome verification challenge did not clear within its navigation budget")
+    driver = Mock(capabilities={})
+    launch = Mock(return_value=driver)
+    navigate = Mock(side_effect=error)
+    monkeypatch.setattr(engine, "navigate_chrome", navigate)
+    monkeypatch.setenv("CALIBRE_SELENIUM_HOME", str(tmp_path))
+    monkeypatch.setattr(fetch_helper, "_stale_profile_cleanup_done", True)
+    monkeypatch.setattr(fetch_helper, "browser_automation_unavailable_reason", lambda: None)
+    monkeypatch.setattr(fetch_helper, "resolve_browser_vendor_source", lambda _plugin: str(tmp_path))
+    monkeypatch.setattr(fetch_helper, "configure_browser_vendor_path", lambda _source: [])
+    for name in (
+        "configure_browser_vendor_metadata",
+        "configure_secure_driver_downloads",
+        "configure_macos_browser_detection",
+        "configure_legacy_uc_subprocess",
+        "configure_browser_sandbox",
+        "prepare_cached_chromedriver",
+        "verify_driver_integrity",
+    ):
+        monkeypatch.setattr(fetch_helper, name, Mock(return_value=None))
+    monkeypatch.setattr(fetch_helper, "_find_flatpak_chrome", lambda: None)
+    monkeypatch.setattr(fetch_helper, "_installed_browser_major_version", lambda *_args: None)
+    monkeypatch.setattr(fetch_helper, "_browser_debug_port", lambda: 12345)
+    monkeypatch.setattr(fetch_helper, "prepare_uc_driver", Mock(return_value="digest"))
+    monkeypatch.setattr(fetch_helper, "_sha256_file", Mock(return_value="digest"))
+
+    modules = {
+        "seleniumbase.fixtures.constants": types.SimpleNamespace(
+            Files=types.SimpleNamespace(), MultiBrowser=types.SimpleNamespace()
+        ),
+        "seleniumbase.undetected.patcher": types.SimpleNamespace(Patcher=types.SimpleNamespace()),
+        "fasteners": types.SimpleNamespace(InterProcessLock=Mock()),
+        "seleniumbase.plugins.driver_manager": types.SimpleNamespace(Driver=launch),
+    }
+    for name in (
+        "console_scripts.sb_install",
+        "core.detect_b_ver",
+        "core.download_helper",
+        "undetected",
+        "core.browser_launcher",
+    ):
+        modules[f"seleniumbase.{name}"] = types.SimpleNamespace()
+    real_import = importlib.import_module
+    monkeypatch.setattr(
+        fetch_helper.importlib,
+        "import_module",
+        lambda name, *args, **kwargs: modules[name] if name in modules else real_import(name, *args, **kwargs),
+    )
+
+    with pytest.raises(fetch_helper.BrowserFetchError) as caught:
+        fetch_helper._fetch_page_in_process(
+            "https://www.romance.io/books/test",
+            _TEST_PLUGIN,
+            user_data_dir=str(tmp_path / "profile"),
+            log_func=lambda _message: None,
+        )
+
+    assert caught.value is error
+    launch.assert_called_once()
+    navigate.assert_called_once()
+    assert navigate.call_args.args[0] is driver
+    driver.quit.assert_called_once_with()
 
 
 @pytest.mark.parametrize("version", ["149.0.7827.0", "bad version", 149, None])
