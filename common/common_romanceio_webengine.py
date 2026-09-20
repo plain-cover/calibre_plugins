@@ -12,6 +12,12 @@ from urllib.parse import urlparse
 from typing import Any, Dict, List
 
 _NOT_FOUND = "the page you are looking for can't be found"
+_CHROME_RECONNECT_SECONDS = 4
+
+
+def is_challenge_title(title):
+    """Recognize interstitials without logging their URLs, tokens, or HTML."""
+    return any(text in title.lower() for text in ("just a moment", "checking your browser", "verifying you are human"))
 
 
 def browser_requests(request):
@@ -60,31 +66,55 @@ def navigate_chrome(driver, request, log):
 
     routes = browser_requests(request)
     deadline = time.monotonic() + request.get("max_wait", 30)
+    challenge_recoveries = 0
+    last_failure = "Chrome did not return validated content within its navigation budget"
     for index, route in enumerate(routes):
         route_deadline = time.monotonic() + max(0, deadline - time.monotonic()) / (len(routes) - index)
         budget = route_deadline - time.monotonic()
         if budget <= 0:
             break
-        driver.set_page_load_timeout(min(30, budget))
-        driver.set_script_timeout(min(30, budget))
         log(f"Navigating Chrome to {route['url']}")
         try:
-            driver.uc_open_with_reconnect(route["url"], reconnect_time=1)
+            driver.set_page_load_timeout(min(30, budget))
+            driver.set_script_timeout(min(30, budget))
+            # Reattaching after only one second can interrupt Cloudflare's
+            # verification. Let Chrome finish loading without WebDriver first.
+            # Reserve half of a short budget for reattachment and validation.
+            driver.uc_open_with_reconnect(route["url"], reconnect_time=min(_CHROME_RECONNECT_SECONDS, budget / 2))
             while time.monotonic() < route_deadline:
                 html = driver.page_source
+                title = driver.title
                 error = page_failure(html, route)
                 if error:
                     log(error)
+                    last_failure = error
                     break
-                if page_ready(html, driver.title, route):
+                if page_ready(html, title, route):
                     log(f"Chrome page validated ({len(html)} characters)")
                     return html
-                time.sleep(0.25)
+                if is_challenge_title(title):
+                    last_failure = "Chrome verification challenge did not clear within its navigation budget"
+                    remaining = route_deadline - time.monotonic()
+                    if challenge_recoveries < 2 and remaining > 0:
+                        challenge_recoveries += 1
+                        log("Chrome verification challenge remains; disconnecting WebDriver while Chrome waits")
+                        # Reuse this browser/profile and its in-progress
+                        # verification, rather than navigating or relaunching.
+                        driver.reconnect(timeout=min(_CHROME_RECONNECT_SECONDS, remaining / 2))
+                        remaining = route_deadline - time.monotonic()
+                        if remaining <= 0:
+                            break
+                        # reconnect() creates a new WebDriver session.
+                        driver.set_page_load_timeout(min(30, remaining))
+                        driver.set_script_timeout(min(30, remaining))
+                        continue
+                time.sleep(min(0.25, max(0, route_deadline - time.monotonic())))
         except Exception as error:
             log(f"Chrome navigation failed ({type(error).__name__})")
+            last_failure = f"Chrome navigation failed ({type(error).__name__})"
         if index + 1 < len(routes):
             log("Chrome JSON route failed; trying HTML search in the same browser session")
-    raise BrowserFetchError("Chrome did not return validated content within its navigation budget")
+    raise BrowserFetchError(last_failure)
 
 
 class _JsonText(HTMLParser):
@@ -110,7 +140,7 @@ def page_ready(html, title, request):
     """Distinguish challenge/partial documents from usable JSON and HTML."""
     if not html or len(html) < 100:
         return False
-    if any(text in title.lower() for text in ("just a moment", "checking your browser", "verifying you are human")):
+    if is_challenge_title(title):
         return False
     if page_failure(html, request):
         return False

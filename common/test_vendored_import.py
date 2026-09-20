@@ -36,11 +36,13 @@ import threading
 import time
 import types
 import zipfile
+from unittest.mock import Mock
 
 import pytest
 
 from common import common_romanceio_fetch_helper as fetch_helper
 from common.test_installed_plugins import _assert_installed_origin as assert_installed_origin
+from common.test_installed_plugins import _assert_source_version as assert_source_version
 from common.common_romanceio_fetch_helper import (
     VENDORED_PACKAGES,
     VendoredModule,
@@ -70,6 +72,35 @@ class _PluginMappingLoader(importlib.abc.Loader):
 
     def __init__(self, loaded_plugins):
         self.loaded_plugins = loaded_plugins
+
+
+@pytest.mark.parametrize("version", [(1, 4, 1), (2, 0, 0)])
+def test_installed_version_follows_source_without_importing_it(tmp_path, version):
+    source = tmp_path / "__init__.py"
+    source.write_text(
+        f"raise RuntimeError('Do not import the checkout')\nPLUGIN_VERSION = {version!r}\n", encoding="utf-8"
+    )
+    plugin = types.SimpleNamespace(name="Test Plugin", version=version)
+
+    assert assert_source_version(plugin, source) == version
+
+
+def test_installed_version_rejects_stale_release(tmp_path):
+    source = tmp_path / "__init__.py"
+    source.write_text("PLUGIN_VERSION = (2, 0, 0)\n", encoding="utf-8")
+    plugin = types.SimpleNamespace(name="Test Plugin", version=(1, 4, 1))
+
+    with pytest.raises(AssertionError, match=r"expected source version \(2, 0, 0\), got \(1, 4, 1\)"):
+        assert_source_version(plugin, source)
+
+
+def test_installed_version_requires_source_metadata(tmp_path):
+    source = tmp_path / "__init__.py"
+    source.write_text("", encoding="utf-8")
+    plugin = types.SimpleNamespace(name="Test Plugin", version=(1, 4, 1))
+
+    with pytest.raises(AssertionError, match="PLUGIN_VERSION is missing"):
+        assert_source_version(plugin, source)
 
 
 @pytest.mark.parametrize("plugin_name", ("romanceio", "romanceio_fields"))
@@ -939,7 +970,9 @@ def test_browser_worker_reaps_real_descendants_and_removes_parent_profile(
     script = (
         "import subprocess, sys, time; from pathlib import Path; "
         "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
-        "Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(60)"
+        # Existence is the parent's ready signal; publish only the complete PID.
+        "marker = Path(sys.argv[1]); pending = marker.with_suffix('.tmp'); "
+        "pending.write_text(str(child.pid)); pending.replace(marker); time.sleep(60)"
     )
 
     def create_job():
@@ -1582,6 +1615,85 @@ def test_repeated_browser_setup_restores_colorama_streams_and_exception_hook(mon
         assert sys.stderr is original[1]
         assert sys.excepthook is original[2]
         sys.stdout.write("Next lookup is still able to log\n")
+
+
+def test_browser_failure_is_not_replaced_with_an_empty_page(monkeypatch):
+    error = fetch_helper.BrowserFetchError("Chrome verification challenge did not clear within its navigation budget")
+
+    def fail(_plugin):
+        raise error
+
+    monkeypatch.setattr(fetch_helper, "snapshot_browser_vendor_modules", fail)
+    with pytest.raises(fetch_helper.BrowserFetchError) as caught:
+        fetch_helper._fetch_page_in_process("https://example.invalid", _TEST_PLUGIN, log_func=lambda _message: None)
+    assert caught.value is error
+
+
+def test_navigation_failure_propagates_after_driver_cleanup(monkeypatch, tmp_path):
+    from common import common_romanceio_webengine as engine
+
+    error = fetch_helper.BrowserFetchError("Chrome verification challenge did not clear within its navigation budget")
+    driver = Mock(capabilities={})
+    launch = Mock(return_value=driver)
+    navigate = Mock(side_effect=error)
+    monkeypatch.setattr(engine, "navigate_chrome", navigate)
+    monkeypatch.setenv("CALIBRE_SELENIUM_HOME", str(tmp_path))
+    monkeypatch.setattr(fetch_helper, "_stale_profile_cleanup_done", True)
+    monkeypatch.setattr(fetch_helper, "browser_automation_unavailable_reason", lambda: None)
+    monkeypatch.setattr(fetch_helper, "resolve_browser_vendor_source", lambda _plugin: str(tmp_path))
+    monkeypatch.setattr(fetch_helper, "configure_browser_vendor_path", lambda _source: [])
+    for name in (
+        "configure_browser_vendor_metadata",
+        "configure_secure_driver_downloads",
+        "configure_macos_browser_detection",
+        "configure_legacy_uc_subprocess",
+        "configure_browser_sandbox",
+        "prepare_cached_chromedriver",
+        "verify_driver_integrity",
+    ):
+        monkeypatch.setattr(fetch_helper, name, Mock(return_value=None))
+    monkeypatch.setattr(fetch_helper, "_find_flatpak_chrome", lambda: None)
+    monkeypatch.setattr(fetch_helper, "_installed_browser_major_version", lambda *_args: None)
+    monkeypatch.setattr(fetch_helper, "_browser_debug_port", lambda: 12345)
+    monkeypatch.setattr(fetch_helper, "prepare_uc_driver", Mock(return_value="digest"))
+    monkeypatch.setattr(fetch_helper, "_sha256_file", Mock(return_value="digest"))
+
+    modules = {
+        "seleniumbase.fixtures.constants": types.SimpleNamespace(
+            Files=types.SimpleNamespace(), MultiBrowser=types.SimpleNamespace()
+        ),
+        "seleniumbase.undetected.patcher": types.SimpleNamespace(Patcher=types.SimpleNamespace()),
+        "fasteners": types.SimpleNamespace(InterProcessLock=Mock()),
+        "seleniumbase.plugins.driver_manager": types.SimpleNamespace(Driver=launch),
+    }
+    for name in (
+        "console_scripts.sb_install",
+        "core.detect_b_ver",
+        "core.download_helper",
+        "undetected",
+        "core.browser_launcher",
+    ):
+        modules[f"seleniumbase.{name}"] = types.SimpleNamespace()
+    real_import = importlib.import_module
+    monkeypatch.setattr(
+        fetch_helper.importlib,
+        "import_module",
+        lambda name, *args, **kwargs: modules[name] if name in modules else real_import(name, *args, **kwargs),
+    )
+
+    with pytest.raises(fetch_helper.BrowserFetchError) as caught:
+        fetch_helper._fetch_page_in_process(
+            "https://www.romance.io/books/test",
+            _TEST_PLUGIN,
+            user_data_dir=str(tmp_path / "profile"),
+            log_func=lambda _message: None,
+        )
+
+    assert caught.value is error
+    launch.assert_called_once()
+    navigate.assert_called_once()
+    assert navigate.call_args.args[0] is driver
+    driver.quit.assert_called_once_with()
 
 
 @pytest.mark.parametrize("version", ["149.0.7827.0", "bad version", 149, None])

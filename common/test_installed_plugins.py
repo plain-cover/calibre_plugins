@@ -1,5 +1,6 @@
 """Verify that Calibre loads both plugins from their installed release ZIPs."""
 
+import ast
 import importlib
 import os
 import json
@@ -9,9 +10,25 @@ import zipfile
 from typing import Any
 
 PLUGINS = (
-    ("Romance.io", "romanceio", (1, 4, 0), (5, 0, 0), ("parse_html", "parse_json")),
-    ("Romance.io Fields", "romanceio_fields", (1, 4, 0), (5, 0, 0), ("parse_html", "parse_json")),
+    ("Romance.io", "romanceio", (5, 0, 0), ("parse_html", "parse_json")),
+    ("Romance.io Fields", "romanceio_fields", (5, 0, 0), ("parse_html", "parse_json")),
 )
+
+
+def _assert_source_version(plugin, source_path):
+    """Check the installed release against the checkout without importing it."""
+    tree = ast.parse(source_path.read_text(encoding="utf-8"), filename=str(source_path))
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == "PLUGIN_VERSION" for target in node.targets
+        ):
+            expected_version = ast.literal_eval(node.value)
+            if tuple(plugin.version) != expected_version:
+                raise AssertionError(
+                    f"{plugin.name}: expected source version {expected_version}, got {tuple(plugin.version)}"
+                )
+            return expected_version
+    raise AssertionError(f"PLUGIN_VERSION is missing from {source_path}")
 
 
 def _origin(module):
@@ -190,7 +207,7 @@ def main():
     from calibre.customize.ui import find_plugin
 
     installed_plugin_paths = {}
-    for display_name, import_name, expected_version, expected_minimum, plugin_modules in PLUGINS:
+    for display_name, import_name, expected_minimum, plugin_modules in PLUGINS:
         plugin = find_plugin(display_name)
         if not (plugin is not None):
             raise AssertionError(f"{display_name} is not installed")
@@ -199,8 +216,10 @@ def main():
         installed_plugin_paths[import_name] = plugin_path
         if not (zipfile.is_zipfile(plugin_path)):
             raise AssertionError(f"Installed plugin is not a ZIP: {plugin_path}")
-        if not (tuple(plugin.version) == expected_version):
-            raise AssertionError((display_name, plugin.version))
+        source_path = Path(__file__).resolve().parent.parent / import_name / "__init__.py"
+        expected_version = _assert_source_version(plugin, source_path)
+        # The minimum is an intentional compatibility requirement, independent
+        # of the release version that changes with each build.
         if not (tuple(plugin.minimum_calibre_version) == expected_minimum):
             raise AssertionError(
                 (

@@ -109,10 +109,10 @@ def _verify_challenge_failure(error, backend, logs):
         expected = "Embedded web engine timed out waiting for validated content or Cloudflare clearance"
         valid = str(error) == expected
     else:
-        expected = (
-            "Chrome error: BrowserFetchError: Chrome did not return validated content within its navigation budget"
+        valid = str(error) in (
+            "Chrome did not return validated content within its navigation budget",
+            "Chrome verification challenge did not clear within its navigation budget",
         )
-        valid = str(error) == "Browser did not return a page; see the preceding browser log" and expected in logs
     # Calibre's frozen interpreter runs with assertions disabled.
     if not valid:
         raise AssertionError(f"Challenge lookup failed unexpectedly: {error}")

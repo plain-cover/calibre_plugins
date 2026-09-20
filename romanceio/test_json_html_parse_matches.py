@@ -22,6 +22,9 @@ by the romanceio_fields plugin.
 import os
 import sys
 from typing import Any, Dict, List
+from unittest import TestCase
+from lxml.html import fromstring, tostring
+from calibre.library.comments import sanitize_comments_html
 
 # Set up module path
 plugin_dir = os.path.dirname(os.path.abspath(__file__))
@@ -205,6 +208,73 @@ def test_live_parsing(plugin_dir_path: str, test_books: List[Any]) -> None:
     )
 
 
+def test_description_formatting() -> None:
+    """Keep book-page formatting through extraction and Calibre's sanitizer."""
+    # Calibre runs with -OO: unittest checks still run when bare asserts do not.
+    checks = TestCase()
+    cases = [
+        ("First paragraph.<br><br>Second paragraph.", "First paragraph.Second paragraph.", 2, 0),
+        (
+            "<span>First paragraph.<br><br>Second paragraph.</span>",
+            "First paragraph.Second paragraph.",
+            2,
+            0,
+        ),
+        (
+            "<div><p>First <strong>bold</strong> paragraph.</p><p>Second <em>italic</em> paragraph.</p></div>",
+            "First bold paragraph.Second italic paragraph.",
+            0,
+            2,
+        ),
+        ("A &amp; B <b>meet</b> again today.", "A & B meet again today.", 0, 0),
+    ]
+    for body, expected_text, breaks, paragraphs in cases:
+        root = fromstring(
+            '<div id="book-description"><div class="is-clearfix"><div><div>'
+            '<div class="book-cover-container"><a>Share this book</a></div>'
+            + body
+            + '<span class="desc-steam-rating">Rated 3/5 for steam.</span>'
+            "</div></div></div></div>"
+        )
+        original = tostring(root)
+        description = parse_html_module.parse_description(root)
+        checks.assertTrue(description, "Book description was lost")
+        checks.assertEqual(tostring(root), original, "Description extraction must not modify the page")
+        # This is the same final sanitizer used by Worker._apply_parsed_fields.
+        for sanitized, markup in ((False, description), (True, sanitize_comments_html(description))):
+            parsed = fromstring("<div>" + markup + "</div>")
+            # Calibre inserts indentation/newlines around block boundaries.
+            if breaks or paragraphs:
+                checks.assertEqual("".join(parsed.text_content().split()), "".join(expected_text.split()))
+            else:
+                checks.assertEqual(parsed.text_content(), expected_text)
+            if sanitized and breaks:
+                # Calibre can turn double line breaks into separate paragraphs.
+                checks.assertTrue(len(parsed.xpath(".//br")) == breaks or len(parsed.xpath(".//p")) >= 2, markup)
+            else:
+                checks.assertEqual(len(parsed.xpath(".//br")), breaks, markup)
+                if paragraphs or not sanitized:
+                    checks.assertEqual(len(parsed.xpath(".//p")), paragraphs, markup)
+            if "<strong>" in body:
+                checks.assertEqual(parsed.xpath(".//strong/text()"), ["bold"])
+                checks.assertEqual(parsed.xpath(".//em/text()"), ["italic"])
+    literal = fromstring("<div>&lt;literal&gt; &amp; text</div>")
+    checks.assertEqual("".join(parse_html_module._extract_description_parts(literal)), "&lt;literal&gt; &amp; text")
+    checks.assertEqual(parse_html_module._extract_description_parts(fromstring("<div> </div>")), [])
+    checks.assertIsNone(parse_html_module.parse_description(fromstring("<div>No description</div>")))
+    for book in STATIC_TEST_BOOKS:
+        root = load_test_html_file(book.html_filename)
+        description = parse_html_module.parse_description(root)
+        checks.assertTrue(description, book.name)
+        breaks = len(root.xpath('//*[@id="book-description"]//br'))
+        checks.assertGreater(breaks, 0, book.name)
+        checks.assertEqual(len(fromstring("<div>" + description + "</div>").xpath(".//br")), breaks, book.name)
+        comments = fromstring("<div>" + sanitize_comments_html(description) + "</div>")
+        checks.assertTrue(comments.xpath(".//br") or len(comments.xpath(".//p")) >= 2, book.name)
+        checks.assertNotIn("steam/spice/heat level", comments.text_content())
+    print("Description formatting and Calibre comment sanitization passed")
+
+
 def main() -> None:
     run_live, run_all, target_ids = parse_live_test_args()
 
@@ -212,6 +282,8 @@ def main() -> None:
     print("ROMANCEIO PLUGIN: JSON vs HTML Parsing Tests")
     print("Testing romanceio plugin fields: romanceio_id, title, authors, tags, series, pubdate, rating, description")
     print("=" * 80)
+
+    test_description_formatting()
 
     # Run static tests (these use saved files)
     for book in STATIC_TEST_BOOKS:

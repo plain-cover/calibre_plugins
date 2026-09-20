@@ -132,11 +132,9 @@ def test_smoke_accepts_only_expected_challenge_failure(backend):
 
     if backend == "embedded":
         message = "Embedded web engine timed out waiting for validated content or Cloudflare clearance"
-        logs = []
     else:
-        message = "Browser did not return a page; see the preceding browser log"
-        logs = ["Chrome error: BrowserFetchError: Chrome did not return validated content within its navigation budget"]
-    _verify_challenge_failure(RuntimeError(message), backend, logs)
+        message = "Chrome did not return validated content within its navigation budget"
+    _verify_challenge_failure(RuntimeError(message), backend, [])
 
 
 @pytest.mark.parametrize("backend", ("embedded", "chrome"))
@@ -157,6 +155,19 @@ def test_smoke_rejects_chrome_setup_failure():
             "chrome",
             ["Chrome error: SessionNotCreatedException: Driver failed to start"],
         )
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "Chrome did not return validated content within its navigation budget",
+        "Chrome verification challenge did not clear within its navigation budget",
+    ),
+)
+def test_smoke_accepts_propagated_chrome_navigation_failure(message):
+    from common.run_installed_browser_smoke import _verify_challenge_failure
+
+    _verify_challenge_failure(RuntimeError(message), "chrome", [])
 
 
 @pytest.mark.parametrize("optimize", (1, 2))

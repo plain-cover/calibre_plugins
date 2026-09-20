@@ -4,9 +4,11 @@ HTML parsing utility functions for the romanceio metadata plugin.
 
 import re
 import datetime
+from copy import deepcopy
+from html import escape
 from typing import List, Optional, Tuple, Dict, Callable
 
-from lxml.html import HtmlElement
+from lxml.html import HtmlElement, tostring
 from calibre.utils.cleantext import clean_ascii_chars
 from calibre_plugins.romanceio.parse_json import ParsedBookData  # type: ignore[import-not-found]  # pylint: disable=import-error
 
@@ -270,49 +272,31 @@ def convert_genres_to_calibre_tags(
 
 
 def _extract_description_parts(container: HtmlElement) -> List[str]:
-    """Extract description text parts from a Romance.io description container element.
+    """Preserve description markup, excluding the cover and steam-rating note.
 
-    Two markup variants are handled:
-    - Inline text variant: description text appears as ``tail`` on child elements
-      (first on .book-cover-container, then on a series of <br> paragraph separators)
-    - Wrapped text variant: description text is the ``text_content()`` of a child
-      element (e.g. a bare <span>) - no <br> separators are used in this case
-
-    The steam-rating note (.desc-steam-rating) and .book-cover-container subtrees
-    are always excluded.
+    Paragraphs and inline formatting can be nested inside spans or divs in both
+    HTTP and browser pages. Serializing the remaining subtree preserves those
+    boundaries and text-node spacing; Worker sanitizes the HTML for Calibre.
+    Work on a copy because other metadata parsers reuse the same page.
     """
+    description = deepcopy(container)
+    for element in list(description.iterdescendants()):
+        classes = (element.get("class") or "").split()
+        if "book-cover-container" in classes:
+            # The first description text often follows the cover as its tail.
+            element.drop_tree()
+        elif "desc-steam-rating" in classes:
+            element.tail = None
+            element.drop_tree()
+
+    if not description.text_content().strip():
+        return []
+
     parts: List[str] = []
-
-    # Text before the first child element (rare but handle it)
-    if container.text and container.text.strip():
-        parts.append(container.text.strip())
-
-    for child in container:
-        child_class = child.get("class") or ""
-        tag = child.tag if isinstance(child.tag, str) else ""
-
-        if "book-cover-container" in child_class:
-            # Description text starts as the tail of the cover thumbnail
-            if child.tail and child.tail.strip():
-                parts.append(child.tail.strip())
-        elif "desc-steam-rating" in child_class:
-            # Skip the steam-rating note and its tail entirely
-            pass
-        elif tag == "br":
-            # Emit one <br/> per <br> element - two consecutive <br>s in the
-            # source (Romance.io's paragraph separator) become <br/><br/>.
-            parts.append("<br/>")
-            if child.tail and child.tail.strip():
-                parts.append(child.tail.strip())
-        else:
-            # Some books wrap the description in a <span> or similar element.
-            # Extract the full text content of the element, then its tail.
-            inner = child.text_content()
-            if inner and inner.strip():
-                parts.append(inner.strip())
-            if child.tail and child.tail.strip():
-                parts.append(child.tail.strip())
-
+    if description.text:
+        # lxml has decoded entities: re-escape literal <, >, and & as text.
+        parts.append(escape(description.text, quote=False))
+    parts.extend(tostring(child, encoding="unicode", method="html") for child in description)
     return parts
 
 

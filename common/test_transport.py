@@ -355,6 +355,105 @@ def test_empty_browser_json_does_not_navigate_html():
     assert calls == [URL]
 
 
+@pytest.fixture
+def chrome_challenge(monkeypatch):
+    now = [0.0]
+    monkeypatch.setattr(engine.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(engine.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
+
+    class Driver:
+        title = "Just a moment..."
+        page_source = "<html><body>" + " " * 120 + "</body></html>"
+        clear_on_reconnect = True
+        clear_after_reconnect = 1
+
+        def __init__(self):
+            self.navigations = []
+            self.reconnects = []
+            self.timeouts = []
+
+        def set_page_load_timeout(self, timeout):
+            self.timeouts.append(("page", timeout))
+
+        def set_script_timeout(self, timeout):
+            self.timeouts.append(("script", timeout))
+
+        def uc_open_with_reconnect(self, url, reconnect_time):
+            self.navigations.append((url, reconnect_time))
+            now[0] += reconnect_time
+
+        def reconnect(self, timeout):
+            self.reconnects.append(timeout)
+            now[0] += timeout
+            if self.clear_on_reconnect and len(self.reconnects) >= self.clear_after_reconnect:
+                self.title = "Book"
+                self.page_source = "<html><body>special_tags" + " " * 120 + "</body></html>"
+
+    return Driver(), now
+
+
+def test_chrome_challenge_recovers_without_reloading_page(chrome_challenge):
+    driver, now = chrome_challenge
+    request = {"url": "https://www.romance.io/books/test", "wait_for_element": "special_tags", "max_wait": 20}
+    messages: List[str] = []
+
+    assert engine.navigate_chrome(driver, request, messages.append) == driver.page_source
+    assert driver.navigations == [(request["url"], 4)]
+    assert driver.reconnects == [4]
+    assert now[0] == 8
+    assert driver.timeouts[-2:] == [("page", 12), ("script", 12)]
+    assert any("disconnecting WebDriver" in message for message in messages)
+
+
+@pytest.mark.parametrize("budget", [1, 3, 4])
+@pytest.mark.parametrize("search_fallback", [False, True])
+def test_chrome_valid_page_is_checked_with_short_budget(chrome_challenge, budget, search_fallback):
+    driver, now = chrome_challenge
+    driver.title = "Book"
+    driver.page_source = '<html><pre>{"success":true,"books":[]}</pre>' + " " * 120 + "</html>"
+    request = {"url": URL, "max_wait": budget}
+    if search_fallback:
+        request["search_fallback_url"] = "https://www.romance.io/search?q=Title"
+
+    assert engine.navigate_chrome(driver, request, lambda _message: None) == driver.page_source
+    assert [url for url, _wait in driver.navigations] == [URL]
+    assert driver.reconnects == []
+    assert now[0] < budget / (2 if search_fallback else 1)
+
+
+@pytest.mark.parametrize("budget,clear_after", [(3, 1), (7, 1), (10, 2)])
+def test_chrome_checks_page_after_challenge_clears_near_deadline(chrome_challenge, budget, clear_after):
+    driver, now = chrome_challenge
+    driver.clear_after_reconnect = clear_after
+    request = {"url": "https://www.romance.io/books/test", "wait_for_element": "special_tags", "max_wait": budget}
+
+    assert engine.navigate_chrome(driver, request, lambda _message: None) == driver.page_source
+    assert len(driver.navigations) == 1
+    assert len(driver.reconnects) == clear_after
+    assert now[0] < budget
+
+
+@pytest.mark.parametrize("budget", [3, 7, 15])
+def test_chrome_challenge_recovery_is_bounded(chrome_challenge, budget):
+    driver, now = chrome_challenge
+    driver.clear_on_reconnect = False
+    request = {"url": "https://www.romance.io/books/test", "wait_for_element": "special_tags", "max_wait": budget}
+
+    with pytest.raises(helper.BrowserFetchError):
+        engine.navigate_chrome(driver, request, lambda _message: None)
+
+    assert len(driver.navigations) == 1
+    assert len(driver.reconnects) <= 2
+    assert now[0] == budget
+
+
+def test_chrome_unresolved_challenge_reports_cause(chrome_challenge):
+    driver, _now = chrome_challenge
+    driver.clear_on_reconnect = False
+    with pytest.raises(helper.BrowserFetchError, match="verification challenge did not clear"):
+        engine.navigate_chrome(driver, {"url": "https://www.romance.io/books/test", "max_wait": 15}, print)
+
+
 def test_browser_html_recovery_preserves_matching_and_metadata(monkeypatch):
     def blocked(*_args):
         raise api.JsonApiAccessDeniedError("403")

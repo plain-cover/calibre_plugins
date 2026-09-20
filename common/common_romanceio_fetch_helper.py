@@ -1563,6 +1563,10 @@ def _fetch_page_in_process(
 
         except Exception as e:  # pylint: disable=broad-except
             msg = str(e)
+            if isinstance(e, BrowserFetchError):
+                # Keep the actionable navigation/challenge failure in the IPC
+                # response and weekly-check summary instead of returning None.
+                raise
             # Check for seleniumbase ImportError first - non-retryable, propagate immediately
             if "seleniumbase" in msg.lower() and type(e).__name__ in ("ImportError", "ModuleNotFoundError"):
                 raise SeleniumBaseImportError(
@@ -1619,6 +1623,8 @@ def _fetch_page_in_process(
         raise  # propagate immediately - no point retrying
     except SeleniumBaseImportError:
         raise  # propagate immediately - no point retrying
+    except BrowserFetchError:
+        raise  # preserve the browser failure across the outer import/cleanup scope
     except Exception as e:  # pylint: disable=broad-except
         # Use type name as fallback in case isinstance fails due to class identity issues
         # (can happen when the same module is loaded under two different names in sys.modules)
