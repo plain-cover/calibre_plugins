@@ -42,6 +42,7 @@ import pytest
 
 from common import common_romanceio_fetch_helper as fetch_helper
 from common.test_installed_plugins import _assert_installed_origin as assert_installed_origin
+from common.test_installed_plugins import _assert_source_version as assert_source_version
 from common.common_romanceio_fetch_helper import (
     VENDORED_PACKAGES,
     VendoredModule,
@@ -71,6 +72,35 @@ class _PluginMappingLoader(importlib.abc.Loader):
 
     def __init__(self, loaded_plugins):
         self.loaded_plugins = loaded_plugins
+
+
+@pytest.mark.parametrize("version", [(1, 4, 1), (2, 0, 0)])
+def test_installed_version_follows_source_without_importing_it(tmp_path, version):
+    source = tmp_path / "__init__.py"
+    source.write_text(
+        f"raise RuntimeError('Do not import the checkout')\nPLUGIN_VERSION = {version!r}\n", encoding="utf-8"
+    )
+    plugin = types.SimpleNamespace(name="Test Plugin", version=version)
+
+    assert assert_source_version(plugin, source) == version
+
+
+def test_installed_version_rejects_stale_release(tmp_path):
+    source = tmp_path / "__init__.py"
+    source.write_text("PLUGIN_VERSION = (2, 0, 0)\n", encoding="utf-8")
+    plugin = types.SimpleNamespace(name="Test Plugin", version=(1, 4, 1))
+
+    with pytest.raises(AssertionError, match=r"expected source version \(2, 0, 0\), got \(1, 4, 1\)"):
+        assert_source_version(plugin, source)
+
+
+def test_installed_version_requires_source_metadata(tmp_path):
+    source = tmp_path / "__init__.py"
+    source.write_text("", encoding="utf-8")
+    plugin = types.SimpleNamespace(name="Test Plugin", version=(1, 4, 1))
+
+    with pytest.raises(AssertionError, match="PLUGIN_VERSION is missing"):
+        assert_source_version(plugin, source)
 
 
 @pytest.mark.parametrize("plugin_name", ("romanceio", "romanceio_fields"))
