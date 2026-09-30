@@ -1505,7 +1505,9 @@ if sys.argv[1] == "caller":
     owner = psutil.Process()
     child = subprocess.Popen([sys.executable, __file__, "supervisor", str(root), str(owner.pid), str(owner.create_time()), sys.argv[3]], creationflags=flags)
     (root / "supervisor.pid").write_text(str(child.pid))
-    time.sleep(60)
+    # Reap the supervisor when it exits. On POSIX, sleeping instead leaves a
+    # zombie that the pytest grandparent cannot reap with psutil.Process.wait().
+    child.wait(timeout=60)
 else:
     request = {"owner_pid": int(sys.argv[3]), "owner_created": float(sys.argv[4]),
                "transport_dir": str(root / "transport"), "worker_timeout": float(sys.argv[5])}
@@ -1576,6 +1578,8 @@ else:
         assert not tracked[0].is_running()
         if outcome == "caller-killed":
             assert not transport.exists()
+        else:
+            assert caller.wait(timeout=5) == 0
     finally:
         if caller.poll() is None:
             caller.kill()
