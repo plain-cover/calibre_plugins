@@ -1652,7 +1652,8 @@ def test_browser_failure_is_not_replaced_with_an_empty_page(monkeypatch):
 
 
 @pytest.mark.parametrize("succeeds", [False, True])
-def test_navigation_result_and_clearance_survive_driver_cleanup(monkeypatch, tmp_path, succeeds):
+@pytest.mark.parametrize("binary", [None, "/var/lib/flatpak/app/com.google.Chrome/files/extra/google-chrome"])
+def test_navigation_result_and_clearance_survive_driver_cleanup(monkeypatch, tmp_path, succeeds, binary):
     from common import common_romanceio_webengine as engine
     from common import common_romanceio_session as session
 
@@ -1682,13 +1683,14 @@ def test_navigation_result_and_clearance_survive_driver_cleanup(monkeypatch, tmp
         "verify_driver_integrity",
     ):
         monkeypatch.setattr(fetch_helper, name, Mock(return_value=None))
-    monkeypatch.setattr(fetch_helper, "_find_flatpak_chrome", lambda: None)
+    monkeypatch.setattr(fetch_helper, "_find_flatpak_chrome", lambda: binary)
     monkeypatch.setattr(fetch_helper, "_installed_browser_major_version", lambda *_args: None)
     monkeypatch.setattr(fetch_helper, "_browser_debug_port", lambda: 12345)
     monkeypatch.setattr(fetch_helper, "prepare_uc_driver", Mock(return_value="digest"))
     monkeypatch.setattr(fetch_helper, "_sha256_file", Mock(return_value="digest"))
 
     modules = {
+        "seleniumbase.config": types.SimpleNamespace(headed=False, headless=True, xvfb=True, binary_location="stale"),
         "seleniumbase.fixtures.constants": types.SimpleNamespace(
             Files=types.SimpleNamespace(), MultiBrowser=types.SimpleNamespace()
         ),
@@ -1734,6 +1736,14 @@ def test_navigation_result_and_clearance_survive_driver_cleanup(monkeypatch, tmp
     driver.get_cookies.assert_not_called()
     driver.execute_script.assert_not_called()
     launch.assert_called_once()
+    assert launch.call_args.kwargs["headed"] is True
+    assert launch.call_args.kwargs["headless"] is False
+    assert launch.call_args.kwargs["binary_location"] == binary
+    config = modules["seleniumbase.config"]
+    assert config.headed is True
+    assert config.headless is False
+    assert config.xvfb is False
+    assert config.binary_location == binary
     navigate.assert_called_once()
     assert navigate.call_args.args[0] is driver
     driver.quit.assert_called_once_with()

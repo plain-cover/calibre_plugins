@@ -1519,9 +1519,19 @@ def _fetch_page_in_process(
             _log(f"Chrome debugging endpoint: 127.0.0.1:{debug_port}")
 
             _log("Starting Chrome (startup is included in the browser time limit)...")
+            # Driver() does not populate the global options used by CDP
+            # activation. Reuse Chrome's existing display and selected binary;
+            # otherwise CDP may try to launch Xvfb/import Xlib inside Calibre or
+            # rediscover Chrome outside the visible Flatpak installation.
+            sb_config: Any = importlib.import_module("seleniumbase.config")
+            sb_config.headed = True
+            sb_config.headless = False
+            sb_config.xvfb = False
+            sb_config.binary_location = flatpak_chrome
             with _capture_chromedriver_log(chromedriver_log_path if capture_worker_output else None):
                 driver = Driver(
                     uc=True,
+                    headed=True,
                     headless=False,
                     chromium_arg=chrome_args,
                     binary_location=flatpak_chrome,

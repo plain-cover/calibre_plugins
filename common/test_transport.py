@@ -301,7 +301,7 @@ def test_failed_engines_are_not_reopened_by_html_fallback(monkeypatch):
 
 
 def test_chrome_json_404_uses_html_in_same_driver():
-    urls = []
+    urls: List[str] = []
     missing = "<html>" + engine._NOT_FOUND + " " * 100 + "</html>"
     valid = '<html><ul id="book-results"><li class="has-background">Result</li></ul>' + " " * 100 + "</html>"
 
@@ -321,8 +321,13 @@ def test_chrome_json_404_uses_html_in_same_driver():
             return self.title
 
         def uc_activate_cdp_mode(self, url):
+            assert not urls, "CDP must be activated only once; legacy reactivation touches disconnected WebDriver"
             urls.append(url)
-            self.page_source = missing if len(urls) == 1 else valid
+
+        def open(self, url):
+            assert urls == [URL]
+            urls.append(url)
+            self.page_source = valid
 
     request = {"url": URL, "search_fallback_url": "https://www.romance.io/search?q=Title", "max_wait": 5}
     assert engine.navigate_chrome(Driver(), request, lambda _msg: None) == valid
@@ -468,6 +473,37 @@ def test_chrome_unresolved_challenge_reports_cause(chrome_challenge):
     driver.cdp.clear_on_solve = False
     with pytest.raises(helper.BrowserFetchError, match="verification challenge did not clear"):
         engine.navigate_chrome(driver, {"url": "https://www.romance.io/books/test", "max_wait": 15}, print)
+
+
+def test_chrome_setup_failure_preserves_underlying_exception(chrome_challenge):
+    driver, _now = chrome_challenge
+    failure = ModuleNotFoundError("No module named 'Xlib'", name="Xlib")
+
+    def activate(_url):
+        raise failure
+
+    driver.uc_activate_cdp_mode = activate
+    with pytest.raises(helper.BrowserFetchError, match="ModuleNotFoundError") as caught:
+        engine.navigate_chrome(driver, {"url": URL}, lambda _message: None)
+    assert caught.value.__cause__ is failure
+
+
+def test_chrome_html_timeout_does_not_report_previous_json_404(chrome_challenge):
+    driver, _now = chrome_challenge
+    driver.cdp.title = "Search"
+    driver.cdp.page_source = "<html>" + engine._NOT_FOUND + " " * 120 + "</html>"
+
+    def open_html(_url):
+        driver.cdp.page_source = "<html><body>Still loading" + " " * 120 + "</body></html>"
+
+    driver.cdp.open = open_html
+    with pytest.raises(helper.BrowserFetchError, match="did not return validated content") as caught:
+        engine.navigate_chrome(
+            driver,
+            {"url": URL, "search_fallback_url": "https://www.romance.io/search?q=Title", "max_wait": 3},
+            lambda _message: None,
+        )
+    assert caught.value.__cause__ is None
 
 
 def test_browser_html_recovery_preserves_matching_and_metadata(monkeypatch):

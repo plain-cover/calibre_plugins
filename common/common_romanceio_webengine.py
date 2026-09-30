@@ -67,18 +67,28 @@ def navigate_chrome(driver, request, log):
     routes = browser_requests(request)
     deadline = time.monotonic() + request.get("max_wait", 30)
     challenge_recoveries = 0
+    cdp_active = False
     last_failure = "Chrome did not return validated content within its navigation budget"
+    last_error = None
     for index, route in enumerate(routes):
         route_deadline = time.monotonic() + max(0, deadline - time.monotonic()) / (len(routes) - index)
         budget = route_deadline - time.monotonic()
         if budget <= 0:
             break
+        last_failure = "Chrome did not return validated content within its navigation budget"
+        last_error = None
         log(f"Navigating Chrome to {route['url']}")
         try:
             # Keep WebDriver disconnected throughout navigation/validation.
             # Reconnecting to inspect the page can restart bot verification.
             # The supervisor bounds CDP calls as well as browser startup/quit.
-            driver.uc_activate_cdp_mode(route["url"])
+            if cdp_active:
+                # Legacy SeleniumBase reactivation reads driver.current_url
+                # before checking CDP state, blocking on disconnected WebDriver.
+                driver.cdp.open(route["url"])
+            else:
+                driver.uc_activate_cdp_mode(route["url"])
+                cdp_active = True
             while time.monotonic() < route_deadline:
                 html = driver.cdp.get_page_source(include_shadow_dom=False)
                 title = driver.cdp.get_title()
@@ -109,9 +119,10 @@ def navigate_chrome(driver, request, log):
         except Exception as error:
             log(f"Chrome navigation failed ({type(error).__name__})")
             last_failure = f"Chrome navigation failed ({type(error).__name__})"
+            last_error = error
         if index + 1 < len(routes):
             log("Chrome JSON route failed; trying HTML search in the same browser session")
-    raise BrowserFetchError(last_failure)
+    raise BrowserFetchError(last_failure) from last_error
 
 
 class _JsonText(HTMLParser):
