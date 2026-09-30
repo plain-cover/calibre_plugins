@@ -16,6 +16,7 @@ PLUGINS = {
     "romanceio": "Romance.io",
     "romanceio_fields": "Romance.io Fields",
 }
+CHALLENGE_MARKER = "calibre-cdp-challenge-clicked"
 
 
 class _LocalPageHandler(BaseHTTPRequestHandler):
@@ -25,6 +26,23 @@ class _LocalPageHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):  # pylint: disable=invalid-name
         self.paths.append(self.path)
+        if self.path == "/challenge-click":
+            # Exercise SeleniumBase's real CDP handler with a local widget.
+            # Only a trusted browser input event can complete this fixture;
+            # polling, waiting, and reloading cannot make it pass.
+            body = f"""<html><title>Just a moment</title><body>
+            <div class="cf-turnstile" data-callback="onCaptchaSuccess"
+                 style="width:300px;height:80px;background:#eee"
+                 onclick="if(event.isTrusted) {{ document.title='Verified';
+                 document.body.innerHTML='<h1>{CHALLENGE_MARKER}</h1><p>Local challenge completed successfully.</p>';
+                 }}">Verify</div>
+            <!-- {'local challenge fixture ' * 20} --></body></html>""".encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         if self.path == "/challenge":
             body = b"<html><title>Just a moment</title><body>Challenge</body></html>" + b" " * 100
             self.send_response(403)
@@ -304,6 +322,21 @@ def main():
                     print("PASS: challenge failed explicitly; testing subsequent lookups in the same caller")
                 else:
                     raise AssertionError("Challenge was incorrectly accepted")
+                if args.backend == "chrome":
+                    challenge_logs.clear()
+                    recovered = helper.fetch_page(
+                        f"http://127.0.0.1:{server.server_port}/challenge-click",
+                        args.plugin,
+                        wait_for_element=f"<h1>{CHALLENGE_MARKER}</h1>",
+                        max_wait=20,
+                        log_func=challenge_log,
+                        backend="chrome",
+                    )
+                    if not recovered or f"<h1>{CHALLENGE_MARKER}</h1>" not in recovered:
+                        raise AssertionError("SeleniumBase did not complete the clickable challenge")
+                    if not any("SeleniumBase CDP challenge handling" in message for message in challenge_logs):
+                        raise AssertionError("The CDP challenge handler was not exercised")
+                    print("PASS: SeleniumBase CDP handled a challenge requiring a trusted click")
             for _ in range(2 if args.failure_first else 1):
                 page = helper.fetch_page(
                     local_url,
@@ -330,7 +363,8 @@ def main():
     alive = helper.wait_for_browser_processes(list(tracked), timeout=5)
     if alive:
         raise AssertionError(f"Browser descendants survived cleanup: {[p.pid for p in alive]}")
-    expected = ["embedded", "chrome"] if args.chrome_fallback else [args.backend] * (3 if args.failure_first else 1)
+    attempt_count = 1 + (2 + (args.backend == "chrome") if args.failure_first else 0)
+    expected = ["embedded", "chrome"] if args.chrome_fallback else [args.backend] * attempt_count
     if attempts != expected:
         raise AssertionError(f"Unexpected browser attempts: {attempts}")
     if not page or marker not in page:

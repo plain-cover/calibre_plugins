@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 from typing import Any, Dict, List
 
 _NOT_FOUND = "the page you are looking for can't be found"
-_CHROME_RECONNECT_SECONDS = 4
+_CHROME_CHALLENGE_WAIT_SECONDS = 4
 
 
 def is_challenge_title(title):
@@ -61,7 +61,7 @@ def clearance_page_valid(html, request):
 
 
 def navigate_chrome(driver, request, log):
-    """Navigate alternate search routes without restarting Chrome."""
+    """Use SeleniumBase CDP navigation and challenge handling in one Chrome."""
     from .common_romanceio_fetch_helper import BrowserFetchError
 
     routes = browser_requests(request)
@@ -75,15 +75,13 @@ def navigate_chrome(driver, request, log):
             break
         log(f"Navigating Chrome to {route['url']}")
         try:
-            driver.set_page_load_timeout(min(30, budget))
-            driver.set_script_timeout(min(30, budget))
-            # Reattaching after only one second can interrupt Cloudflare's
-            # verification. Let Chrome finish loading without WebDriver first.
-            # Reserve half of a short budget for reattachment and validation.
-            driver.uc_open_with_reconnect(route["url"], reconnect_time=min(_CHROME_RECONNECT_SECONDS, budget / 2))
+            # Keep WebDriver disconnected throughout navigation/validation.
+            # Reconnecting to inspect the page can restart bot verification.
+            # The supervisor bounds CDP calls as well as browser startup/quit.
+            driver.uc_activate_cdp_mode(route["url"])
             while time.monotonic() < route_deadline:
-                html = driver.page_source
-                title = driver.title
+                html = driver.cdp.get_page_source(include_shadow_dom=False)
+                title = driver.cdp.get_title()
                 error = page_failure(html, route)
                 if error:
                     log(error)
@@ -97,16 +95,15 @@ def navigate_chrome(driver, request, log):
                     remaining = route_deadline - time.monotonic()
                     if challenge_recoveries < 2 and remaining > 0:
                         challenge_recoveries += 1
-                        log("Chrome verification challenge remains; disconnecting WebDriver while Chrome waits")
-                        # Reuse this browser/profile and its in-progress
-                        # verification, rather than navigating or relaunching.
-                        driver.reconnect(timeout=min(_CHROME_RECONNECT_SECONDS, remaining / 2))
+                        log("Chrome verification challenge remains; trying SeleniumBase CDP challenge handling")
+                        # Both bundled SeleniumBase versions provide this CDP
+                        # handler. It does not require PyAutoGUI or move the
+                        # user's mouse. Validate the page again after it runs.
+                        driver.cdp.solve_captcha()
                         remaining = route_deadline - time.monotonic()
                         if remaining <= 0:
                             break
-                        # reconnect() creates a new WebDriver session.
-                        driver.set_page_load_timeout(min(30, remaining))
-                        driver.set_script_timeout(min(30, remaining))
+                        time.sleep(min(_CHROME_CHALLENGE_WAIT_SECONDS, remaining / 2))
                         continue
                 time.sleep(min(0.25, max(0, route_deadline - time.monotonic())))
         except Exception as error:

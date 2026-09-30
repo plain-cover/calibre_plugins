@@ -1605,9 +1605,19 @@ def _fetch_page_in_process(
                         try:
                             from .common_romanceio_session import save_clearance
 
-                            if save_clearance(
-                                driver.get_cookies(), driver.execute_script("return navigator.userAgent")
-                            ):
+                            # Navigation leaves WebDriver disconnected. Read
+                            # clearance through CDP too, without reattaching.
+                            cookies = [
+                                {
+                                    "name": cookie.name,
+                                    "value": cookie.value,
+                                    "domain": cookie.domain,
+                                    "expiry": cookie.expires,
+                                }
+                                for cookie in driver.cdp.get_all_cookies()
+                                if cookie.name == "cf_clearance"
+                            ]
+                            if save_clearance(cookies, driver.cdp.evaluate("navigator.userAgent")):
                                 _log("Saved temporary Cloudflare clearance; subsequent requests can use direct HTTP")
                         except Exception as session_error:  # pylint: disable=broad-except
                             # Never log cookie values or a WebDriver response containing them.
@@ -1816,8 +1826,8 @@ class _BrowserWorkerResources:
         if now >= self.next_scan or now >= self.deadline:
             self._collect_descendants(self.process)
             self.next_scan = now + 0.25
-        # Calibre calls this before forcibly killing the worker. The final scan
-        # preserves process identities even after Chrome is reparented on exit.
+        # The supervisor scans once more at its deadline before cleanup kills
+        # the worker, preserving identities after Chrome is reparented on exit.
         return now < self.deadline
 
     def close(self) -> None:
@@ -1915,8 +1925,8 @@ def _finish_browser_worker_output(
 def _supervise_browser_worker(request: Dict[str, Any]) -> Dict[str, Any]:
     """Remain alive after Calibre cancels the caller, then reap its browser tree.
 
-    This process does no Qt rendering. Its heartbeat covers setup, navigation,
-    and quit, even when any of those blocks inside the actual browser worker.
+    This process does no Qt rendering. It checks deadlines independently of
+    Calibre's IPC wait, covering navigation and quit even if that wait stalls.
     """
     from calibre.utils.ipc.simple_worker import two_part_fork_job
 
@@ -1950,13 +1960,35 @@ def _supervise_browser_worker(request: Dict[str, Any]) -> Dict[str, Any]:
         if capture_output:
             native_log_path = run_job.worker.log_path
         resources.watch(run_job.worker)
-        response = run_job(
-            __name__,
-            "_fetch_page_worker",
-            args=({**request, "user_data_dir": resources.profile},),
-            heartbeat=heartbeat,
-            no_output=not capture_output,
-        )["result"]
+        outcome: Dict[str, Any] = {}
+
+        def communicate() -> None:
+            try:
+                outcome["response"] = run_job(
+                    __name__,
+                    "_fetch_page_worker",
+                    args=({**request, "user_data_dir": resources.profile},),
+                    # The supervisor owns process tracking and the deadline.
+                    # Do not let Calibre's default IPC timeout kill the worker
+                    # before the supervisor has collected its descendants.
+                    heartbeat=lambda: True,
+                    no_output=not capture_output,
+                )["result"]
+            except Exception as error:  # Propagate IPC errors to the supervisor.
+                outcome["error"] = error
+
+        communication = threading.Thread(target=communicate, daemon=True)
+        communication.start()
+        # Calibre's timed join of its IPC reader can stall on Windows. Keep
+        # checking cancellation and the deadline without joining that thread.
+        # A stuck daemon cannot prevent this disposable supervisor from exiting.
+        while communication.is_alive():
+            if not heartbeat():
+                raise BrowserFetchError("Browser worker communication interrupted")
+            time.sleep(0.05)
+        if "error" in outcome:
+            raise outcome["error"]
+        response = outcome["response"]
         if not isinstance(response, dict):
             raise BrowserFetchError("Browser worker returned an invalid response")
         failed = bool(response.get("error_type")) or not response.get("page")
