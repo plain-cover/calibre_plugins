@@ -962,11 +962,20 @@ def test_browser_worker_reaps_real_descendants_and_removes_parent_profile(
 
     real_mkdtemp = fetch_helper.tempfile.mkdtemp
     monkeypatch.setattr(fetch_helper.tempfile, "mkdtemp", lambda **kw: real_mkdtemp(dir=str(tmp_path), **kw))
-    children = []
+    children: list[psutil.Process] = []
     profiles = []
     workers = []
     marker = tmp_path / "child.pid"
     native_log = tmp_path / "native.log"
+    child_observed = threading.Event()
+    collect = fetch_helper._BrowserWorkerResources._collect_descendants
+
+    def collect_descendants(resources, process):
+        collect(resources, process)
+        if children and children[0] in resources.descendants:
+            child_observed.set()
+
+    monkeypatch.setattr(fetch_helper._BrowserWorkerResources, "_collect_descendants", collect_descendants)
     script = (
         "import subprocess, sys, time; from pathlib import Path; "
         "child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
@@ -1001,6 +1010,8 @@ def test_browser_worker_reaps_real_descendants_and_removes_parent_profile(
                 time.sleep(0.01)
             children.append(psutil.Process(int(marker.read_text())))
             assert heartbeat()
+            # Process tracking runs in the supervisor, independently of IPC.
+            assert child_observed.wait(5)
             # Reproduce Calibre terminating the worker before returning control.
             kill_worker()
             if outcome == "timeout":
@@ -1477,9 +1488,9 @@ def test_fetch_page_strategy_bypasses_vpf_with_broken_redirect(vendored_zip):  #
                 sys.meta_path.remove(_f)
 
 
-@pytest.mark.parametrize("outcome", ("caller-killed", "deadline"))
+@pytest.mark.parametrize("outcome", ("caller-killed", "cancel-file", "deadline"))
 def test_supervisor_survives_caller_exit_and_reaps_browser(tmp_path, outcome):
-    """Kill the outer job, not just its child: cleanup must still execute."""
+    """Cleanup must survive a stalled IPC call that never checks its heartbeat."""
     import psutil
 
     script = tmp_path / "lifecycle.py"
@@ -1494,7 +1505,9 @@ if sys.argv[1] == "caller":
     owner = psutil.Process()
     child = subprocess.Popen([sys.executable, __file__, "supervisor", str(root), str(owner.pid), str(owner.create_time()), sys.argv[3]], creationflags=flags)
     (root / "supervisor.pid").write_text(str(child.pid))
-    time.sleep(60)
+    # Reap the supervisor when it exits. On POSIX, sleeping instead leaves a
+    # zombie that the pytest grandparent cannot reap with psutil.Process.wait().
+    child.wait(timeout=60)
 else:
     request = {"owner_pid": int(sys.argv[3]), "owner_created": float(sys.argv[4]),
                "transport_dir": str(root / "transport"), "worker_timeout": float(sys.argv[5])}
@@ -1509,9 +1522,10 @@ else:
         def run(_module, _function, args, heartbeat, no_output):
             (root / "profile").write_text(args[0]["user_data_dir"])
             helper._write_browser_log(request, "Navigation started, still waiting")
-            while heartbeat():
+            # Model Calibre stuck joining its IPC reader: no heartbeat calls,
+            # and no response even after the browser worker is terminated.
+            while True:
                 time.sleep(.02)
-            raise RuntimeError("worker stopped")
         run.worker = types.SimpleNamespace(pid=process.pid, kill=kill)
         return run
     sys.modules["calibre.utils.ipc.simple_worker"] = types.SimpleNamespace(two_part_fork_job=create_job)
@@ -1527,7 +1541,7 @@ else:
     env = os.environ.copy()
     env["PYTHONPATH"] = os.pathsep.join((str(Path(__file__).resolve().parent.parent), env.get("PYTHONPATH", "")))
     caller = subprocess.Popen(
-        [sys.executable, str(script), "caller", str(tmp_path), "60" if outcome == "caller-killed" else "2"],
+        [sys.executable, str(script), "caller", str(tmp_path), "2" if outcome == "deadline" else "60"],
         env=env,
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
@@ -1546,6 +1560,8 @@ else:
         if outcome == "caller-killed":
             caller.kill()
             caller.wait(timeout=5)
+        elif outcome == "cancel-file":
+            (transport / "cancel").touch()
         deadline = time.monotonic() + 15
         while not (tmp_path / "result.json").exists() and time.monotonic() < deadline:
             time.sleep(0.02)
@@ -1553,11 +1569,17 @@ else:
 
         result = json.loads((tmp_path / "result.json").read_text())
         assert result["error_type"] == "BrowserFetchError"
-        assert ("cancelled" if outcome == "caller-killed" else "time limit") in result["error_message"]
+        assert ("time limit" if outcome == "deadline" else "cancelled") in result["error_message"]
         assert not Path((tmp_path / "profile").read_text()).exists()
         assert all(not process.is_running() for process in tracked[1:])
+        # The IPC thread deliberately never returns, but must not keep the
+        # disposable supervisor alive after its result and cleanup are done.
+        tracked[0].wait(timeout=5)
+        assert not tracked[0].is_running()
         if outcome == "caller-killed":
             assert not transport.exists()
+        else:
+            assert caller.wait(timeout=5) == 0
     finally:
         if caller.poll() is None:
             caller.kill()
@@ -1629,13 +1651,22 @@ def test_browser_failure_is_not_replaced_with_an_empty_page(monkeypatch):
     assert caught.value is error
 
 
-def test_navigation_failure_propagates_after_driver_cleanup(monkeypatch, tmp_path):
+@pytest.mark.parametrize("succeeds", [False, True])
+@pytest.mark.parametrize("binary", [None, "/var/lib/flatpak/app/com.google.Chrome/files/extra/google-chrome"])
+def test_navigation_result_and_clearance_survive_driver_cleanup(monkeypatch, tmp_path, succeeds, binary):
     from common import common_romanceio_webengine as engine
+    from common import common_romanceio_session as session
 
     error = fetch_helper.BrowserFetchError("Chrome verification challenge did not clear within its navigation budget")
+    page = "<html><body>special_tags</body></html>"
     driver = Mock(capabilities={})
+    driver.cdp.get_all_cookies.return_value = [
+        types.SimpleNamespace(name="login", value="private", domain="www.romance.io", expires=time.time() + 3600),
+        types.SimpleNamespace(name="cf_clearance", value="clearance", domain=".romance.io", expires=time.time() + 3600),
+    ]
+    driver.cdp.evaluate.return_value = "Chrome test agent"
     launch = Mock(return_value=driver)
-    navigate = Mock(side_effect=error)
+    navigate = Mock(return_value=page, side_effect=None if succeeds else error)
     monkeypatch.setattr(engine, "navigate_chrome", navigate)
     monkeypatch.setenv("CALIBRE_SELENIUM_HOME", str(tmp_path))
     monkeypatch.setattr(fetch_helper, "_stale_profile_cleanup_done", True)
@@ -1652,13 +1683,14 @@ def test_navigation_failure_propagates_after_driver_cleanup(monkeypatch, tmp_pat
         "verify_driver_integrity",
     ):
         monkeypatch.setattr(fetch_helper, name, Mock(return_value=None))
-    monkeypatch.setattr(fetch_helper, "_find_flatpak_chrome", lambda: None)
+    monkeypatch.setattr(fetch_helper, "_find_flatpak_chrome", lambda: binary)
     monkeypatch.setattr(fetch_helper, "_installed_browser_major_version", lambda *_args: None)
     monkeypatch.setattr(fetch_helper, "_browser_debug_port", lambda: 12345)
     monkeypatch.setattr(fetch_helper, "prepare_uc_driver", Mock(return_value="digest"))
     monkeypatch.setattr(fetch_helper, "_sha256_file", Mock(return_value="digest"))
 
     modules = {
+        "seleniumbase.config": types.SimpleNamespace(headed=False, headless=True, xvfb=True, binary_location="stale"),
         "seleniumbase.fixtures.constants": types.SimpleNamespace(
             Files=types.SimpleNamespace(), MultiBrowser=types.SimpleNamespace()
         ),
@@ -1681,16 +1713,37 @@ def test_navigation_failure_propagates_after_driver_cleanup(monkeypatch, tmp_pat
         lambda name, *args, **kwargs: modules[name] if name in modules else real_import(name, *args, **kwargs),
     )
 
-    with pytest.raises(fetch_helper.BrowserFetchError) as caught:
-        fetch_helper._fetch_page_in_process(
+    def fetch():
+        return fetch_helper._fetch_page_in_process(
             "https://www.romance.io/books/test",
             _TEST_PLUGIN,
             user_data_dir=str(tmp_path / "profile"),
             log_func=lambda _message: None,
         )
 
-    assert caught.value is error
+    if succeeds:
+        assert fetch() == page
+        assert session.clearance_headers("https://www.romance.io/topics/best/all/1") == {
+            "Cookie": "cf_clearance=clearance",
+            "User-Agent": "Chrome test agent",
+        }
+        driver.cdp.evaluate.assert_called_once_with("navigator.userAgent")
+    else:
+        with pytest.raises(fetch_helper.BrowserFetchError) as caught:
+            fetch()
+        assert caught.value is error
+        driver.cdp.get_all_cookies.assert_not_called()
+    driver.get_cookies.assert_not_called()
+    driver.execute_script.assert_not_called()
     launch.assert_called_once()
+    assert launch.call_args.kwargs["headed"] is True
+    assert launch.call_args.kwargs["headless"] is False
+    assert launch.call_args.kwargs["binary_location"] == binary
+    config = modules["seleniumbase.config"]
+    assert config.headed is True
+    assert config.headless is False
+    assert config.xvfb is False
+    assert config.binary_location == binary
     navigate.assert_called_once()
     assert navigate.call_args.args[0] is driver
     driver.quit.assert_called_once_with()

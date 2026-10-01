@@ -74,6 +74,8 @@ def main():
     if not args.pure_python_only:
         importlib.import_module("seleniumbase.core.browser_launcher")
         importlib.import_module("seleniumbase.plugins.driver_manager")
+        importlib.import_module("seleniumbase.core.sb_cdp")
+        importlib.import_module("seleniumbase.undetected.cdp_driver.cdp_util")
 
     filelock = importlib.import_module("filelock")
     requests = importlib.import_module("requests")

@@ -197,6 +197,9 @@ def main():
         passed = True
     finally:
         run_job.worker.kill()
+        # TerminateProcess returns before Windows releases the native log.
+        # Wait for the tracked identity before reading/removing that output.
+        helper.wait_for_browser_processes([outer], timeout=5)
         helper._finish_browser_worker_output(
             run_job.worker.log_path, not passed, print, label="Outer job native output"
         )

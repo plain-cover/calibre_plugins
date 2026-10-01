@@ -301,7 +301,7 @@ def test_failed_engines_are_not_reopened_by_html_fallback(monkeypatch):
 
 
 def test_chrome_json_404_uses_html_in_same_driver():
-    urls = []
+    urls: List[str] = []
     missing = "<html>" + engine._NOT_FOUND + " " * 100 + "</html>"
     valid = '<html><ul id="book-results"><li class="has-background">Result</li></ul>' + " " * 100 + "</html>"
 
@@ -309,15 +309,25 @@ def test_chrome_json_404_uses_html_in_same_driver():
         title = "Romance.io"
         page_source = missing
 
-        def set_page_load_timeout(self, _timeout):
-            pass
+        @property
+        def cdp(self):
+            return self
 
-        def set_script_timeout(self, _timeout):
-            pass
+        def get_page_source(self, include_shadow_dom):
+            assert not include_shadow_dom
+            return self.page_source
 
-        def uc_open_with_reconnect(self, url, reconnect_time):
+        def get_title(self):
+            return self.title
+
+        def uc_activate_cdp_mode(self, url):
+            assert not urls, "CDP must be activated only once; legacy reactivation touches disconnected WebDriver"
             urls.append(url)
-            self.page_source = missing if len(urls) == 1 else valid
+
+        def open(self, url):
+            assert urls == [URL]
+            urls.append(url)
+            self.page_source = valid
 
     request = {"url": URL, "search_fallback_url": "https://www.romance.io/search?q=Title", "max_wait": 5}
     assert engine.navigate_chrome(Driver(), request, lambda _msg: None) == valid
@@ -340,13 +350,18 @@ def test_empty_browser_json_does_not_navigate_html():
         title = ""
         page_source = '<html><pre>{"success":true,"books":[]}</pre>' + " " * 100 + "</html>"
 
-        def set_page_load_timeout(self, _timeout):
-            pass
+        @property
+        def cdp(self):
+            return self
 
-        def set_script_timeout(self, _timeout):
-            pass
+        def get_page_source(self, include_shadow_dom):
+            assert not include_shadow_dom
+            return self.page_source
 
-        def uc_open_with_reconnect(self, url, reconnect_time):
+        def get_title(self):
+            return self.title
+
+        def uc_activate_cdp_mode(self, url):
             calls.append(url)
 
     engine.navigate_chrome(
@@ -361,33 +376,40 @@ def chrome_challenge(monkeypatch):
     monkeypatch.setattr(engine.time, "monotonic", lambda: now[0])
     monkeypatch.setattr(engine.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds))
 
-    class Driver:
+    class CDP:
         title = "Just a moment..."
         page_source = "<html><body>" + " " * 120 + "</body></html>"
-        clear_on_reconnect = True
-        clear_after_reconnect = 1
+        clear_on_solve = True
+        clear_after_solve = 1
 
         def __init__(self):
-            self.navigations = []
-            self.reconnects = []
-            self.timeouts = []
+            self.solves = 0
 
-        def set_page_load_timeout(self, timeout):
-            self.timeouts.append(("page", timeout))
+        def get_page_source(self, include_shadow_dom):
+            assert not include_shadow_dom
+            return self.page_source
 
-        def set_script_timeout(self, timeout):
-            self.timeouts.append(("script", timeout))
+        def get_title(self):
+            return self.title
 
-        def uc_open_with_reconnect(self, url, reconnect_time):
-            self.navigations.append((url, reconnect_time))
-            now[0] += reconnect_time
-
-        def reconnect(self, timeout):
-            self.reconnects.append(timeout)
-            now[0] += timeout
-            if self.clear_on_reconnect and len(self.reconnects) >= self.clear_after_reconnect:
+        def solve_captcha(self):
+            self.solves += 1
+            now[0] += 0.1
+            if self.clear_on_solve and self.solves >= self.clear_after_solve:
                 self.title = "Book"
                 self.page_source = "<html><body>special_tags" + " " * 120 + "</body></html>"
+
+    class Driver:
+        def __init__(self):
+            self.cdp = CDP()
+            self.navigations = []
+
+        def uc_activate_cdp_mode(self, url):
+            self.navigations.append(url)
+            now[0] += 0.1
+
+        def __getattr__(self, name):
+            pytest.fail(f"WebDriver must stay disconnected: {name}")
 
     return Driver(), now
 
@@ -397,61 +419,91 @@ def test_chrome_challenge_recovers_without_reloading_page(chrome_challenge):
     request = {"url": "https://www.romance.io/books/test", "wait_for_element": "special_tags", "max_wait": 20}
     messages: List[str] = []
 
-    assert engine.navigate_chrome(driver, request, messages.append) == driver.page_source
-    assert driver.navigations == [(request["url"], 4)]
-    assert driver.reconnects == [4]
-    assert now[0] == 8
-    assert driver.timeouts[-2:] == [("page", 12), ("script", 12)]
-    assert any("disconnecting WebDriver" in message for message in messages)
+    assert engine.navigate_chrome(driver, request, messages.append) == driver.cdp.page_source
+    assert driver.navigations == [request["url"]]
+    assert driver.cdp.solves == 1
+    assert now[0] == pytest.approx(4.2)
+    assert any("SeleniumBase CDP challenge handling" in message for message in messages)
 
 
 @pytest.mark.parametrize("budget", [1, 3, 4])
 @pytest.mark.parametrize("search_fallback", [False, True])
 def test_chrome_valid_page_is_checked_with_short_budget(chrome_challenge, budget, search_fallback):
     driver, now = chrome_challenge
-    driver.title = "Book"
-    driver.page_source = '<html><pre>{"success":true,"books":[]}</pre>' + " " * 120 + "</html>"
+    driver.cdp.title = "Book"
+    driver.cdp.page_source = '<html><pre>{"success":true,"books":[]}</pre>' + " " * 120 + "</html>"
     request = {"url": URL, "max_wait": budget}
     if search_fallback:
         request["search_fallback_url"] = "https://www.romance.io/search?q=Title"
 
-    assert engine.navigate_chrome(driver, request, lambda _message: None) == driver.page_source
-    assert [url for url, _wait in driver.navigations] == [URL]
-    assert driver.reconnects == []
+    assert engine.navigate_chrome(driver, request, lambda _message: None) == driver.cdp.page_source
+    assert driver.navigations == [URL]
+    assert driver.cdp.solves == 0
     assert now[0] < budget / (2 if search_fallback else 1)
 
 
 @pytest.mark.parametrize("budget,clear_after", [(3, 1), (7, 1), (10, 2)])
 def test_chrome_checks_page_after_challenge_clears_near_deadline(chrome_challenge, budget, clear_after):
     driver, now = chrome_challenge
-    driver.clear_after_reconnect = clear_after
+    driver.cdp.clear_after_solve = clear_after
     request = {"url": "https://www.romance.io/books/test", "wait_for_element": "special_tags", "max_wait": budget}
 
-    assert engine.navigate_chrome(driver, request, lambda _message: None) == driver.page_source
+    assert engine.navigate_chrome(driver, request, lambda _message: None) == driver.cdp.page_source
     assert len(driver.navigations) == 1
-    assert len(driver.reconnects) == clear_after
+    assert driver.cdp.solves == clear_after
     assert now[0] < budget
 
 
 @pytest.mark.parametrize("budget", [3, 7, 15])
 def test_chrome_challenge_recovery_is_bounded(chrome_challenge, budget):
     driver, now = chrome_challenge
-    driver.clear_on_reconnect = False
+    driver.cdp.clear_on_solve = False
     request = {"url": "https://www.romance.io/books/test", "wait_for_element": "special_tags", "max_wait": budget}
 
     with pytest.raises(helper.BrowserFetchError):
         engine.navigate_chrome(driver, request, lambda _message: None)
 
     assert len(driver.navigations) == 1
-    assert len(driver.reconnects) <= 2
+    assert driver.cdp.solves == 2
     assert now[0] == budget
 
 
 def test_chrome_unresolved_challenge_reports_cause(chrome_challenge):
     driver, _now = chrome_challenge
-    driver.clear_on_reconnect = False
+    driver.cdp.clear_on_solve = False
     with pytest.raises(helper.BrowserFetchError, match="verification challenge did not clear"):
         engine.navigate_chrome(driver, {"url": "https://www.romance.io/books/test", "max_wait": 15}, print)
+
+
+def test_chrome_setup_failure_preserves_underlying_exception(chrome_challenge):
+    driver, _now = chrome_challenge
+    failure = ModuleNotFoundError("No module named 'Xlib'", name="Xlib")
+
+    def activate(_url):
+        raise failure
+
+    driver.uc_activate_cdp_mode = activate
+    with pytest.raises(helper.BrowserFetchError, match="ModuleNotFoundError") as caught:
+        engine.navigate_chrome(driver, {"url": URL}, lambda _message: None)
+    assert caught.value.__cause__ is failure
+
+
+def test_chrome_html_timeout_does_not_report_previous_json_404(chrome_challenge):
+    driver, _now = chrome_challenge
+    driver.cdp.title = "Search"
+    driver.cdp.page_source = "<html>" + engine._NOT_FOUND + " " * 120 + "</html>"
+
+    def open_html(_url):
+        driver.cdp.page_source = "<html><body>Still loading" + " " * 120 + "</body></html>"
+
+    driver.cdp.open = open_html
+    with pytest.raises(helper.BrowserFetchError, match="did not return validated content") as caught:
+        engine.navigate_chrome(
+            driver,
+            {"url": URL, "search_fallback_url": "https://www.romance.io/search?q=Title", "max_wait": 3},
+            lambda _message: None,
+        )
+    assert caught.value.__cause__ is None
 
 
 def test_browser_html_recovery_preserves_matching_and_metadata(monkeypatch):
