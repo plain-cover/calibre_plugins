@@ -224,9 +224,16 @@ def test_smoke_accepts_executed_webrtc_check():
 
 
 @pytest.mark.parametrize("platform_name", ("darwin", "win32", "linux"))
-def test_smoke_keeps_macos_process_with_unreadable_command_line(monkeypatch, capsys, platform_name):
+@pytest.mark.parametrize("error_kind", ("access-denied", "errno-zero", "other-os-error"))
+def test_smoke_keeps_macos_process_with_unreadable_command_line(monkeypatch, capsys, platform_name, error_kind):
     import psutil
     from common import run_installed_browser_smoke as smoke
+
+    error = {
+        "access-denied": psutil.AccessDenied(123),
+        "errno-zero": OSError(0, "Undefined error: 0 (originated from sysctl(KERN_PROCARGS2))"),
+        "other-os-error": OSError(5, "Input/output error"),
+    }[error_kind]
 
     class Process:
         pid = 123
@@ -235,18 +242,18 @@ def test_smoke_keeps_macos_process_with_unreadable_command_line(monkeypatch, cap
             return 42
 
         def cmdline(self):
-            raise psutil.AccessDenied(self.pid)
+            raise error
 
     monkeypatch.setattr(smoke.sys, "platform", platform_name)
     process = Process()
     unreadable: set = set()
-    if platform_name == "darwin":
+    if platform_name == "darwin" and error_kind != "other-os-error":
         for _ in range(2):
             assert not smoke._is_caller_exit_helper(process, 42, unreadable)
         assert unreadable == {process}
         assert capsys.readouterr().out.count("still checking its exit") == 1
     else:
-        with pytest.raises(psutil.AccessDenied):
+        with pytest.raises(type(error)):
             smoke._is_caller_exit_helper(process, 42, unreadable)
         assert not unreadable
 
@@ -278,3 +285,70 @@ def test_smoke_does_not_ignore_macos_parent_inspection_failure(monkeypatch):
     monkeypatch.setattr(smoke.sys, "platform", "darwin")
     with pytest.raises(psutil.AccessDenied):
         smoke._is_caller_exit_helper(Process(), 42, set())
+
+
+@pytest.mark.parametrize("failing_attribute", ("name", "cmdline"))
+@pytest.mark.parametrize("exit_helper", (False, True))
+def test_smoke_monitor_recovers_after_macos_metadata_error(monkeypatch, capsys, failing_attribute, exit_helper):
+    from types import SimpleNamespace
+    from unittest.mock import Mock
+    from common import run_installed_browser_smoke as smoke
+
+    monkeypatch.setattr(smoke.sys, "platform", "darwin")
+    error = OSError(0, "Undefined error: 0 (originated from sysctl(KERN_PROCARGS2))")
+    command = ["calibre-debug", "--pipe-worker", "from calibre.utils.safe_atexit import main; main()"]
+    process = Mock(pid=123)
+    process.ppid.return_value = 42
+    process.cmdline.return_value = command if exit_helper else ["browser-worker"]
+    process.name.return_value = "calibre-debug" if exit_helper else "chrome"
+    if failing_attribute == "cmdline":
+        process.cmdline.side_effect = [error, process.cmdline.return_value]
+    else:
+        # A caller-exit helper is not inspected by name once identified.
+        process.cmdline.side_effect = [["starting"], process.cmdline.return_value]
+        process.name.side_effect = [error, process.name.return_value]
+    tracked: set = set()
+    violations: set = set()
+    unreadable: set = set()
+    stopped = Mock()
+    stopped.is_set.side_effect = [False, False, True]
+
+    def after_scan(_timeout):
+        if stopped.wait.call_count == 1:
+            assert process in tracked, "Unreadable processes must still be checked for cleanup"
+
+    stopped.wait.side_effect = after_scan
+    smoke._monitor_browser_processes(
+        SimpleNamespace(pid=42, children=lambda **_kwargs: [process]),
+        stopped,
+        tracked,
+        violations,
+        set(),
+        set(),
+        unreadable,
+        chrome=False,
+        check_sockets=False,
+    )
+    assert stopped.wait.call_count == 2
+    assert unreadable == {process}
+    assert capsys.readouterr().out.count("still checking its exit") == 1
+    assert tracked == (set() if exit_helper else {process})
+    # A recovered name must still detect forbidden Chrome launches.
+    assert violations == (set() if exit_helper else {"External Chrome process launched"})
+
+
+@pytest.mark.parametrize("error", (OSError(5, "Input/output error"), RuntimeError("unexpected inspection failure")))
+def test_smoke_monitor_reports_unexpected_errors_and_keeps_scanning(error):
+    from unittest.mock import Mock
+    from common.run_installed_browser_smoke import _monitor_browser_processes
+
+    owner = Mock(pid=42)
+    owner.children.side_effect = [error, []]
+    stopped = Mock()
+    stopped.is_set.side_effect = [False, False, True]
+    violations: set = set()
+    _monitor_browser_processes(
+        owner, stopped, set(), violations, set(), set(), set(), chrome=False, check_sockets=False
+    )
+    assert owner.children.call_count == 2
+    assert violations == {f"Could not inspect browser processes: {type(error).__name__}: {error}"}

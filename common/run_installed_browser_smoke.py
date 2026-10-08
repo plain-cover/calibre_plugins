@@ -144,24 +144,88 @@ def _verify_webrtc_blocked(page):
         raise AssertionError("Embedded browser did not disable both WebRTC constructors before page scripts ran")
 
 
-def _is_caller_exit_helper(process, owner_pid, unreadable):
-    """Exclude only an identified Calibre helper that lives until caller exit."""
+def _read_process_metadata(process, attribute, unreadable):
+    """Keep tracking identities when macOS cannot read process arguments."""
     import psutil
 
+    try:
+        return getattr(process, attribute)()
+    except (psutil.AccessDenied, OSError) as error:
+        if sys.platform != "darwin" or (isinstance(error, OSError) and error.errno != 0):
+            raise
+        # psutil's name() can also read cmdline() via KERN_PROCARGS2. macOS
+        # sometimes returns errno 0 rather than AccessDenied during startup
+        # or shutdown. Retry next scan; never exclude an unidentified child.
+        if process not in unreadable:
+            print(
+                f"Process {attribute} inspection unavailable for PID {process.pid}; still checking its exit", flush=True
+            )
+            unreadable.add(process)
+        return None
+
+
+def _is_caller_exit_helper(process, owner_pid, unreadable):
+    """Exclude only an identified Calibre helper that lives until caller exit."""
     if process.ppid() != owner_pid:
         return False
-    try:
-        command = process.cmdline()
-    except psutil.AccessDenied:
-        if sys.platform != "darwin":
-            raise
-        # macOS can deny KERN_PROCARGS2 even when process identity and exit
-        # remain inspectable. An unidentified process must stay tracked.
-        if process not in unreadable:
-            print(f"Command-line inspection unavailable for PID {process.pid}; still checking its exit", flush=True)
-            unreadable.add(process)
-        return False
-    return command[1:] == ["--pipe-worker", "from calibre.utils.safe_atexit import main; main()"]
+    command = _read_process_metadata(process, "cmdline", unreadable)
+    return command is not None and command[1:] == [
+        "--pipe-worker",
+        "from calibre.utils.safe_atexit import main; main()",
+    ]
+
+
+def _monitor_browser_processes(
+    owner, stopped, tracked, violations, udp_endpoints, inaccessible, unreadable, *, chrome, check_sockets
+):
+    import psutil
+
+    while not stopped.is_set():
+        try:
+            tracked.update(owner.children(recursive=True))
+            for process in list(tracked):
+                try:
+                    if _is_caller_exit_helper(process, owner.pid, unreadable):
+                        # Calibre starts this caller-owned helper lazily on
+                        # its first fork; it lives until the caller exits.
+                        tracked.discard(process)
+                        continue
+                    name = _read_process_metadata(process, "name", unreadable) if not chrome else None
+                    if name and name.lower() in (
+                        "chrome.exe",
+                        "chrome",
+                        "google chrome",
+                        "chromedriver",
+                        "chromedriver.exe",
+                        "uc_driver.exe",
+                    ):
+                        violations.add("External Chrome process launched")
+                    if not check_sockets:
+                        continue
+                    connections = getattr(process, "net_connections", None) or process.connections
+                    for connection in connections(kind="inet"):
+                        if connection.type == 2:
+                            # UDP has no LISTEN state. Chromium's DNS probes
+                            # also bind sockets, and Windows omits their
+                            # remote addresses. Verify WebRTC in the page
+                            # instead of treating every UDP client as a server.
+                            udp_endpoints.add(f"{name}, local={connection.laddr}, remote={connection.raddr}")
+                        if connection.status == "LISTEN" and connection.laddr.ip not in ("127.0.0.1", "::1"):
+                            violations.add("Browser worker opened non-loopback TCP listener")
+                except psutil.NoSuchProcess:
+                    pass
+                except psutil.AccessDenied:
+                    if sys.platform != "linux":
+                        raise
+                    # Chromium's Linux sandbox can hide /proc socket FDs
+                    # even from the same UID. Keep checking other workers
+                    # and report the coverage limit explicitly.
+                    inaccessible.add(process.pid)
+        except Exception as error:  # pylint: disable=broad-except
+            # Thread exceptions do not fail the caller. Surface unexpected
+            # inspection failures explicitly instead of silently losing coverage.
+            violations.add(f"Could not inspect browser processes: {type(error).__name__}: {error}")
+        stopped.wait(0.05)
 
 
 def main():
@@ -242,58 +306,18 @@ def main():
         print("Socket inspection skipped: macOS requires elevated privileges for psutil networking")
     owner = psutil.Process()
     stopped = threading.Event()
-    tracked = set()
-    violations = set()
-    udp_endpoints = set()
+    tracked: Set[psutil.Process] = set()
+    violations: Set[str] = set()
+    udp_endpoints: Set[str] = set()
     inaccessible: Set[int] = set()
     unreadable: Set[psutil.Process] = set()
 
-    def monitor():
-        while not stopped.is_set():
-            try:
-                tracked.update(owner.children(recursive=True))
-                for process in list(tracked):
-                    try:
-                        if _is_caller_exit_helper(process, owner.pid, unreadable):
-                            # Calibre starts this caller-owned helper lazily on
-                            # its first fork; it lives until the caller exits.
-                            tracked.discard(process)
-                            continue
-                        if not chrome and process.name().lower() in (
-                            "chrome.exe",
-                            "chrome",
-                            "google chrome",
-                            "chromedriver",
-                            "chromedriver.exe",
-                            "uc_driver.exe",
-                        ):
-                            violations.add("External Chrome process launched")
-                        connections = getattr(process, "net_connections", None) or process.connections
-                        for connection in connections(kind="inet") if check_sockets else ():
-                            if connection.type == 2:
-                                # UDP has no LISTEN state. Chromium's DNS probes
-                                # also bind sockets, and Windows omits their
-                                # remote addresses. Verify WebRTC in the page
-                                # instead of treating every UDP client as a server.
-                                udp_endpoints.add(
-                                    f"{process.name()}, local={connection.laddr}, remote={connection.raddr}"
-                                )
-                            if connection.status == "LISTEN" and connection.laddr.ip not in ("127.0.0.1", "::1"):
-                                violations.add("Browser worker opened non-loopback TCP listener")
-                    except psutil.NoSuchProcess:
-                        pass
-                    except psutil.AccessDenied:
-                        if sys.platform != "linux":
-                            raise
-                        # Chromium's Linux sandbox can hide /proc socket FDs
-                        # even from the same UID. Keep checking other workers
-                        # and report the coverage limit explicitly.
-                        inaccessible.add(process.pid)
-            except psutil.Error as error:
-                violations.add("Could not inspect browser processes: " + type(error).__name__)
-            stopped.wait(0.05)
-
-    observer = threading.Thread(target=monitor, daemon=True)
+    observer = threading.Thread(
+        target=_monitor_browser_processes,
+        args=(owner, stopped, tracked, violations, udp_endpoints, inaccessible, unreadable),
+        kwargs={"chrome": chrome, "check_sockets": check_sockets},
+        daemon=True,
+    )
     observer.start()
     try:
         local_url = f"http://127.0.0.1:{server.server_port}/browser-smoke"
