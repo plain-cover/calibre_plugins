@@ -1,0 +1,172 @@
+name: "Diagnostic - Calibre 5.44 Windows renderer crash"
+
+# Temporary: find which Chromium flags avoid the Qt 5 WebEngine renderer
+# access violation (exit code -1073741819) on current windows-2025 images.
+# Results are emitted as annotations so they are readable without log access.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "diag-calibre5-windows-crash" ]
+
+permissions:
+  contents: read
+
+env:
+  CALIBRE_CURRENT_VERSION: "9.14.0"
+  CALIBRE_CURRENT_LINUX_SHA512: "d1a162d472dfbc3b74946809a979197121277150efe9e2172786843573c89dab542ce2bad98164c5d788420d2b9d8caea208cfe82c5016b3db09c0ed3ef3fc37"
+  CALIBRE_5_DESKTOP_VERSION: "5.44.0"
+  CALIBRE_5_WINDOWS_SHA512: "c0f9c67a83d3d51fc99cc896dded0d682d083a42dd596dbe9ac3401ad036b9af981573a5febea23f5d8758dd69db49caa7ea23c85bc0392fa1d000e2c291bfda"
+
+jobs:
+  build:
+    name: Build release ZIPs
+    runs-on: ubuntu-24.04
+    steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+    - name: Set up Python 3.11.9
+      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+      with:
+        python-version: "3.11.9"
+
+    - name: Install verified official Calibre binary
+      run: |
+        echo "CALIBRE_CONFIG_DIRECTORY=$RUNNER_TEMP/calibre-config" >> "$GITHUB_ENV"
+        echo "CALIBRE_DIRECTORY=$RUNNER_TEMP/calibre-current" >> "$GITHUB_ENV"
+        sudo apt-get update
+        sudo apt-get install -y libegl1 libopengl0 libxcb-cursor0 xdg-utils xz-utils
+        archive="$RUNNER_TEMP/calibre-$CALIBRE_CURRENT_VERSION-x86_64.txz"
+        curl -fsSL --retry 3 --retry-all-errors --connect-timeout 30 --max-time 300 \
+          "https://download.calibre-ebook.com/$CALIBRE_CURRENT_VERSION/calibre-$CALIBRE_CURRENT_VERSION-x86_64.txz" \
+          -o "$archive"
+        python common/verify_sha512.py "$archive" "$CALIBRE_CURRENT_LINUX_SHA512"
+        mkdir -p "$RUNNER_TEMP/calibre-current"
+        tar -xJf "$archive" -C "$RUNNER_TEMP/calibre-current"
+
+    - name: Build plugins
+      run: |
+        cd romanceio
+        bash build.sh
+        cd ../romanceio_fields
+        bash build.sh
+
+    - name: Upload release ZIPs
+      uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      with:
+        name: release-zips
+        if-no-files-found: error
+        retention-days: 3
+        path: |
+          romanceio/Romance.io.zip
+          romanceio_fields/Romance.io Fields.zip
+
+  diagnose:
+    name: ${{ matrix.variant }}
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: baseline
+            os: windows-2025
+            flags: ""
+            chrome: true
+          - variant: baseline with Chromium logging
+            os: windows-2025
+            flags: "--enable-logging=stderr --v=1"
+          - variant: RendererCodeIntegrity disabled
+            os: windows-2025
+            flags: "--disable-features=RendererCodeIntegrity"
+          - variant: no-sandbox
+            os: windows-2025
+            flags: "--no-sandbox"
+          - variant: single-process
+            os: windows-2025
+            flags: "--single-process"
+          - variant: baseline on windows-2022
+            os: windows-2022
+            flags: ""
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+
+    - name: Report runner image and Windows build
+      shell: pwsh
+      run: |
+        $version = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
+        "::notice title=${{ matrix.variant }} - runner::$env:ImageOS image $env:ImageVersion; Windows build $($version.CurrentBuild).$($version.UBR)"
+
+    - name: Download release ZIPs
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      with:
+        name: release-zips
+        path: dist
+
+    - name: Install verified Calibre 5.44 and the release ZIPs
+      id: install
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Stop'
+        $PSNativeCommandUseErrorActionPreference = $true
+        $env:CALIBRE_CONFIG_DIRECTORY = "$env:RUNNER_TEMP/calibre-5-desktop-config"
+        "CALIBRE_CONFIG_DIRECTORY=$env:CALIBRE_CONFIG_DIRECTORY" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+        $installer = Join-Path $env:RUNNER_TEMP "calibre-64bit-$env:CALIBRE_5_DESKTOP_VERSION.msi"
+        $url = "https://download.calibre-ebook.com/$env:CALIBRE_5_DESKTOP_VERSION/calibre-64bit-$env:CALIBRE_5_DESKTOP_VERSION.msi"
+        Invoke-WebRequest -Uri $url -OutFile $installer
+        python common/verify_sha512.py $installer $env:CALIBRE_5_WINDOWS_SHA512
+        $process = Start-Process msiexec.exe -Wait -PassThru -ArgumentList @('/i', $installer, '/qn', '/norestart')
+        if ($process.ExitCode -notin @(0, 3010)) {
+          throw "Calibre 5.44 MSI installation failed with exit code $($process.ExitCode)"
+        }
+        'C:\Program Files\Calibre2' | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        $calibre = 'C:\Program Files\Calibre2'
+        & "$calibre\calibre-debug.exe" --version
+        $romanceio = Get-ChildItem -Path dist -Recurse -Filter 'Romance.io.zip' | Select-Object -First 1
+        $fields = Get-ChildItem -Path dist -Recurse -Filter 'Romance.io Fields.zip' | Select-Object -First 1
+        & "$calibre\calibre-customize.exe" -a $romanceio.FullName
+        & "$calibre\calibre-customize.exe" -a $fields.FullName
+
+    - name: Minimal Qt WebEngine page load (no plugin setup)
+      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+      timeout-minutes: 3
+      shell: pwsh
+      env:
+        QTWEBENGINE_CHROMIUM_FLAGS: ${{ matrix.flags }}
+        DIAG_TITLE: "${{ matrix.variant }} - minimal Qt"
+      run: calibre-debug -e common/diag_qt5_webengine_crash.py
+
+    - name: Plugin embedded engine smoke
+      if: ${{ !cancelled() && steps.install.outcome == 'success' }}
+      timeout-minutes: 5
+      shell: pwsh
+      env:
+        QTWEBENGINE_CHROMIUM_FLAGS: ${{ matrix.flags }}
+      run: |
+        $ErrorActionPreference = 'Continue'
+        $output = calibre-debug -e common/run_installed_browser_smoke.py -- romanceio_fields --search-routes 2>&1 | ForEach-Object { "$_" }
+        $code = $LASTEXITCODE
+        $output
+        $tail = (($output | Select-Object -Last 25) -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+        if ($code -ne 0) {
+          "::error title=${{ matrix.variant }} - plugin embedded::FAILED (exit code $code)%0A$tail"
+          exit 1
+        }
+        "::notice title=${{ matrix.variant }} - plugin embedded::PASSED"
+
+    - name: Plugin Chrome smoke
+      if: ${{ !cancelled() && steps.install.outcome == 'success' && matrix.chrome }}
+      timeout-minutes: 5
+      shell: pwsh
+      run: |
+        $ErrorActionPreference = 'Continue'
+        $output = calibre-debug -e common/run_installed_browser_smoke.py -- romanceio_fields --search-routes --backend chrome 2>&1 | ForEach-Object { "$_" }
+        $code = $LASTEXITCODE
+        $output
+        $tail = (($output | Select-Object -Last 25) -join "`n").Replace('%', '%25').Replace("`r", '%0D').Replace("`n", '%0A')
+        if ($code -ne 0) {
+          "::error title=${{ matrix.variant }} - plugin Chrome::FAILED (exit code $code)%0A$tail"
+          exit 1
+        }
+        "::notice title=${{ matrix.variant }} - plugin Chrome::PASSED"
