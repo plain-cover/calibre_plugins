@@ -930,7 +930,10 @@ jobs:
       matrix:
         include:
           - name: Windows
-            os: windows-2025
+            # Calibre 5.x's Qt 5 WebEngine renderer crashes (0xC0000005) under the
+            # Chromium sandbox on Windows build 26100.33650 (windows-2025 image
+            # 20261021). windows-2022 is unaffected; move back once that is fixed.
+            os: windows-2022
           - name: macOS Apple Silicon
             os: macos-15
             architecture: arm64
