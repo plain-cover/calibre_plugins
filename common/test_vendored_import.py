@@ -30,6 +30,7 @@ from importlib import metadata
 import multiprocessing
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import threading
@@ -1055,6 +1056,127 @@ def test_browser_worker_reaps_real_descendants_and_removes_parent_profile(
             if process.poll() is None:
                 process.kill()
             process.wait(timeout=5)
+
+
+_NATIVE_CRASH = 0xC0000005 if os.name == "nt" else -11  # Access violation / SIGSEGV.
+
+
+@pytest.mark.parametrize(
+    ("attempts", "backend", "cancel", "expected"),
+    (
+        (("crash", "page"), None, False, 2),
+        (("crash", "crash"), None, False, 2),
+        (("exit", "page"), None, False, 1),
+        (("crash", "page"), "chrome", False, 1),
+        (("crash", "page"), None, True, 1),
+    ),
+    ids=("crash-then-page", "crash-twice", "ordinary-failure", "chrome", "cancelled"),
+)
+def test_supervisor_retries_only_a_native_worker_crash_once(tmp_path, monkeypatch, attempts, backend, cancel, expected):
+    """A Qt WebEngine segfault gets one more worker within the same time limit."""
+    import psutil
+
+    real_mkdtemp = fetch_helper.tempfile.mkdtemp
+    monkeypatch.setattr(fetch_helper.tempfile, "mkdtemp", lambda **kw: real_mkdtemp(dir=str(tmp_path), **kw))
+    timeouts: list[float] = []
+    real_init = fetch_helper._BrowserWorkerResources.__init__
+
+    def init(resources, timeout, log_func):
+        timeouts.append(timeout)
+        real_init(resources, timeout, log_func)
+
+    monkeypatch.setattr(fetch_helper._BrowserWorkerResources, "__init__", init)
+    workers: list[subprocess.Popen] = []
+    outcomes = iter(attempts)
+
+    def create_job():
+        process = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(60)"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        workers.append(process)
+
+        def kill_worker():
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+
+        worker = types.SimpleNamespace(pid=process.pid, kill=kill_worker, returncode=None)
+
+        def run_job(_module, _function, args, heartbeat, no_output):
+            assert heartbeat() and no_output
+            if cancel:
+                (tmp_path / "cancel").touch()
+            outcome = next(outcomes)
+            if outcome == "page":
+                return {"result": {"page": "browser html", "logs": [], "error_type": None}}
+            worker.returncode = _NATIVE_CRASH if outcome == "crash" else 1
+            raise RuntimeError("Failed to communicate with worker process")
+
+        setattr(run_job, "worker", worker)
+        return run_job
+
+    monkeypatch.setitem(
+        sys.modules, "calibre.utils.ipc.simple_worker", types.SimpleNamespace(two_part_fork_job=create_job)
+    )
+    try:
+        owner = psutil.Process()
+        result = fetch_helper._supervise_browser_worker(
+            {
+                "url": "https://example.invalid",
+                "plugin_name": "romanceio",
+                "backend": backend,
+                "transport_dir": str(tmp_path),
+                "worker_timeout": 30,
+                "owner_pid": owner.pid,
+                "owner_created": owner.create_time(),
+            }
+        )
+        assert len(workers) == len(timeouts) == expected
+        # The retry only gets what remains of the original time limit.
+        assert timeouts[0] == 30 and all(later < earlier for earlier, later in zip(timeouts, timeouts[1:]))
+        assert result["page"] == ("browser html" if attempts[expected - 1] == "page" else None)
+        progress = (tmp_path / "progress.jsonl").read_text(encoding="utf-8")
+        assert ("retrying once" in progress) is (expected == 2)
+        assert all(process.poll() is not None for process in workers)
+        assert not list(tmp_path.glob("calibre_sb_*"))
+    finally:
+        for process in workers:
+            if process.poll() is None:
+                process.kill()
+            process.wait(timeout=5)
+
+
+@pytest.mark.parametrize(
+    ("code", "crash"),
+    (
+        ((0xC0000005, True), (-1073741819, True), (0xC0000409, False), (1, False), (0, False))
+        if os.name == "nt"
+        # Signal numbers differ between Linux and macOS; Windows lacks most of them.
+        else tuple(
+            (-signal.Signals[name].value, crash)
+            for name, crash in (
+                ("SIGSEGV", True),
+                ("SIGBUS", True),
+                ("SIGILL", True),
+                ("SIGKILL", False),
+                ("SIGTERM", False),
+                ("SIGABRT", False),
+            )
+        )
+        + ((1, False), (0, False))
+    ),
+)
+def test_only_native_memory_faults_count_as_worker_crashes(code, crash):
+    from typing import Any
+
+    resources: Any = types.SimpleNamespace(
+        deadline=time.monotonic() + 5, worker=types.SimpleNamespace(returncode=code), process=None
+    )
+    assert fetch_helper._native_crash_exit_code(resources) == (code if crash else None)
 
 
 def test_native_worker_diagnostics_are_bounded_redacted_and_removed(tmp_path):
