@@ -12,7 +12,7 @@ from datetime import timezone
 from email.utils import parsedate_to_datetime
 from email.message import Message
 from http.cookies import CookieError, SimpleCookie
-from typing import List, Optional
+from typing import Dict, List, Optional
 from urllib.error import HTTPError
 from urllib.parse import urljoin, urlparse
 from urllib.request import getproxies, proxy_bypass, urlopen
@@ -58,6 +58,11 @@ class Budget:
         self.abort = abort
         self.deadline = time.monotonic() + seconds
         self.failed_browsers = set()
+        self.verification_hint_logged = False
+        # Set once direct HTTP meets Cloudflare's check during this lookup.
+        self.http_challenged = False
+        self.camoufox_hint_logged = False
+        self.metadata_wait_hint_logged = False
         self.log = log or (lambda _message: None)
 
     def is_set(self):
@@ -140,7 +145,8 @@ class HttpSession:
         self.used_at = 0.0
         self.bot_cookie = None
         self.user_agent = None
-        self.denied_endpoints = set()
+        # Endpoints refused this job, and whether Cloudflare's check refused them
+        self.denied_endpoints: Dict[str, bool] = {}
         self.clearance_identity = None
 
     def close(self):
@@ -164,13 +170,16 @@ class HttpSession:
             if endpoint in self.denied_endpoints:
                 budget = current_budget()
                 if budget:
+                    # Each lookup has its own budget; carry the check over to it.
+                    budget.http_challenged = budget.http_challenged or self.denied_endpoints[endpoint]
                     budget.log(f"Skipping HTTP {endpoint}: earlier 403 in this job and no new clearance")
                 raise HTTPError(request.full_url, 403, "Earlier endpoint 403; awaiting new clearance", Message(), None)
         try:
             return self._open(request, timeout)
         except HTTPError as error:
             if error.code == 403 and endpoint is not None:
-                self.denied_endpoints.add(endpoint)
+                headers = error.headers
+                self.denied_endpoints[endpoint] = bool(headers and headers.get("cf-mitigated") == "challenge")
             raise
 
     def _open(self, request, timeout):
@@ -254,6 +263,7 @@ class HttpSession:
                 body = _read_response(response, timeout)
                 budget = current_budget()
                 if budget:
+                    budget.http_challenged = budget.http_challenged or headers.get("cf-mitigated") == "challenge"
                     budget.log(
                         f"HTTP {path.path}: status={status}, challenge={headers.get('cf-mitigated') == 'challenge'}, "
                         f"{len(body)} bytes in {time.monotonic() - started:.2f}s, reused connection={reused}"

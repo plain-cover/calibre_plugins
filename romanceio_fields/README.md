@@ -160,6 +160,7 @@ This is useful for:
 
 Right-click on selected books to access:
 - **Download fields for selected book(s)** - Download all configured fields
+- **Verify Romance.io access** - Open Romance.io so you can complete its Cloudflare check; lookups reuse it until Romance.io asks again
 - **Customize plugin** - Open plugin settings
 
 ## Requirements
@@ -261,8 +262,10 @@ The plugin preserves the order supplied by Romance.io and takes the first `max_t
 - Verify the lookup names match exactly (case-sensitive)
 
 **Cloudflare or browser errors:**
+- If Romance.io asks for a verification, the download stops and offers to open the verification window; complete the check and the remaining books are retried. You can also choose **Verify Romance.io access** from this plugin's menu at any time. The verification is reused until Romance.io asks again.
 - Check the download job log for the failed access method, error, or timeout. Cloudflare can reject both HTTP and browser requests.
 - Chrome is optional for HTTP and Calibre's built-in engine, but must be installed to use the Chrome fallback. See the [main README's browser requirements](../README.md#notes) for platform restrictions.
+- With Calibre 9.17 or later, lookups that meet Romance.io's check use Calibre's Camoufox browser, which Calibre installs the first time **Download metadata** runs with its Amazon.com source enabled (the default).
 
 **Slow performance:**
 - Leave **Get tags directly from website** unchecked to try lightweight HTTP first, including the full tag lists present in the response. Browser startup and handling Cloudflare challenges take longer; the job log shows which method is running.

@@ -904,6 +904,7 @@ def test_installed_fetch_page_uses_isolated_calibre_worker(monkeypatch):
             "not_found_marker": None,
             "secondary_wait_element": None,
             "max_wait": 45,
+            "interactive": False,
         }
     ]
 

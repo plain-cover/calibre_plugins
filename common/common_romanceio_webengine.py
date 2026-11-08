@@ -13,6 +13,7 @@ from typing import Any, Dict, List
 
 _NOT_FOUND = "the page you are looking for can't be found"
 _CHROME_CHALLENGE_WAIT_SECONDS = 4
+_CHROME_CHALLENGE_SETTLE_SECONDS = 10
 
 
 def is_challenge_title(title):
@@ -60,13 +61,55 @@ def clearance_page_valid(html, request):
     return bool(html and _NOT_FOUND not in html.lower() and not page_failure(html, request))
 
 
+def set_clearance_cookie(profile, clearance):
+    """Restore Cloudflare's cookie exactly as it is scoped for Romance.io."""
+    try:
+        from qt.core import QDateTime, QNetworkCookie, QUrl
+    except ImportError:
+        from PyQt5.QtCore import QDateTime, QUrl
+        from PyQt5.QtNetwork import QNetworkCookie
+
+    cookie = QNetworkCookie(b"cf_clearance", clearance["value"].encode("ascii"))
+    cookie.setDomain(".romance.io")
+    cookie.setPath("/")
+    cookie.setSecure(True)
+    cookie.setHttpOnly(True)
+    cookie.setExpirationDate(QDateTime.fromSecsSinceEpoch(int(clearance["expires"])))
+    profile.cookieStore().setCookie(cookie, QUrl("https://www.romance.io/"))
+
+
+def set_chrome_clearance(driver, clearance):
+    """Give a fresh Chrome profile the clearance an earlier Chrome earned."""
+    from mycdp import network
+
+    driver.cdp.set_all_cookies(
+        [
+            network.CookieParam(
+                name="cf_clearance",
+                value=clearance["value"],
+                domain=".romance.io",
+                path="/",
+                secure=True,
+                http_only=True,
+                same_site=network.CookieSameSite.NONE,
+                expires=network.TimeSinceEpoch(clearance["expires"]),
+            )
+        ]
+    )
+
+
 def navigate_chrome(driver, request, log):
     """Use SeleniumBase CDP navigation and challenge handling in one Chrome."""
     from .common_romanceio_fetch_helper import BrowserFetchError
+    from .common_romanceio_session import CHALLENGE_SEEN, browser_clearance, forget_clearance
 
     routes = browser_requests(request)
     deadline = time.monotonic() + request.get("max_wait", 30)
     challenge_recoveries = 0
+    challenge_seen = False
+    give_up_at = None
+    stop_on_challenge = False
+    reused_clearance = None
     cdp_active = False
     last_failure = "Chrome did not return validated content within its navigation budget"
     last_error = None
@@ -101,7 +144,32 @@ def navigate_chrome(driver, request, log):
                     log(f"Chrome page validated ({len(html)} characters)")
                     return html
                 if is_challenge_title(title):
+                    if not challenge_seen:
+                        challenge_seen = True
+                        log(CHALLENGE_SEEN)
                     last_failure = "Chrome verification challenge did not clear within its navigation budget"
+                    if reused_clearance is None:
+                        reused_clearance = {}
+                        try:
+                            # Cloudflare binds clearance to the browser that earned
+                            # it, so only clearance from this same Chrome is reused.
+                            saved = browser_clearance(driver.cdp.evaluate("navigator.userAgent"))
+                            if saved:
+                                set_chrome_clearance(driver, saved)
+                                driver.cdp.reload()
+                                reused_clearance = saved
+                        except Exception as reuse_error:  # pylint: disable=broad-except
+                            # Never log the cookie; fall back to the usual check handling.
+                            log(f"Could not reuse saved verification in Chrome ({type(reuse_error).__name__})")
+                        if reused_clearance:
+                            log("Using saved Romance.io verification in Chrome")
+                            # Let the reload replace the challenge page before it is inspected.
+                            time.sleep(min(_CHROME_CHALLENGE_WAIT_SECONDS, max(0, route_deadline - time.monotonic())))
+                            continue
+                    if give_up_at is not None and time.monotonic() >= give_up_at:
+                        log("Chrome verification challenge remains after automatic handling; stopping early")
+                        stop_on_challenge = True
+                        break
                     remaining = route_deadline - time.monotonic()
                     if challenge_recoveries < 2 and remaining > 0:
                         challenge_recoveries += 1
@@ -110,6 +178,10 @@ def navigate_chrome(driver, request, log):
                         # handler. It does not require PyAutoGUI or move the
                         # user's mouse. Validate the page again after it runs.
                         driver.cdp.solve_captcha()
+                        if challenge_recoveries == 2:
+                            # Waiting out the rest of the budget rarely clears the
+                            # check, and the user can verify instead.
+                            give_up_at = time.monotonic() + _CHROME_CHALLENGE_SETTLE_SECONDS
                         remaining = route_deadline - time.monotonic()
                         if remaining <= 0:
                             break
@@ -120,8 +192,13 @@ def navigate_chrome(driver, request, log):
             log(f"Chrome navigation failed ({type(error).__name__})")
             last_failure = f"Chrome navigation failed ({type(error).__name__})"
             last_error = error
+        if stop_on_challenge:
+            break  # Automatic handling already failed; the other route would meet the same check.
         if index + 1 < len(routes):
             log("Chrome JSON route failed; trying HTML search in the same browser session")
+    if reused_clearance and "verification challenge" in last_failure:
+        forget_clearance(reused_clearance["value"])
+        log("Saved Romance.io verification is no longer accepted; it has been cleared")
     raise BrowserFetchError(last_failure) from last_error
 
 
@@ -196,7 +273,13 @@ def fetch_page(request, log):
         from PyQt5.QtWebEngineWidgets import QWebEnginePage, QWebEngineProfile, QWebEngineScript, QWebEngineSettings
 
     from .common_romanceio_fetch_helper import BrowserFetchError
-    from .common_romanceio_session import save_clearance
+    from .common_romanceio_session import (
+        CHALLENGE_SEEN,
+        CLEARANCE_SAVED,
+        browser_clearance,
+        forget_clearance,
+        save_clearance,
+    )
 
     must_use_qt()
     app = QApplication.instance()
@@ -231,6 +314,15 @@ def fetch_page(request, log):
         if hasattr(attributes, name):
             settings.setAttribute(getattr(attributes, name), False)
     origin = urlparse(request["url"])
+    if origin.scheme == "https" and origin.hostname == "www.romance.io":
+        # Reuse verification the user completed in this same engine. The
+        # User-Agent must match exactly; this engine never changes its own.
+        verified = browser_clearance(profile.httpUserAgent())
+        if verified:
+            set_clearance_cookie(profile, verified)
+            log("Using saved Romance.io verification for the embedded web engine")
+    else:
+        verified = {}
 
     class Page(QWebEnginePage):
         def javaScriptConsoleMessage(self, *_args):
@@ -308,7 +400,7 @@ def fetch_page(request, log):
             title = page.title()
             if title != state["title"]:
                 # Do not echo untrusted titles that could contain challenge tokens.
-                log("Embedded web engine: checking page content")
+                log(CHALLENGE_SEEN if is_challenge_title(title) else "Embedded web engine: checking page content")
                 state["title"] = title
             failure = page_failure(html, request)
             if failure:
@@ -357,6 +449,11 @@ def fetch_page(request, log):
         execute = getattr(app, "exec", None) or app.exec_
         execute()
         if state["error"] or not state["html"]:
+            if verified and is_challenge_title(state["title"] or ""):
+                # Cloudflare re-challenged despite the saved verification: it has
+                # lapsed, so stop reusing it and let the user verify again.
+                forget_clearance(verified["value"])
+                log("Saved Romance.io verification is no longer accepted; it has been cleared")
             raise BrowserFetchError(state["error"] or "Embedded web engine returned no page")
         if (
             origin.scheme == "https"
@@ -365,7 +462,7 @@ def fetch_page(request, log):
         ):
             try:
                 if save_clearance(cookies, profile.httpUserAgent()):
-                    log("Saved temporary Cloudflare clearance; subsequent requests can use direct HTTP")
+                    log(CLEARANCE_SAVED)
             except Exception as error:
                 log(f"Could not save browser clearance ({type(error).__name__})")
         log(f"Embedded page loaded successfully ({len(state['html'])} characters)")

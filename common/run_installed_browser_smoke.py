@@ -1,4 +1,4 @@
-"""Exercise installed Qt or Chrome rendering and cleanup against a local page."""
+"""Exercise installed Qt, Chrome or Camoufox rendering and cleanup against a local page."""
 
 import argparse
 import importlib
@@ -126,6 +126,8 @@ def _verify_challenge_failure(error, backend, logs):
     if backend == "embedded":
         expected = "Embedded web engine timed out waiting for validated content or Cloudflare clearance"
         valid = str(error) == expected
+    elif backend == "camoufox":
+        valid = str(error) == "Camoufox verification challenge did not clear within its navigation budget"
     else:
         valid = str(error) in (
             "Chrome did not return validated content within its navigation budget",
@@ -231,7 +233,7 @@ def _monitor_browser_processes(
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("plugin", choices=sorted(PLUGINS))
-    parser.add_argument("--backend", choices=("embedded", "chrome"), default="embedded")
+    parser.add_argument("--backend", choices=("embedded", "chrome", "camoufox"), default="embedded")
     parser.add_argument("--driver-source", choices=("runner", "managed"), default="runner")
     parser.add_argument("--require-flatpak-chrome", action="store_true")
     parser.add_argument("--search-routes", action="store_true", help="Recover JSON 404 via HTML in one browser session")
@@ -249,6 +251,10 @@ def main():
         parser.error("--chrome-fallback simulates Qt failure; use it without --backend chrome")
     if args.require_flatpak_chrome and not chrome:
         parser.error("--require-flatpak-chrome requires a Chrome test")
+    # Calibre 9.17+'s own browser, which calibre installs; never downloaded here.
+    camoufox = args.backend == "camoufox"
+    if camoufox and args.chrome_fallback:
+        parser.error("--chrome-fallback simulates Qt failure; use it without --backend camoufox")
 
     from calibre.customize.ui import find_plugin
 
@@ -261,6 +267,10 @@ def main():
     os.environ["CALIBRE_SELENIUM_HOME"] = os.path.join(smoke_parent, "browser-smoke", args.plugin)
 
     helper = importlib.import_module(f"calibre_plugins.{args.plugin}.common_romanceio_fetch_helper")
+    if camoufox:
+        camoufox_module = importlib.import_module(f"calibre_plugins.{args.plugin}.common_romanceio_camoufox")
+        if not camoufox_module.camoufox_available():
+            raise AssertionError("Calibre's Camoufox browser is not installed")
     if chrome:
         if args.require_flatpak_chrome:
             _verify_flatpak_chrome(helper)
@@ -276,6 +286,11 @@ def main():
     if chrome:
         html = f"""<html><body><p>{'local fixture ' * 20}</p><script>
         setTimeout(function() {{ document.body.insertAdjacentHTML('beforeend', '<h1>{marker}</h1>'); }}, 1500);
+        </script></body></html>"""
+    elif camoufox:
+        # Camoufox hands back the page once it has loaded, as Romance.io's are.
+        html = f"""<html><body><p>{'local fixture ' * 20}</p><script>
+        document.body.insertAdjacentHTML('beforeend', '<h1>{marker}</h1>');
         </script></body></html>"""
     real_fetch = helper._fetch_page_via_calibre_worker
     if args.search_routes:
@@ -301,7 +316,7 @@ def main():
     server_thread.start()
     import psutil
 
-    check_sockets = sys.platform != "darwin" and not chrome
+    check_sockets = sys.platform != "darwin" and not chrome and not camoufox
     if sys.platform == "darwin":
         print("Socket inspection skipped: macOS requires elevated privileges for psutil networking")
     owner = psutil.Process()
@@ -374,7 +389,7 @@ def main():
                 )
                 if not page or marker not in page:
                     raise AssertionError("A subsequent lookup failed after the challenge")
-                if not chrome:
+                if not chrome and not camoufox:
                     _verify_webrtc_blocked(page)
     finally:
         stopped.set()
@@ -407,6 +422,8 @@ def main():
         print(f"PASS: {display_name} used optional Chrome after simulated embedded failure and cleaned up")
     elif chrome:
         print(f"PASS: {display_name} rendered JavaScript with Chrome only and cleaned up")
+    elif camoufox:
+        print(f"PASS: {display_name} rendered JavaScript with calibre's Camoufox only and cleaned up")
     else:
         print(f"PASS: {display_name} rendered JavaScript without dialogs, external Chrome, or surviving workers")
         print("PASS: both WebRTC constructors were disabled before page scripts ran")

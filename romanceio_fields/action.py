@@ -38,9 +38,11 @@ from .config import ALL_FIELDS
 from .common_icons import set_plugin_icon_resources, get_icon  # pylint: disable=import-error
 from .common_menus import unregister_menu_actions, create_menu_action_unique  # pylint: disable=import-error
 from .common_dialogs import ProgressBarDialog  # pylint: disable=import-error
+from .common_romanceio_session import VERIFY_HINT  # pylint: disable=import-error
 from .jobs import (
     INTERNAL_CUSTOM_FIELDS_TO_UPDATE,
     INTERNAL_TAG_FIELDS_TO_UPDATE,
+    PENDING_VERIFICATION_WARNINGS,
     call_plugin_callback,
 )
 from .rating_tags import normalize_calibre_tags, reconcile_rating_tags
@@ -61,6 +63,16 @@ class CustomActionParallelJob(ParallelJob):
     rating_tag_fields: Set[str]
     plugin_callback: Optional[Any]
     result: Optional[Dict[int, Dict[str, Any]]] = None
+    # Kept so books stopped by Romance.io's verification check can be retried.
+    book_ids: List[int]
+    books_to_scan_raw: List[Tuple]
+    max_tags: int
+    prefer_html: bool
+    previous_results: Dict[int, Dict[str, Any]]
+    # Set on a retry after verification, so the user is asked at most once per download.
+    verification_log: Optional[List[str]]
+    # On a retry after verification, the warnings for books it did not search again
+    carried_warnings: Dict[int, str]
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -68,6 +80,13 @@ class CustomActionParallelJob(ParallelJob):
         self.rating_tag_fields = set()
         self.plugin_callback = None
         self.result = None
+        self.book_ids = []
+        self.books_to_scan_raw = []
+        self.max_tags = cfg.DEFAULT_LIBRARY_VALUES[cfg.KEY_MAX_TAGS]
+        self.prefer_html = False
+        self.previous_results = {}
+        self.verification_log = None
+        self.carried_warnings = {}
 
 
 class RomanceIOFieldsAction(InterfaceAction):
@@ -139,6 +158,15 @@ class RomanceIOFieldsAction(InterfaceAction):
             shortcut_name="Download fields for selected book(s)",
         )
         m.addSeparator()
+        create_menu_action_unique(
+            self,
+            m,
+            _("&Verify Romance.io access") + "...",  # type: ignore # pylint: disable=undefined-variable
+            "dialog_information.png",
+            triggered=self.verify_access,
+            unique_name="Verify Romance.io access",
+            shortcut_name="Verify Romance.io access",
+        )
         create_menu_action_unique(
             self,
             m,
@@ -282,6 +310,8 @@ class RomanceIOFieldsAction(InterfaceAction):
         book_ids: List[int],
         fields_to_cols_map: Dict[str, str],
         rating_tag_fields: Set[str],
+        verification_log: Optional[List[str]] = None,
+        carried_warnings: Optional[Dict[int, str]] = None,
     ) -> None:
         # Queue preparation job to run in background
         c = cfg.plugin_prefs[cfg.STORE_NAME]
@@ -299,7 +329,14 @@ class RomanceIOFieldsAction(InterfaceAction):
         args = [
             "calibre_plugins.romanceio_fields.jobs",
             "prepare_books_for_download",
-            (book_ids, fields_to_cols_map, list(rating_tag_fields), overwrite_existing, db.library_path),
+            (
+                book_ids,
+                fields_to_cols_map,
+                list(rating_tag_fields),
+                overwrite_existing,
+                db.library_path,
+                verification_log,
+            ),
         ]
         desc = _("Finding books on Romance.io")  # type: ignore # pylint: disable=undefined-variable
         job: CustomActionParallelJob = self.gui.job_manager.run_job(
@@ -316,6 +353,9 @@ class RomanceIOFieldsAction(InterfaceAction):
             args=args,
             description=desc,
         )
+        job.book_ids = book_ids
+        job.verification_log = verification_log
+        job.carried_warnings = carried_warnings or {}
         job.fields_to_cols_map = fields_to_cols_map
         job.rating_tag_fields = rating_tag_fields
         job.plugin_callback = self.plugin_callback
@@ -360,6 +400,23 @@ class RomanceIOFieldsAction(InterfaceAction):
                 current_row=self.gui.library_view.currentIndex().row(),
             )
 
+        warnings = {**job.carried_warnings, **warnings}
+        pending = {book_id for book_id, warning in warnings.items() if warning in PENDING_VERIFICATION_WARNINGS}
+        if pending and job.verification_log is None and VERIFY_HINT in (job.details or ""):
+            verification_log = self._offer_verification(len(pending))
+            if verification_log is not None:
+                # Identifiers found so far are saved, so they are not searched
+                # again, and neither are books Romance.io does not have.
+                misses = {book_id: warning for book_id, warning in warnings.items() if book_id not in pending}
+                self._get_romanceio_fields(
+                    [book_id for book_id in job.book_ids if book_id not in misses],
+                    fields_to_cols_map,
+                    rating_tag_fields,
+                    verification_log,
+                    carried_warnings=misses,
+                )
+                return None
+
         # Show any warnings/errors
         res = []
         distinct_problem_ids = {}
@@ -398,7 +455,14 @@ class RomanceIOFieldsAction(InterfaceAction):
 
         # Queue the download job
         if books_to_scan_raw:
-            self._queue_download_job(books_to_scan_raw, fields_to_cols_map, rating_tag_fields, max_tags, prefer_html)
+            self._queue_download_job(
+                books_to_scan_raw,
+                fields_to_cols_map,
+                rating_tag_fields,
+                max_tags,
+                prefer_html,
+                verification_log=job.verification_log,
+            )
 
         return None
 
@@ -418,13 +482,17 @@ class RomanceIOFieldsAction(InterfaceAction):
         rating_tag_fields: Set[str],
         max_tags: int,
         prefer_html: bool = False,
+        previous_results: Optional[Dict[int, Dict[str, Any]]] = None,
+        verification_log: Optional[List[str]] = None,
+        new_verification: bool = False,
     ) -> None:
         func = "arbitrary_n"
         cpus: Optional[int] = self.gui.job_manager.server.pool_size
         args = [
             "calibre_plugins.romanceio_fields.jobs",
             "do_metadata_download",
-            (books_to_scan_raw, max_tags, cpus, prefer_html),
+            # Preparation already printed an earlier verification's log.
+            (books_to_scan_raw, max_tags, cpus, prefer_html, verification_log if new_verification else None),
         ]
         desc = _("Download Romance.io Fields")  # type: ignore # pylint: disable=undefined-variable
         job: CustomActionParallelJob = self.gui.job_manager.run_job(
@@ -433,8 +501,13 @@ class RomanceIOFieldsAction(InterfaceAction):
             args=args,
             description=desc,
         )
+        job.books_to_scan_raw = books_to_scan_raw
         job.fields_to_cols_map = fields_to_cols_map
         job.rating_tag_fields = rating_tag_fields
+        job.max_tags = max_tags
+        job.prefer_html = prefer_html
+        job.previous_results = previous_results or {}
+        job.verification_log = verification_log
         job.plugin_callback = self.plugin_callback
         self.gui.status_bar.show_message(_("Downloading metadata for %d books") % len(books_to_scan_raw))  # type: ignore # pylint: disable=undefined-variable
 
@@ -442,11 +515,33 @@ class RomanceIOFieldsAction(InterfaceAction):
         if job.failed:
             return self.gui.job_exception(job, dialog_title=_("Failed to download metadata"))  # type: ignore # pylint: disable=undefined-variable
         self.gui.status_bar.show_message(_("Downloading metadata completed"), 3000)  # type: ignore # pylint: disable=undefined-variable
-        book_fields_map = job.result
+        # A retry after verification carries the books that succeeded before it.
+        book_fields_map = {**job.previous_results, **(job.result or {})}
 
-        if book_fields_map is None or len(book_fields_map) == 0:
+        pending = [raw_book for raw_book in job.books_to_scan_raw if not book_fields_map.get(raw_book[0])]
+        if pending and job.verification_log is None and VERIFY_HINT in (job.details or ""):
+            verification_log = self._offer_verification(len(pending))
+            if verification_log is not None:
+                self._queue_download_job(
+                    pending,
+                    job.fields_to_cols_map,
+                    job.rating_tag_fields,
+                    job.max_tags,
+                    job.prefer_html,
+                    previous_results=book_fields_map,
+                    verification_log=verification_log,
+                    new_verification=True,
+                )
+                return None
+
+        if not any(book_fields_map.values()):
             # Must have been some sort of error in processing this book
             msg = _("Failed to download any metadata. <b>View Log</b> for details")  # type: ignore # pylint: disable=undefined-variable
+            if VERIFY_HINT in (job.details or ""):
+                msg += "<p>" + _(  # type: ignore # pylint: disable=undefined-variable
+                    "Romance.io asked for a quick verification. Choose <b>Verify Romance.io access</b> "
+                    "from this plugin's menu, then try again."
+                )
             p = ErrorNotification(
                 job.details,
                 _("Romance.io log"),  # type: ignore # pylint: disable=undefined-variable
@@ -463,7 +558,7 @@ class RomanceIOFieldsAction(InterfaceAction):
                 cfg.KEY_ASK_FOR_CONFIRMATION,
                 cfg.DEFAULT_STORE_VALUES[cfg.KEY_ASK_FOR_CONFIRMATION],
             ):
-                all_ids = set(book_fields_map.keys())
+                all_ids = {book_id for book_id, fields in book_fields_map.items() if fields}
                 msg = _(  # type: ignore # pylint: disable=undefined-variable
                     "<p>Romance.io Fields plugin found <b>%d books to update</b>. "
                 ) % len(
@@ -601,6 +696,55 @@ class RomanceIOFieldsAction(InterfaceAction):
     def show_configuration(self):
         assert self.interface_action_base_plugin is not None
         self.interface_action_base_plugin.do_user_config(self.gui)
+
+    def verify_access(self) -> bool:
+        log: List[str] = []
+        verified = self._run_verification(log)
+        # Without a retry job to carry it, the log goes to Calibre's debug output.
+        for message in log:
+            print(f"[Verification] {message}")
+        return verified
+
+    def _run_verification(self, log: List[str]) -> bool:
+        # Imported on demand: the window loads Qt WebEngine widgets.
+        from .common_romanceio_verify import verify_romanceio_access  # pylint: disable=import-error
+
+        if not verify_romanceio_access(self.gui, log):
+            return False
+        self.gui.status_bar.show_message(_("Romance.io access verified"), 3000)  # type: ignore # pylint: disable=undefined-variable
+        return True
+
+    def _offer_verification(self, pending_count: int) -> Optional[List[str]]:
+        """Offer the verification window after a job stops on Romance.io's check.
+
+        Returns the verification's log once access is verified, so the caller
+        retries the books with it, or None.
+        """
+        if pending_count == 1:
+            summary = _(  # type: ignore # pylint: disable=undefined-variable
+                "Romance.io asked for a quick Cloudflare verification, so 1 book could not be looked up."
+            )
+        else:
+            summary = (
+                _(  # type: ignore # pylint: disable=undefined-variable
+                    "Romance.io asked for a quick Cloudflare verification, so %d books could not be looked up."
+                )
+                % pending_count
+            )
+        if not question_dialog(
+            self.gui,
+            _("Verify Romance.io access"),  # type: ignore # pylint: disable=undefined-variable
+            "<p>"
+            + summary
+            + "<p>"
+            + _(  # type: ignore # pylint: disable=undefined-variable
+                "Open the verification window now? Once you complete the check, those books are retried."
+            ),
+            show_copy_button=False,
+        ):
+            return None
+        log: List[str] = []
+        return log if self._run_verification(log) else None
 
     def progressbar(self, window_title, on_top=False):
         self.pb = ProgressBarDialog(parent=self.gui, window_title=window_title, on_top=on_top)

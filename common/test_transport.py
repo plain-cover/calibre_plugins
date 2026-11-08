@@ -454,8 +454,8 @@ def test_chrome_checks_page_after_challenge_clears_near_deadline(chrome_challeng
     assert now[0] < budget
 
 
-@pytest.mark.parametrize("budget", [3, 7, 15])
-def test_chrome_challenge_recovery_is_bounded(chrome_challenge, budget):
+@pytest.mark.parametrize("budget,stopped_at", [(3, 3), (7, 7), (15, 14.3), (60, 14.3)])
+def test_chrome_challenge_recovery_is_bounded(chrome_challenge, budget, stopped_at):
     driver, now = chrome_challenge
     driver.cdp.clear_on_solve = False
     request = {"url": "https://www.romance.io/books/test", "wait_for_element": "special_tags", "max_wait": budget}
@@ -465,7 +465,20 @@ def test_chrome_challenge_recovery_is_bounded(chrome_challenge, budget):
 
     assert len(driver.navigations) == 1
     assert driver.cdp.solves == 2
-    assert now[0] == budget
+    # A large budget is not waited out once automatic handling has failed.
+    assert now[0] == pytest.approx(stopped_at)
+
+
+def test_chrome_does_not_try_search_route_after_automatic_handling_fails(chrome_challenge):
+    driver, _now = chrome_challenge
+    driver.cdp.clear_on_solve = False
+    request = {"url": URL, "search_fallback_url": "https://www.romance.io/search?q=Title", "max_wait": 60}
+
+    with pytest.raises(helper.BrowserFetchError, match="verification challenge"):
+        engine.navigate_chrome(driver, request, lambda _message: None)
+    # The search route would meet the same check and repeat the automated attempts.
+    assert driver.navigations == [URL]
+    assert driver.cdp.solves == 2
 
 
 def test_chrome_unresolved_challenge_reports_cause(chrome_challenge):
@@ -917,3 +930,23 @@ def test_book_html_429_cooldown_applies_to_the_next_book(monkeypatch):
         assert result is not None
         assert result[1] is True
     assert calls == [0, 15, 60]
+
+
+@pytest.mark.parametrize("challenge", (True, False))
+def test_skipped_endpoint_carries_the_check_over_to_later_lookups(monkeypatch, challenge):
+    def refused(_session, request, _timeout):
+        headers = Message()
+        if challenge:
+            headers["cf-mitigated"] = "challenge"
+        raise HTTPError(request.full_url, 403, "Forbidden", headers, None)
+
+    monkeypatch.setattr(transport.HttpSession, "_open", refused)
+    session = transport.HttpSession()
+    with pytest.raises(HTTPError):
+        session.open(Request(URL), 10)
+    # The next book in the job has a budget of its own, and HTTP is skipped.
+    budget = transport.Budget()
+    monkeypatch.setattr(transport._state, "budget", budget, raising=False)
+    with pytest.raises(HTTPError, match="Earlier endpoint 403"):
+        session.open(Request(URL), 10)
+    assert budget.http_challenged is challenge

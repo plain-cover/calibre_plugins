@@ -1613,7 +1613,7 @@ def _fetch_page_in_process(
                         and clearance_page_valid(validated_page, {"url": url})
                     ):
                         try:
-                            from .common_romanceio_session import save_clearance
+                            from .common_romanceio_session import CLEARANCE_SAVED, save_clearance
 
                             # Navigation leaves WebDriver disconnected. Read
                             # clearance through CDP too, without reattaching.
@@ -1628,7 +1628,7 @@ def _fetch_page_in_process(
                                 if cookie.name == "cf_clearance"
                             ]
                             if save_clearance(cookies, driver.cdp.evaluate("navigator.userAgent")):
-                                _log("Saved temporary Cloudflare clearance; subsequent requests can use direct HTTP")
+                                _log(CLEARANCE_SAVED)
                         except Exception as session_error:  # pylint: disable=broad-except
                             # Never log cookie values or a WebDriver response containing them.
                             _log(f"Could not save browser clearance ({type(session_error).__name__})")
@@ -1718,6 +1718,211 @@ def _fetch_page_in_process(
         _BROWSER_IMPORT_LOCK.release()
 
 
+def _find_chrome_binary() -> Optional[str]:
+    """Locate an installed Chrome without launching it."""
+    if sys.platform == "win32":
+        candidates = [
+            os.path.join(os.environ.get(base, ""), "Google", "Chrome", "Application", "chrome.exe")
+            for base in ("PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA")
+            if os.environ.get(base)
+        ]
+    elif sys.platform == "darwin":
+        candidates = [
+            os.path.join(directory, "Google Chrome.app", "Contents", "MacOS", "Google Chrome")
+            for directory in ("/Applications", os.path.expanduser("~/Applications"))
+        ]
+    else:
+        flatpak_chrome = _find_flatpak_chrome()
+        candidates = [flatpak_chrome] if flatpak_chrome else []
+        candidates += [
+            shutil.which(name) or ""
+            for name in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser")
+        ]
+    return next((path for path in candidates if path and os.path.isfile(path) and os.access(path, os.X_OK)), None)
+
+
+def _devtools_json(port: int, path: str) -> Any:
+    """Read Chrome's DevTools HTTP endpoint on loopback, bypassing any proxy."""
+    from urllib.request import ProxyHandler, build_opener
+
+    with build_opener(ProxyHandler({})).open(f"http://127.0.0.1:{port}{path}", timeout=5) as response:
+        return json.loads(response.read(1024 * 1024))
+
+
+def _read_websocket_message(stream: Any) -> bytes:
+    message = b""
+    while True:
+        first, second = stream.read(2)
+        length = second & 0x7F
+        if length == 126:
+            length = int.from_bytes(stream.read(2), "big")
+        elif length == 127:
+            length = int.from_bytes(stream.read(8), "big")
+        if length > 16 * 1024 * 1024:
+            raise BrowserFetchError("Chrome DevTools reply was unexpectedly large")
+        payload = stream.read(length)
+        if first & 0x0F in (0x0, 0x1):
+            message += payload
+            if first & 0x80:
+                return message
+        elif first & 0x0F == 0x8:
+            raise BrowserFetchError("Chrome DevTools closed the connection")
+
+
+def _devtools_call(websocket_url: str, method: str) -> Dict[str, Any]:
+    """Send one DevTools command to the browser endpoint and return its result.
+
+    A single request/reply needs only this minimal client, so the verification
+    Chrome works without loading the vendored browser automation packages.
+    """
+    import base64
+
+    parsed = urlparse(websocket_url)
+    if parsed.hostname not in ("127.0.0.1", "localhost") or not parsed.port:
+        raise BrowserFetchError("Chrome DevTools endpoint is not on loopback")
+    with socket.create_connection(("127.0.0.1", parsed.port), timeout=10) as connection:
+        key = base64.b64encode(os.urandom(16)).decode("ascii")
+        connection.sendall(
+            (
+                f"GET {parsed.path} HTTP/1.1\r\nHost: 127.0.0.1:{parsed.port}\r\nUpgrade: websocket\r\n"
+                f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+            ).encode("ascii")
+        )
+        stream = connection.makefile("rb")
+        if b" 101 " not in stream.readline():
+            raise BrowserFetchError("Chrome DevTools refused the connection")
+        while stream.readline() not in (b"\r\n", b""):
+            pass
+        payload = json.dumps({"id": 1, "method": method}).encode("utf-8")
+        mask = os.urandom(4)
+        if len(payload) < 126:
+            header = bytes([0x81, 0x80 | len(payload)])
+        else:
+            header = bytes([0x81, 0x80 | 126]) + len(payload).to_bytes(2, "big")
+        connection.sendall(header + mask + bytes(byte ^ mask[index % 4] for index, byte in enumerate(payload)))
+        while True:
+            reply = json.loads(_read_websocket_message(stream))
+            if reply.get("id") == 1:
+                if "error" in reply:
+                    raise BrowserFetchError(f"Chrome DevTools {method} failed")
+                return reply.get("result") or {}
+
+
+def _wait_for_user_in_chrome(request: Dict[str, Any], log: Callable, ready: Optional[Callable] = None) -> str:
+    """Open Romance.io in an ordinary Chrome window while the user completes the check.
+
+    Nothing is attached to the page while the check runs: progress comes from
+    DevTools' list of tabs, and the clearance cookie is read only once
+    Romance.io has loaded. The window keeps its own profile between
+    verifications; the supervisor reaps Chrome. ready, if given, gets the
+    result before Chrome is closed, which can take a while.
+    """
+    from .common_romanceio_session import CHALLENGE_SEEN, CLEARANCE_SAVED, save_clearance, verification_profile_dir
+    from .common_romanceio_webengine import is_challenge_title
+
+    binary = _find_chrome_binary()
+    if not binary:
+        raise ChromeNotInstalledError("Chrome not found; install it first to verify Romance.io access")
+    port = _browser_debug_port()
+    command = [
+        binary,
+        f"--user-data-dir={verification_profile_dir()}",
+        f"--remote-debugging-port={port}",
+        "--no-first-run",
+        "--no-default-browser-check",
+        # A cancelled verification is closed forcibly; don't offer to restore it next time.
+        "--hide-crash-restore-bubble",
+    ]
+    if os.environ.get("FLATPAK_ID"):
+        # See _build_chrome_args: only inside Calibre's own Flatpak sandbox.
+        command.append("--no-sandbox")
+    command.append(request["url"])
+    log("Opening Romance.io in Chrome")
+    process = subprocess.Popen(  # pylint: disable=consider-using-with
+        _native_macos_browser_command(command),
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    deadline = time.monotonic() + request.get("max_wait", 30)
+    loaded_since = None
+    challenge_seen = False
+    started = False
+    # The browser's details, which do not change while it runs
+    version: Dict[str, Any] = {}
+    try:
+        while time.monotonic() < deadline:
+            time.sleep(1)
+            if process.poll() is not None:
+                if not started:
+                    # Chrome hands the page to a window already using this profile, then exits.
+                    raise BrowserFetchError(
+                        "Chrome did not start; if an earlier verification window is still open, close it and try again"
+                    )
+                raise BrowserFetchError("Chrome was closed before Romance.io loaded")
+            try:
+                tabs = _devtools_json(port, "/json/list")
+                version = version or _devtools_json(port, "/json/version")
+            except (OSError, ValueError):
+                continue  # DevTools is not listening yet.
+            started = True
+            tab = next(
+                (
+                    tab
+                    for tab in tabs
+                    if tab.get("type") == "page" and urlparse(tab.get("url", "")).hostname == "www.romance.io"
+                ),
+                None,
+            )
+            title = (tab or {}).get("title") or ""
+            if not tab or not title or title.startswith("www.romance.io"):
+                loaded_since = None  # Still loading; Chrome shows the address as the title.
+                continue
+            if is_challenge_title(title):
+                loaded_since = None
+                if not challenge_seen:
+                    challenge_seen = True
+                    log(CHALLENGE_SEEN)
+                    log("Waiting for the check to be completed in the Chrome window")
+                continue
+            try:
+                stored = _devtools_call(version["webSocketDebuggerUrl"], "Storage.getCookies").get("cookies", [])
+            except (OSError, ValueError, KeyError, BrowserFetchError):
+                continue
+            cookies = [
+                {
+                    "name": cookie.get("name"),
+                    "value": cookie.get("value"),
+                    "domain": cookie.get("domain", ""),
+                    "expiry": cookie.get("expires", 0),
+                }
+                for cookie in stored
+                if cookie.get("name") == "cf_clearance"
+            ]
+            if cookies and save_clearance(cookies, version.get("User-Agent", "")):
+                log(CLEARANCE_SAVED)
+                if ready:
+                    ready(title)
+                return title
+            loaded_since = loaded_since or time.monotonic()
+            if not challenge_seen and time.monotonic() - loaded_since >= 10:
+                log("Romance.io loaded without asking for a check")
+                if ready:
+                    ready(title)
+                return title
+        raise BrowserFetchError("Romance.io's check was not completed in time")
+    finally:
+        if process.poll() is None:
+            try:
+                _devtools_call(_devtools_json(port, "/json/version")["webSocketDebuggerUrl"], "Browser.close")
+            except Exception:  # pylint: disable=broad-except
+                pass  # Chrome may drop the connection as it closes.
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.terminate()
+
+
 def _fetch_page_worker(request: Dict[str, Any]) -> Dict[str, Any]:
     """Calibre IPC entry point for a disposable Qt or Chrome browser worker."""
     logs: List[str] = []
@@ -1727,6 +1932,9 @@ def _fetch_page_worker(request: Dict[str, Any]) -> Dict[str, Any]:
             _write_browser_log(request, message)
         else:
             logs.append(message)
+
+    def hand_over(page: Optional[str] = None, error: Optional[BaseException] = None) -> None:
+        _publish_response(request, _worker_response(page, error, logs))
 
     diagnostics = None
     if request.get("capture_worker_output"):
@@ -1740,7 +1948,12 @@ def _fetch_page_worker(request: Dict[str, Any]) -> Dict[str, Any]:
     try:
         from .common_romanceio_webengine import fetch_page as fetch_embedded_page
 
-        if request.get("backend") == "chrome":
+        if request.get("backend") == "camoufox":
+            from .common_romanceio_camoufox import fetch_page_with_camoufox
+
+            # calibre launches and manages its own browser; it needs calibre's environment.
+            page = fetch_page_with_camoufox(request, log, on_done=hand_over)
+        elif request.get("backend") == "chrome":
             try:
                 from calibre.constants import sanitize_env_vars
             except ImportError:
@@ -1751,39 +1964,74 @@ def _fetch_page_worker(request: Dict[str, Any]) -> Dict[str, Any]:
             # Cover version probes, launch, and reconnect in this disposable
             # worker only; the embedded Qt worker needs Calibre's environment.
             with sanitize_env_vars():
-                page = _fetch_page_in_process(
-                    request["url"],
-                    request["plugin_name"],
-                    wait_for_element=request.get("wait_for_element"),
-                    not_found_marker=request.get("not_found_marker"),
-                    secondary_wait_element=request.get("secondary_wait_element"),
-                    max_wait=request.get("max_wait", 30),
-                    log_func=log,
-                    user_data_dir=request.get("user_data_dir"),
-                    search_fallback_url=request.get("search_fallback_url"),
-                    capture_worker_output=bool(request.get("capture_worker_output")),
-                    chromedriver_log_path=(
-                        os.path.join(request["transport_dir"], "chromedriver.log")
-                        if request.get("capture_worker_output") and request.get("transport_dir")
-                        else None
-                    ),
-                )
+                if request.get("interactive"):
+                    page = _wait_for_user_in_chrome(request, log, ready=hand_over)
+                else:
+                    page = _fetch_page_in_process(
+                        request["url"],
+                        request["plugin_name"],
+                        wait_for_element=request.get("wait_for_element"),
+                        not_found_marker=request.get("not_found_marker"),
+                        secondary_wait_element=request.get("secondary_wait_element"),
+                        max_wait=request.get("max_wait", 30),
+                        log_func=log,
+                        user_data_dir=request.get("user_data_dir"),
+                        search_fallback_url=request.get("search_fallback_url"),
+                        capture_worker_output=bool(request.get("capture_worker_output")),
+                        chromedriver_log_path=(
+                            os.path.join(request["transport_dir"], "chromedriver.log")
+                            if request.get("capture_worker_output") and request.get("transport_dir")
+                            else None
+                        ),
+                    )
         else:
             page = fetch_embedded_page(request, log)
-        return {"page": page, "logs": logs, "error_type": None, "error_message": None}
+        return _worker_response(page, None, logs)
     except Exception as error:  # The IPC response preserves failures without retrying the engine.
-        import traceback
+        if not isinstance(error, BrowserFetchError):
+            # A browser's own failure is already explained by its log.
+            import traceback
 
-        log(_redact_log_text(traceback.format_exc()))
-        return {
-            "page": None,
-            "logs": logs,
-            "error_type": "BrowserFetchError",
-            "error_message": str(error),
-        }
+            log(_redact_log_text(traceback.format_exc()))
+        return _worker_response(None, error, logs)
     finally:
         if diagnostics is not None:
             diagnostics.cancel_dump_traceback_later()
+
+
+def _worker_response(page: Optional[str], error: Optional[BaseException], logs: List[str]) -> Dict[str, Any]:
+    if error is not None:
+        return {"page": None, "logs": logs, "error_type": "BrowserFetchError", "error_message": str(error)}
+    return {"page": page, "logs": logs, "error_type": None, "error_message": None}
+
+
+# Where a browser worker, or its supervisor, leaves its answer for the caller.
+_RESPONSE_FILE = "response.json"
+
+
+def _publish_response(request: Dict[str, Any], response: Dict[str, Any]) -> None:
+    """Hand the caller its answer before browser cleanup, which can take a while.
+
+    The first answer stands. Smoke-test runs that collect native diagnostics
+    skip this, so that their cleanup output still comes before the answer.
+    """
+    transport = request.get("transport_dir")
+    if not transport or request.get("capture_worker_output"):
+        return
+    path = os.path.join(transport, _RESPONSE_FILE)
+    if os.path.exists(path):
+        return
+    temporary = f"{path}.{os.getpid()}.tmp"
+    try:
+        with open(temporary, "w", encoding="utf-8") as stream:
+            json.dump(response, stream)
+        os.replace(temporary, path)
+    except (OSError, TypeError, ValueError):
+        # The caller still gets the answer once cleanup has finished.
+        try:
+            os.remove(temporary)
+        except OSError:
+            pass
 
 
 def _is_installed_plugin_module(plugin_name: str) -> bool:
@@ -2002,14 +2250,18 @@ def _supervise_browser_worker(request: Dict[str, Any]) -> Dict[str, Any]:
         if not isinstance(response, dict):
             raise BrowserFetchError("Browser worker returned an invalid response")
         failed = bool(response.get("error_type")) or not response.get("page")
+        _publish_response(request, response)
         return response
     except Exception as error:  # pylint: disable=broad-except
         log(f"{reason}: {type(error).__name__}: {error}")
         if capture_output and resources.worker is not None:
             log(f"Browser worker exit code before cleanup: {getattr(resources.worker, 'returncode', None)}")
-        return {"page": None, "error_type": "BrowserFetchError", "error_message": reason}
+        response = {"page": None, "error_type": "BrowserFetchError", "error_message": reason}
+        _publish_response(request, response)
+        return response
     finally:
         try:
+            # The caller has its answer and moves on while this finishes.
             resources.close()
         finally:
             _finish_browser_worker_output(native_log_path, failed, log)
@@ -2022,6 +2274,28 @@ def _supervise_browser_worker(request: Dict[str, Any]) -> Dict[str, Any]:
                 )
             if not _browser_owner_alive(request):
                 shutil.rmtree(request["transport_dir"], ignore_errors=True)
+
+
+# Longest a Camoufox worker runs: as long as a whole lookup.
+_CAMOUFOX_WORKER_SECONDS = 120
+
+# Browsers a lookup can render in; camoufox is calibre's own, from calibre 9.16.
+BROWSER_BACKENDS = ("embedded", "chrome", "camoufox")
+
+
+def _navigation_budget(max_wait: float, worker_timeout: float, backend: Optional[str]) -> float:
+    """Fit navigation inside the worker's total limit, leaving room for startup and quit.
+
+    Otherwise the supervisor kills a worker still waiting on a challenge, which
+    loses the browser's own diagnosis and skips its orderly shutdown.
+    """
+    overhead = 20 if backend in ("chrome", "camoufox") else 10
+    if backend == "camoufox":
+        # max_wait is how long a page may take to render. Camoufox is only used
+        # once Cloudflare's check has been met, and needs its whole budget: about
+        # 17 seconds to start, then as long as Cloudflare takes over the check.
+        return max(1, worker_timeout - overhead)
+    return max(1, min(max_wait, worker_timeout - overhead))
 
 
 def _fetch_page_via_calibre_worker(
@@ -2043,11 +2317,20 @@ def _fetch_page_via_calibre_worker(
     from .common_romanceio_transport import current_budget, remaining
 
     abort = current_budget() or abort
-    worker_timeout = remaining(90 if request.get("backend") == "chrome" else 45)
+    if request.get("interactive"):
+        # The user completes the check, so navigation is as long as they need.
+        worker_timeout = remaining(request.get("max_wait", 30) + 30)
+    elif request.get("backend") == "camoufox":
+        # The rest of the lookup: Cloudflare can take a while over the check,
+        # and Chrome only follows when Camoufox could not run at all.
+        worker_timeout = remaining(_CAMOUFOX_WORKER_SECONDS)
+    else:
+        worker_timeout = remaining(90 if request.get("backend") == "chrome" else 45)
     owner = psutil.Process()
     transport = tempfile.mkdtemp(prefix="calibre_sb_log_")
     request = {
         **request,
+        "max_wait": _navigation_budget(request.get("max_wait", 30), worker_timeout, request.get("backend")),
         "transport_dir": transport,
         "owner_pid": owner.pid,
         "owner_created": owner.create_time(),
@@ -2055,43 +2338,78 @@ def _fetch_page_via_calibre_worker(
     }
     position = 0
     next_read = 0.0
+    # Set once this lookup has its answer while the supervisor is still
+    # cleaning up; what it logs after that is the earlier browser's cleanup.
+    handed_over = False
+    lock = threading.Lock()
+    finished = threading.Event()
+    outcome: Dict[str, Any] = {}
 
     def progress(force: bool = False) -> bool:
         nonlocal position, next_read
-        if abort is not None and abort.is_set():
-            with open(os.path.join(transport, "cancel"), "a", encoding="utf-8"):
+        with lock:
+            if abort is not None and abort.is_set() and not handed_over:
+                with open(os.path.join(transport, "cancel"), "a", encoding="utf-8"):
+                    pass
+            if not force and time.monotonic() < next_read:
+                return True
+            next_read = time.monotonic() + 0.1
+            try:
+                with open(os.path.join(transport, "progress.jsonl"), encoding="utf-8") as stream:
+                    stream.seek(position)
+                    while True:
+                        line = stream.readline()
+                        if not line.endswith("\n"):
+                            break
+                        message = json.loads(line)
+                        log(f"Earlier browser cleanup: {message}" if handed_over else message)
+                        position = stream.tell()
+            except FileNotFoundError:
                 pass
-        if not force and time.monotonic() < next_read:
-            return True
-        next_read = time.monotonic() + 0.1
-        try:
-            with open(os.path.join(transport, "progress.jsonl"), encoding="utf-8") as stream:
-                stream.seek(position)
-                while True:
-                    line = stream.readline()
-                    if not line.endswith("\n"):
-                        break
-                    log(json.loads(line))
-                    position = stream.tell()
-        except FileNotFoundError:
-            pass
         # Never kill the supervisor on cancellation: it must finish cleanup.
         # The supervisor enforces the deadline on the browser worker itself.
         return True
 
-    try:
-        response = fork_job(
-            __name__,
-            "_supervise_browser_worker",
-            args=(request,),
-            heartbeat=progress,
-            no_output=True,
-        )["result"]
-    except Exception as error:  # pylint: disable=broad-except
-        raise BrowserFetchError(f"Browser supervisor failed: {type(error).__name__}: {error}") from error
-    finally:
-        progress(force=True)
+    def supervise() -> None:
+        try:
+            outcome["response"] = fork_job(
+                __name__,
+                "_supervise_browser_worker",
+                args=(request,),
+                heartbeat=progress,
+                no_output=True,
+            )["result"]
+        except Exception as error:  # pylint: disable=broad-except
+            outcome["error"] = error
+        finally:
+            with lock:
+                finished.set()
+                cleanup_left_here = handed_over
+            if cleanup_left_here:
+                progress(force=True)
+                shutil.rmtree(transport, ignore_errors=True)
+
+    threading.Thread(target=supervise, name="Romance.io browser supervisor", daemon=True).start()
+    response_path = os.path.join(transport, _RESPONSE_FILE)
+    # The browser's answer is published before its cleanup, which can take a
+    # while; take it as soon as it is there and let cleanup finish behind us.
+    while not finished.wait(0.05) and not os.path.exists(response_path):
+        pass
+    progress(force=True)
+    with lock:
+        handed_over = not finished.is_set()
+    if handed_over:
+        try:
+            with open(response_path, encoding="utf-8") as stream:
+                response = json.load(stream)
+        except (OSError, ValueError) as error:
+            raise BrowserFetchError(f"Browser answer could not be read: {type(error).__name__}") from error
+    else:
         shutil.rmtree(transport, ignore_errors=True)
+        if "error" in outcome:
+            failure = outcome["error"]
+            raise BrowserFetchError(f"Browser supervisor failed: {type(failure).__name__}: {failure}") from failure
+        response = outcome["response"]
 
     if not isinstance(response, dict):
         raise BrowserFetchError("Browser worker returned an invalid response")
@@ -2118,8 +2436,13 @@ def fetch_page(
     allow_chrome_fallback=True,
     prefer_chrome=False,
     backend=None,
+    interactive=False,
 ):
-    """Fetch a page in an isolated worker when running as an installed plugin."""
+    """Fetch a page in an isolated worker when running as an installed plugin.
+
+    interactive leaves Romance.io's check to the user in the visible Chrome
+    window instead of handling it automatically.
+    """
     request = {
         "url": url,
         "plugin_name": plugin_name,
@@ -2127,6 +2450,7 @@ def fetch_page(
         "not_found_marker": not_found_marker,
         "secondary_wait_element": secondary_wait_element,
         "max_wait": max_wait,
+        "interactive": interactive,
     }
 
     from .common_romanceio_transport import current_budget, remaining
@@ -2148,39 +2472,142 @@ def fetch_page(
 
     def fetch(request):
         if _is_installed_plugin_module(plugin_name):
-            return _fetch_page_via_calibre_worker(request, log_func, abort)
+            return _fetch_page_via_calibre_worker(request, observe, abort)
         # Standalone Calibre diagnostics own their process already.
         response = _fetch_page_worker(request)
         for message in response["logs"]:
-            (log_func or print)(message)
+            observe(message)
         if response["error_type"] or not response["page"]:
             raise BrowserFetchError(response["error_message"] or "Browser returned no page")
         return response["page"]
 
-    backends: Sequence[str] = ("chrome", "embedded") if prefer_chrome else ("embedded", "chrome")
+    # Cloudflare's check rejects the embedded engine, so once plain HTTP has
+    # met it, use calibre's Camoufox when calibre has installed it, or Chrome.
+    chrome_first = prefer_chrome or bool(budget and budget.http_challenged)
+    backends: Sequence[str] = ("chrome", "embedded") if chrome_first else ("embedded", "chrome")
+    if budget and budget.http_challenged and allow_chrome_fallback and backend is None:
+        from .common_romanceio_camoufox import (
+            METADATA_SOURCE_PLUGIN,
+            camoufox_available,
+            camoufox_missing_hint,
+            metadata_wait_hint,
+        )
+
+        if camoufox_available():
+            backends = ("camoufox", "chrome")
+            if plugin_name == METADATA_SOURCE_PLUGIN and not budget.metadata_wait_hint_logged:
+                budget.metadata_wait_hint_logged = True
+                hint = metadata_wait_hint()
+                if hint:
+                    (log_func or print)(hint)
+        elif not budget.camoufox_hint_logged:
+            budget.camoufox_hint_logged = True
+            (log_func or print)(camoufox_missing_hint())
+        from .common_romanceio_session import clearance_browser
+
+        # Clearance is bound to the browser that earned it, such as the
+        # verification window's Chrome, so once HTTP has met the check only
+        # that browser can still reuse it.
+        owner = clearance_browser()
+        if owner in ("chrome", "embedded"):
+            backends = (owner,) + tuple(name for name in backends if name != owner)
     if not allow_chrome_fallback:
         backends = ("embedded",)
     if backend is not None:
-        if backend not in ("embedded", "chrome"):
+        if backend not in BROWSER_BACKENDS:
             raise ValueError(f"Unknown browser backend: {backend}")
         backends = (backend,)
+    challenged = False
+    # Browsers that were shown the check during this call
+    met_check: set = set()
+    current = ""
+    from .common_romanceio_session import CHALLENGE_SEEN
+
+    def observe(message):
+        # A browser can see the check yet fail for another reason, such as the
+        # lookup's time limit, so watch its progress rather than its last error.
+        nonlocal challenged
+        if CHALLENGE_SEEN in str(message):
+            challenged = True
+            met_check.add(current)
+        (log_func or print)(message)
+
+    def suggest_verification():
+        # Only after every browser failed: a later success makes the hint moot.
+        if challenged and not (budget and budget.verification_hint_logged):
+            from .common_romanceio_session import VERIFY_HINT
+
+            (log_func or print)(VERIFY_HINT)
+            if budget:
+                budget.verification_hint_logged = True
+
+    http_challenged = bool(budget and budget.http_challenged)
+    if http_challenged and not interactive:
+        from .common_romanceio_session import automatic_check_paused
+
+        # Saving a verification ends the pause; a saved clearance that HTTP has
+        # just been refused with does not.
+        if automatic_check_paused():
+            (log_func or print)(
+                "Skipping automatic browsers until Romance.io's check is completed in the verification window"
+            )
+            challenged = True
+            suggest_verification()
+            raise BrowserFetchError("Romance.io's verification challenge needs to be completed by the user")
+
     for index, backend in enumerate(backends):
         if budget and backend in budget.failed_browsers:
             (log_func or print)(f"Skipping {backend}: its browser session already failed in this lookup")
             continue
         if abort is not None and abort.is_set():
             raise BrowserFetchError("Browser cancelled before startup")
+        current = backend
         try:
             return fetch({**request, "backend": backend})
         except BrowserFetchError as error:
             (log_func or print)(_redact_log_text(f"{backend.capitalize()} browser failed: {error}"))
+            # Chrome can run out of time before its check page even appears, so
+            # HTTP meeting the check is enough to know the check is involved.
+            challenged = challenged or _is_challenge_failure(error) or http_challenged
             if budget:
                 budget.failed_browsers.add(backend)
-            if (abort is not None and abort.is_set()) or index == len(backends) - 1:
+            next_backend = backends[index + 1] if index + 1 < len(backends) else None
+            if backend != "embedded" and challenged and next_backend == "embedded":
+                (log_func or print)("Skipping embedded: Romance.io's check does not accept the embedded engine")
+                next_backend = None
+            if backend == "camoufox" and (backend in met_check or _is_challenge_failure(error)):
+                # Camoufox had the whole lookup on the check; Chrome is for when
+                # Camoufox cannot run at all.
+                if next_backend:
+                    (log_func or print)(
+                        f"Skipping {next_backend}: Cloudflare kept Camoufox on Romance.io's check for this lookup"
+                    )
+                next_backend = None
+            # Calibre stopping a slow source, or the user cancelling, says nothing
+            # about whether the check could have been passed; running out of the
+            # lookup's own time does.
+            stop = budget.abort if budget is not None else abort
+            cancelled = stop is not None and stop.is_set()
+            if challenged and not interactive and next_backend is None and backend != "embedded" and not cancelled:
+                # Every automatic browser has now met the check without getting past it.
+                from .common_romanceio_session import note_automatic_check_failed
+
+                note_automatic_check_failed()
+            if (abort is not None and abort.is_set()) or next_backend is None:
+                suggest_verification()
                 raise
-            next_backend = backends[index + 1]
             (log_func or print)(f"{backend.capitalize()} browser failed; trying {next_backend} once.")
+    suggest_verification()
     raise BrowserFetchError("No untried browser remains for this lookup")
+
+
+def _is_challenge_failure(error: Exception) -> bool:
+    """Recognize a lookup that ended on Cloudflare's check rather than a crash.
+
+    A browser that merely timed out is not one: the browsers log CHALLENGE_SEEN
+    when they are shown the check, and fetch_page watches for that.
+    """
+    return "verification challenge" in str(error)
 
 
 def fetch_book_page_http(romanceio_id: str, log_func: Optional[Callable] = None, timeout: int = 30) -> tuple:
@@ -2223,7 +2650,7 @@ def fetch_book_page_http(romanceio_id: str, log_func: Optional[Callable] = None,
         "Accept-Language": "en-US,en;q=0.9",
     }
 
-    from .common_romanceio_session import clearance_headers, discard_clearance
+    from .common_romanceio_session import clearance_headers, reject_clearance_for_http
     from .common_romanceio_transport import HttpRateLimitError, open_request
 
     cached_headers = clearance_headers(url)
@@ -2260,7 +2687,7 @@ def fetch_book_page_http(romanceio_id: str, log_func: Optional[Callable] = None,
             _log(f"Lightweight HTTP fetch: 404 for {romanceio_id}")
             return None, False
         if e.code == 403:
-            discard_clearance(cached_headers.get("Cookie", ""))
+            reject_clearance_for_http(cached_headers.get("Cookie", ""))
             # Cloudflare or server is blocking plain HTTP requests to this page.
             # A typed failure lets the orchestrator skip futile HTTP retries.
             raise HttpAccessDeniedError(

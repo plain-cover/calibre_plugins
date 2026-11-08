@@ -128,7 +128,7 @@ def fetch_live_html(
             except HTTPError as error:
                 if error.code == 403:
                     if clearance:
-                        session.discard_clearance(clearance.get("Cookie", ""))
+                        session.reject_clearance_for_http(clearance.get("Cookie", ""))
                     raise helper.HttpAccessDeniedError(f"Taxonomy HTTP access denied (403): {url}") from error
                 if error.code == 429:
                     raise transport.HttpRateLimitError(
