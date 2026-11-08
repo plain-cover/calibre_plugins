@@ -381,7 +381,8 @@ def main():
                     local_url,
                     args.plugin,
                     wait_for_element="<h1>" + marker + "</h1>",
-                    max_wait=15,
+                    # As long as a real search gets: Qt WebEngine can be slow to start.
+                    max_wait=30,
                     log_func=print,
                     allow_chrome_fallback=chrome,
                     prefer_chrome=args.backend == "chrome",
@@ -399,7 +400,9 @@ def main():
         server_thread.join(timeout=5)
     if violations:
         raise AssertionError(sorted(violations))
-    alive = helper.wait_for_browser_processes(list(tracked), timeout=5)
+    # Windows can take several seconds to end a killed process, and the
+    # supervisor's own reaping allows about 9; anything left after that leaked.
+    alive = helper.wait_for_browser_processes(list(tracked), timeout=15)
     if alive:
         raise AssertionError(f"Browser descendants survived cleanup: {[p.pid for p in alive]}")
     attempt_count = 1 + (2 + (args.backend == "chrome") if args.failure_first else 0)

@@ -349,7 +349,9 @@ def fetch_page(request, log):
     started = time.monotonic()
     deadline = started + request.get("max_wait", 30)
     routes = browser_requests(request)
-    route_deadline = started + request.get("max_wait", 30) / len(routes)
+    # The routes share what is left once the engine first answers, so a slow
+    # engine startup is not charged to the first route alone.
+    route_deadline = deadline
     state: Dict[str, Any] = {
         "done": False,
         "pending": False,
@@ -359,6 +361,7 @@ def fetch_page(request, log):
         "error": None,
         "title": None,
         "route": 0,
+        "answered": False,
     }
     cookies: List[Dict[str, Any]] = []
 
@@ -391,11 +394,16 @@ def fetch_page(request, log):
         QTimer.singleShot(0, lambda: page.load(QUrl(request["url"])))
 
     def inspect(html, generation):
+        nonlocal route_deadline
         if generation != state["route"]:
             return
         state["pending"] = False
         if state["done"]:
             return
+        if not state["answered"]:
+            state["answered"] = True
+            now = time.monotonic()
+            route_deadline = now + (deadline - now) / len(routes)
         try:
             title = page.title()
             if title != state["title"]:
