@@ -24,7 +24,7 @@ import time
 import types
 import zipfile
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, List, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 from urllib.parse import urljoin, urlparse
 
 # List of vendored packages that need import redirection
@@ -2180,19 +2180,69 @@ def _finish_browser_worker_output(
             log(f"Could not remove browser worker native output: {type(error).__name__}")
 
 
+def _native_crash_exit_code(resources: _BrowserWorkerResources) -> Optional[int]:
+    """Return the worker's exit code if a native memory fault ended it, else None."""
+    import signal
+
+    # Calibre can report the broken IPC pipe before the exit status is reaped.
+    wait_until = min(resources.deadline, time.monotonic() + 2)
+    code = getattr(resources.worker, "returncode", None)
+    while code is None and resources.process.is_running() and time.monotonic() < wait_until:
+        time.sleep(0.05)
+        code = getattr(resources.worker, "returncode", None)
+    if code is None:
+        return None
+    if os.name == "nt":
+        return code if code & 0xFFFFFFFF == 0xC0000005 else None  # Access violation.
+    faults = {getattr(signal, name, None) for name in ("SIGSEGV", "SIGBUS", "SIGILL")}
+    return code if -code in faults else None
+
+
 def _supervise_browser_worker(request: Dict[str, Any]) -> Dict[str, Any]:
     """Remain alive after Calibre cancels the caller, then reap its browser tree.
 
     This process does no Qt rendering. It checks deadlines independently of
     Calibre's IPC wait, covering navigation and quit even if that wait stalls.
     """
-    from calibre.utils.ipc.simple_worker import two_part_fork_job
 
     def log(message: Any) -> None:
         _write_browser_log(request, message)
 
-    resources = _BrowserWorkerResources(request["worker_timeout"], log)
+    deadline = time.monotonic() + request["worker_timeout"]
+    try:
+        if not _browser_owner_alive(request):
+            return {"page": None, "error_type": "BrowserFetchError", "error_message": "Caller exited"}
+        log(f"Browser time limit: {request['worker_timeout']:g}s including setup, navigation, and shutdown")
+        response, crash = _run_supervised_browser_worker(request, request["worker_timeout"], log)
+        # Qt WebEngine 6 intermittently segfaults in its browser process on
+        # ordinary pages. Other failures are returned without a retry.
+        if not (
+            crash is None
+            or request.get("backend") == "chrome"
+            or not _browser_owner_alive(request)
+            or os.path.exists(os.path.join(request["transport_dir"], "cancel"))
+            or time.monotonic() >= deadline
+        ):
+            log(f"Browser worker crashed (exit code {crash}); retrying once within the same time limit")
+            response = _run_supervised_browser_worker(request, deadline - time.monotonic(), log)[0]
+        # A crashed attempt holds back its answer until the retry is decided;
+        # an answer already handed over stands.
+        _publish_response(request, response)
+        return response
+    finally:
+        if not _browser_owner_alive(request):
+            shutil.rmtree(request["transport_dir"], ignore_errors=True)
+
+
+def _run_supervised_browser_worker(
+    request: Dict[str, Any], timeout: float, log: Callable
+) -> Tuple[Dict[str, Any], Optional[int]]:
+    """Run one browser worker and reap it; also return its exit code if it crashed natively."""
+    from calibre.utils.ipc.simple_worker import two_part_fork_job
+
+    resources = _BrowserWorkerResources(timeout, log)
     reason = "Browser worker failed"
+    crash = None
     # Only the local smoke harness opts in. Normal website fetches continue to
     # discard native output, which may contain untrusted page diagnostics.
     capture_output = bool(request.get("capture_worker_output"))
@@ -2211,9 +2261,6 @@ def _supervise_browser_worker(request: Dict[str, Any]) -> Dict[str, Any]:
         return True
 
     try:
-        if not _browser_owner_alive(request):
-            return {"page": None, "error_type": "BrowserFetchError", "error_message": "Caller exited"}
-        log(f"Browser time limit: {request['worker_timeout']:g}s including setup, navigation, and shutdown")
         run_job = two_part_fork_job()
         if capture_output:
             native_log_path = run_job.worker.log_path
@@ -2245,20 +2292,23 @@ def _supervise_browser_worker(request: Dict[str, Any]) -> Dict[str, Any]:
                 raise BrowserFetchError("Browser worker communication interrupted")
             time.sleep(0.05)
         if "error" in outcome:
+            crash = _native_crash_exit_code(resources)
             raise outcome["error"]
         response = outcome["response"]
         if not isinstance(response, dict):
             raise BrowserFetchError("Browser worker returned an invalid response")
         failed = bool(response.get("error_type")) or not response.get("page")
         _publish_response(request, response)
-        return response
+        return response, None
     except Exception as error:  # pylint: disable=broad-except
         log(f"{reason}: {type(error).__name__}: {error}")
         if capture_output and resources.worker is not None:
             log(f"Browser worker exit code before cleanup: {getattr(resources.worker, 'returncode', None)}")
         response = {"page": None, "error_type": "BrowserFetchError", "error_message": reason}
-        _publish_response(request, response)
-        return response
+        if crash is None or request.get("backend") == "chrome":
+            # No retry follows, so the caller need not wait for cleanup.
+            _publish_response(request, response)
+        return response, crash
     finally:
         try:
             # The caller has its answer and moves on while this finishes.
@@ -2272,8 +2322,6 @@ def _supervise_browser_worker(request: Dict[str, Any]) -> Dict[str, Any]:
                     log,
                     "ChromeDriver startup output",
                 )
-            if not _browser_owner_alive(request):
-                shutil.rmtree(request["transport_dir"], ignore_errors=True)
 
 
 # Longest a Camoufox worker runs: as long as a whole lookup.
