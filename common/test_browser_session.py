@@ -46,7 +46,7 @@ def test_private_cache_saves_only_clearance_and_caps_expiry():
     record = json.loads(path.read_text())
     assert set(record) == {"value", "user_agent", "expires"}
     assert "must-not-save" not in path.read_text()
-    assert time.time() < record["expires"] <= time.time() + 1800
+    assert time.time() < record["expires"] <= time.time() + 24 * 60 * 60
     assert session.clearance_headers(URL) == {"Cookie": "cf_clearance=test-clearance", "User-Agent": AGENT}
     if os.name != "nt":
         assert path.stat().st_mode & 0o077 == 0
@@ -84,10 +84,43 @@ def test_expired_corrupt_and_oversized_cache_are_ignored():
 
 def test_rejected_clearance_does_not_erase_newer_clearance():
     save("new-value")
-    session.discard_clearance("cf_clearance=old-value")
+    session.reject_clearance_for_http("cf_clearance=old-value")
     assert session.clearance_headers(URL)["Cookie"] == "cf_clearance=new-value"
-    session.discard_clearance("cf_clearance=new-value")
+    session.reject_clearance_for_http("cf_clearance=new-value")
     assert session.clearance_headers(URL) == {}
+
+
+def test_http_rejection_keeps_clearance_for_the_browser_that_earned_it():
+    save()
+    session.reject_clearance_for_http("cf_clearance=test-clearance")
+    assert session.clearance_headers(URL) == {}
+    assert session.browser_clearance(AGENT)["value"] == "test-clearance"
+    # A different browser, or a disguised User-Agent, never receives it.
+    assert session.browser_clearance("Mozilla/5.0 Other Chrome/152.0.0.0") == {}
+
+
+def test_resaving_same_clearance_does_not_resume_rejected_http():
+    save()
+    session.reject_clearance_for_http("cf_clearance=test-clearance")
+    save()
+    assert session.clearance_headers(URL) == {}
+    save("renewed")
+    assert session.clearance_headers(URL)["Cookie"] == "cf_clearance=renewed"
+
+
+def test_lapsed_verification_is_forgotten_but_newer_one_is_kept():
+    save("lapsed")
+    session.forget_clearance("older")
+    assert session.browser_clearance(AGENT)["value"] == "lapsed"
+    session.forget_clearance("lapsed")
+    assert session.browser_clearance(AGENT) == {}
+    assert session.clearance_headers(URL) == {}
+
+
+def test_expired_clearance_is_not_offered_to_the_browser():
+    path = Path(session._cache_path())
+    path.write_text(json.dumps({"value": "test", "user_agent": AGENT, "expires": time.time() - 1}))
+    assert session.browser_clearance(AGENT) == {}
 
 
 @pytest.mark.parametrize("target", ["https://other.test/", "http://www.romance.io/", "https://www.romance.io:8443/"])

@@ -18,6 +18,7 @@ try:
         QInputDialog,
         QToolButton,
         QSpacerItem,
+        QPushButton,
     )
 except ImportError:
     from PyQt5.Qt import (
@@ -33,6 +34,7 @@ except ImportError:
         QInputDialog,
         QToolButton,
         QSpacerItem,
+        QPushButton,
     )
 
 # Pull in translation files for _() strings
@@ -185,6 +187,15 @@ class ConfigWidget(DefaultConfigWidget):
         all_tags = get_current_db().all_tags()  # type: ignore[attr-defined]
 
         self.gb.setMaximumHeight(80)
+        verify_button = QPushButton(_("Verify Romance.io access..."), self)  # type: ignore # pylint: disable=undefined-variable
+        verify_button.setToolTip(
+            _(  # type: ignore # pylint: disable=undefined-variable
+                "Open Romance.io and complete its Cloudflare check if asked.\n"
+                "Lookups reuse the verification until Romance.io asks again."
+            )
+        )
+        verify_button.clicked.connect(self.verify_access)
+        self.l.addWidget(verify_button, self.l.rowCount(), 0, 1, 1)
         genre_group_box = QGroupBox(_("Romance.io tag to Calibre tag mappings"), self)  # type: ignore # pylint: disable=undefined-variable
         self.l.addWidget(genre_group_box, self.l.rowCount(), 0, 1, 2)
         genre_group_box_layout = QVBoxLayout()
@@ -248,6 +259,14 @@ class ConfigWidget(DefaultConfigWidget):
 
         self.edit_table.populate_table(c[KEY_GENRE_MAPPINGS])
         self._restore_defaults_button = None
+
+    def verify_access(self):
+        # Imported on demand: the window loads Qt WebEngine widgets.
+        from calibre_plugins.romanceio.common_romanceio_verify import (  # type: ignore[import-not-found]  # pylint: disable=import-error
+            verify_romanceio_access,
+        )
+
+        verify_romanceio_access(self)
 
     def commit(self):
         DefaultConfigWidget.commit(self)

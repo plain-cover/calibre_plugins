@@ -5,6 +5,7 @@ We use jobs to manage downloading fields from Romance.io.
 
 import traceback
 from dataclasses import dataclass
+from functools import partial
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
@@ -12,6 +13,7 @@ from calibre.customize.ui import quick_metadata
 from calibre.ebooks import DRMError
 
 from . import config as cfg
+from .common_romanceio_session import VERIFY_HINT  # pylint: disable=import-error
 from .common_romanceio_transport import job_session  # pylint: disable=import-error
 
 
@@ -26,6 +28,11 @@ class _SsrParsedFields:
 _JSON_REQUEST_TIMEOUT_SECS: int = 10
 INTERNAL_CUSTOM_FIELDS_TO_UPDATE = "__custom_fields_to_update__"
 INTERNAL_TAG_FIELDS_TO_UPDATE = "__tag_fields_to_update__"
+INTERNAL_VERIFICATION_NEEDED = "__verification_needed__"
+NOT_SEARCHED_PENDING_VERIFICATION = "Not searched yet: Romance.io asked for verification"
+BLOCKED_BY_VERIFICATION = "Romance.io asked for verification before this book could be looked up"
+# Warnings for books that verification would let the job look up
+PENDING_VERIFICATION_WARNINGS = (NOT_SEARCHED_PENDING_VERIFICATION, BLOCKED_BY_VERIFICATION)
 
 
 @job_session
@@ -35,10 +42,12 @@ def prepare_books_for_download(
     rating_tag_fields: List[str],
     overwrite_existing: bool,
     db_path: str,
+    verification_log: Optional[List[str]] = None,
     notification: Callable[[float, str], float] = (lambda x, y: x),
 ) -> Tuple[List[Tuple], Dict[int, str], Dict[int, str], Dict[int, str]]:
     """
     Prepare books for downloading by searching for Romance.io IDs if needed.
+    verification_log is the verification window's log when this is its retry.
     Returns (books_to_scan_raw, warnings, errors, saved_identifiers) where:
     - books_to_scan_raw: List of tuples containing the fields to fetch and the
       custom-column/rating-tag destinations to update
@@ -51,6 +60,7 @@ def prepare_books_for_download(
         search_with_fallback,
     )
 
+    print_verification_log(verification_log)
     # Open database connection (old API)
     db = calibre_db(db_path)
 
@@ -93,7 +103,19 @@ def prepare_books_for_download(
 
         return search_for_romanceio_id(title, authors, fetch_with_log, log_func)
 
+    verification_needed = False
+
+    def search_log(title: str, msg: Any) -> None:
+        nonlocal verification_needed
+        verification_needed = verification_needed or VERIFY_HINT in str(msg)
+        print(f"[{title}] {msg}", flush=True)
+
     for i, book_id in enumerate(book_ids):
+        if verification_needed:
+            # Every remaining search would wait on the same check; the GUI
+            # offers verification and then searches these books again.
+            warnings[book_id] = NOT_SEARCHED_PENDING_VERIFICATION
+            continue
         notification(float(i) / total, f"Finding book {i + 1} of {total}")
 
         try:
@@ -134,7 +156,7 @@ def prepare_books_for_download(
                     authors,
                     json_search,
                     html_search,
-                    log_func=lambda msg: print(f"[{title}] {msg}", flush=True),
+                    log_func=partial(search_log, title),
                 )
 
                 if romanceio_id:
@@ -142,6 +164,10 @@ def prepare_books_for_download(
                     # (Worker process DB changes aren't visible to GUI)
                     saved_identifiers[book_id] = romanceio_id
                     print(f"[{title}] Found romanceio identifier {romanceio_id}")
+                elif verification_needed:
+                    # Not a book Romance.io lacks: the check stopped its search.
+                    warnings[book_id] = BLOCKED_BY_VERIFICATION
+                    continue
                 else:
                     warnings[book_id] = f"Could not find Romance.io ID for: {title}"
                     continue
@@ -149,10 +175,23 @@ def prepare_books_for_download(
             books_to_scan.append((book_id, romanceio_id, fields_to_run, custom_fields_to_update, tag_fields_to_update))
 
         except Exception:  # pylint: disable=broad-except
-            errors[book_id] = traceback.format_exc()
+            if verification_needed:
+                # The check stopped this book's search; its log has the details.
+                warnings[book_id] = BLOCKED_BY_VERIFICATION
+            else:
+                errors[book_id] = traceback.format_exc()
 
     notification(1.0, "Preparation complete")
     return (books_to_scan, warnings, errors, saved_identifiers)
+
+
+def print_verification_log(verification_log: Optional[List[str]]) -> None:
+    """Keep the verification window's log in the details of the job that retries after it."""
+    if not verification_log:
+        return
+    print("Romance.io access was verified before this retry:", flush=True)
+    for message in verification_log:
+        print(f"[Verification] {message}", flush=True)
 
 
 class BookToScan:
@@ -217,6 +256,7 @@ def do_metadata_download(
     max_tags: int,
     cpus: Optional[int],  # pylint: disable=unused-argument
     prefer_html: bool = False,
+    verification_log: Optional[List[str]] = None,
     notification: Callable[[float, str], float] = (lambda x, y: x),
 ) -> Dict[int, Dict[str, Any]]:
     """Download sequentially in Calibre's existing job process.
@@ -225,6 +265,7 @@ def do_metadata_download(
     concurrency and survives cancellation of this outer job, so do not create one.
     The cpus argument remains for compatibility with Calibre's job invocation.
     """
+    print_verification_log(verification_log)
     total = len(books_to_scan_raw)
     book_results_map: Dict[int, Dict[str, Any]] = {}
     notification(0.01 if total else 1.0, "Downloading metadata from Romance.io")
@@ -241,12 +282,20 @@ def do_metadata_download(
             print(f"Book {book.book_id} has no Romance.io identifier; skipping", flush=True)
             results = {}
         results.pop("__log__", None)
+        verification_needed = results.pop(INTERNAL_VERIFICATION_NEEDED, False)
         if results:
             results[INTERNAL_CUSTOM_FIELDS_TO_UPDATE] = book.custom_fields_to_update
             results[INTERNAL_TAG_FIELDS_TO_UPDATE] = book.tag_fields_to_update
         book_results_map[book.book_id] = results
         print(f"[{count}/{total}] {'Completed' if results else 'Failed'} book {book.book_id}", flush=True)
         notification(float(count) / total, "Downloading metadata from Romance.io")
+        if verification_needed and not results and count < total:
+            # Every remaining book would wait on the same check; the GUI offers
+            # verification and then downloads the books left out here.
+            print(
+                f"Stopping before the remaining {total - count} books until Romance.io access is verified", flush=True
+            )
+            break
     return book_results_map
 
 
@@ -255,15 +304,20 @@ def get_romanceio_fields_for_book(
 ) -> Dict[str, Any]:
     """Download and parse requested Romance.io fields for a single book."""
     logs: List[str] = []
+    verification_needed = False
 
     def log(msg: str) -> None:
+        nonlocal verification_needed
+        verification_needed = verification_needed or VERIFY_HINT in str(msg)
         if live_log:
             print(msg, flush=True)
         else:
             logs.append(msg)
 
     def _result(fields: Dict[str, Any]) -> Dict[str, Any]:
-        """Attach collected log lines to a result dict and return it."""
+        """Attach collected log lines (and a failed lookup's need for verification) to a result dict."""
+        if verification_needed and not fields:
+            fields[INTERNAL_VERIFICATION_NEEDED] = True
         if logs:
             fields["__log__"] = logs
         return fields

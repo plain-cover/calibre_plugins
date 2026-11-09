@@ -11,7 +11,7 @@ from urllib.request import Request
 from urllib.error import HTTPError
 
 from .common_romanceio_transport import HttpRateLimitError, open_request
-from .common_romanceio_session import clearance_headers, discard_clearance
+from .common_romanceio_session import clearance_headers, reject_clearance_for_http
 
 
 class JsonApiEndpointError(RuntimeError):
@@ -104,7 +104,7 @@ def _make_json_request(url: str, timeout: int = 30, log_func: Optional[Callable]
                 log_func(msg)
             raise JsonApiEndpointError(msg, url=url) from e
         if e.code == 403:
-            discard_clearance(cached_headers.get("Cookie", ""))
+            reject_clearance_for_http(cached_headers.get("Cookie", ""))
             if log_func:
                 log_func(f"JSON API request failed: HTTPError 403: {e}")
             raise JsonApiAccessDeniedError("HTTP Error 403: Forbidden") from e
@@ -166,7 +166,7 @@ def search_books_json(
         if browser_fetch_func is None:
             raise
         if log_func:
-            log_func("Direct JSON search unavailable; trying JSON/HTML in Qt, then Chrome if needed.")
+            log_func("Direct JSON search unavailable; trying it in a browser.")
 
     from .common_romanceio_fetch_helper import BrowserFetchError, parse_html_from_selenium
 

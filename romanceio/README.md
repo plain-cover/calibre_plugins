@@ -88,8 +88,11 @@ calibre-debug test_search_parity.py -- --live=all               # JSON search vs
 ![Calibre "Edit metadata" menu emphasizing the "Ids" field where users can manually enter the Romance.io ID](../images/Edit%20metadata%20-%20set%20ID.png)
 
 **Cloudflare or browser errors:**
+- If the log says Romance.io asked for a verification, click **Verify Romance.io access...** in this source's settings (Preferences > Metadata download > Romance.io > Configure), complete the check if one appears, and retry. The verification is reused until Romance.io asks again.
 - Check the download job log for the failed access method, error, or timeout. Cloudflare can reject both HTTP and browser requests.
 - Chrome is optional for HTTP and Calibre's built-in engine, but must be installed to use the Chrome fallback. See the [main README's browser requirements](../README.md#notes) for platform restrictions.
+- With Calibre 9.17 or later, lookups that meet Romance.io's check use Calibre's Camoufox browser, which Calibre installs the first time **Download metadata** runs with its Amazon.com source enabled (the default).
+- Set **Max. time to wait after first match is found** to 90 seconds in **Preferences > Metadata download**, so Calibre does not stop this source while Camoufox gets past the check. The log says so when the setting is lower.
 
 ## Support
 

@@ -26,6 +26,7 @@ from __future__ import annotations
 import importlib
 import importlib.abc
 import importlib.util
+import json
 from importlib import metadata
 import multiprocessing
 import os
@@ -905,6 +906,7 @@ def test_installed_fetch_page_uses_isolated_calibre_worker(monkeypatch):
             "not_found_marker": None,
             "secondary_wait_element": None,
             "max_wait": 45,
+            "interactive": False,
         }
     ]
 
@@ -1141,6 +1143,10 @@ def test_supervisor_retries_only_a_native_worker_crash_once(tmp_path, monkeypatc
         assert result["page"] == ("browser html" if attempts[expected - 1] == "page" else None)
         progress = (tmp_path / "progress.jsonl").read_text(encoding="utf-8")
         assert ("retrying once" in progress) is (expected == 2)
+        # The caller takes the first answer handed over, so a crashed attempt
+        # must not hand over its failure before the retry has run.
+        published = json.loads((tmp_path / "response.json").read_text(encoding="utf-8"))
+        assert published["page"] == result["page"]
         assert all(process.poll() is not None for process in workers)
         assert not list(tmp_path.glob("calibre_sb_*"))
     finally:
