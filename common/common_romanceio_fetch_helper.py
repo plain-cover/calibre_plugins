@@ -2472,6 +2472,11 @@ def _fetch_page_via_calibre_worker(
     return page
 
 
+def _print_now(message: Any) -> None:
+    # A Calibre job's output is a file, which buffers; flush so a watcher sees progress live.
+    print(message, flush=True)
+
+
 def fetch_page(
     url,
     plugin_name,
@@ -2491,6 +2496,7 @@ def fetch_page(
     interactive leaves Romance.io's check to the user in the visible Chrome
     window instead of handling it automatically.
     """
+    log_func = log_func or _print_now
     request = {
         "url": url,
         "plugin_name": plugin_name,
@@ -2510,7 +2516,7 @@ def fetch_page(
     # Apply the same cooldown before startup, outside the browser worker budget.
     from .common_romanceio_search_orchestrator import wait_for_rate_limit
 
-    if not wait_for_rate_limit(log_func or print, abort):
+    if not wait_for_rate_limit(log_func, abort):
         raise BrowserFetchError("Browser cancelled during rate-limit cooldown")
     parsed_url = urlparse(url)
     if parsed_url.path == "/json/search_books":
@@ -2547,10 +2553,10 @@ def fetch_page(
                 budget.metadata_wait_hint_logged = True
                 hint = metadata_wait_hint()
                 if hint:
-                    (log_func or print)(hint)
+                    log_func(hint)
         elif not budget.camoufox_hint_logged:
             budget.camoufox_hint_logged = True
-            (log_func or print)(camoufox_missing_hint())
+            log_func(camoufox_missing_hint())
         from .common_romanceio_session import clearance_browser
 
         # Clearance is bound to the browser that earned it, such as the
@@ -2578,14 +2584,14 @@ def fetch_page(
         if CHALLENGE_SEEN in str(message):
             challenged = True
             met_check.add(current)
-        (log_func or print)(message)
+        log_func(message)
 
     def suggest_verification():
         # Only after every browser failed: a later success makes the hint moot.
         if challenged and not (budget and budget.verification_hint_logged):
             from .common_romanceio_session import VERIFY_HINT
 
-            (log_func or print)(VERIFY_HINT)
+            log_func(VERIFY_HINT)
             if budget:
                 budget.verification_hint_logged = True
 
@@ -2596,16 +2602,14 @@ def fetch_page(
         # Saving a verification ends the pause; a saved clearance that HTTP has
         # just been refused with does not.
         if automatic_check_paused():
-            (log_func or print)(
-                "Skipping automatic browsers until Romance.io's check is completed in the verification window"
-            )
+            log_func("Skipping automatic browsers until Romance.io's check is completed in the verification window")
             challenged = True
             suggest_verification()
             raise BrowserFetchError("Romance.io's verification challenge needs to be completed by the user")
 
     for index, backend in enumerate(backends):
         if budget and backend in budget.failed_browsers:
-            (log_func or print)(f"Skipping {backend}: its browser session already failed in this lookup")
+            log_func(f"Skipping {backend}: its browser session already failed in this lookup")
             continue
         if abort is not None and abort.is_set():
             raise BrowserFetchError("Browser cancelled before startup")
@@ -2613,7 +2617,7 @@ def fetch_page(
         try:
             return fetch({**request, "backend": backend})
         except BrowserFetchError as error:
-            (log_func or print)(_redact_log_text(f"{backend.capitalize()} browser failed: {error}"))
+            log_func(_redact_log_text(f"{backend.capitalize()} browser failed: {error}"))
             # Chrome can run out of time before its check page even appears, so
             # HTTP meeting the check is enough to know the check is involved.
             challenged = challenged or _is_challenge_failure(error) or http_challenged
@@ -2621,15 +2625,13 @@ def fetch_page(
                 budget.failed_browsers.add(backend)
             next_backend = backends[index + 1] if index + 1 < len(backends) else None
             if backend != "embedded" and challenged and next_backend == "embedded":
-                (log_func or print)("Skipping embedded: Romance.io's check does not accept the embedded engine")
+                log_func("Skipping embedded: Romance.io's check does not accept the embedded engine")
                 next_backend = None
             if backend == "camoufox" and (backend in met_check or _is_challenge_failure(error)):
                 # Camoufox had the whole lookup on the check; Chrome is for when
                 # Camoufox cannot run at all.
                 if next_backend:
-                    (log_func or print)(
-                        f"Skipping {next_backend}: Cloudflare kept Camoufox on Romance.io's check for this lookup"
-                    )
+                    log_func(f"Skipping {next_backend}: Cloudflare kept Camoufox on Romance.io's check for this lookup")
                 next_backend = None
             # Calibre stopping a slow source, or the user cancelling, says nothing
             # about whether the check could have been passed; running out of the
@@ -2644,7 +2646,7 @@ def fetch_page(
             if (abort is not None and abort.is_set()) or next_backend is None:
                 suggest_verification()
                 raise
-            (log_func or print)(f"{backend.capitalize()} browser failed; trying {next_backend} once.")
+            log_func(f"{backend.capitalize()} browser failed; trying {next_backend} once.")
     suggest_verification()
     raise BrowserFetchError("No untried browser remains for this lookup")
 

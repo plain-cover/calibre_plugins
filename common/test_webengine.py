@@ -90,6 +90,24 @@ def test_optional_chrome_fallback_order(monkeypatch):
     assert "Embedded browser failed: Challenge could not be cleared" in logs
 
 
+def test_progress_is_flushed_without_a_log_function(monkeypatch):
+    # Inside a Calibre job, stdout is a buffered file that a caller watches live.
+    import builtins
+    from common import common_romanceio_fetch_helper as helper
+
+    printed = []
+    monkeypatch.setattr(builtins, "print", lambda *args, **kwargs: printed.append((args, kwargs.get("flush"))))
+    monkeypatch.setattr(helper, "_is_installed_plugin_module", lambda _name: True)
+
+    def fetch(_request, log, _abort):
+        log("Navigating embedded web engine to http://127.0.0.1/fixture")
+        return "page"
+
+    monkeypatch.setattr(helper, "_fetch_page_via_calibre_worker", fetch)
+    assert helper.fetch_page("http://127.0.0.1/fixture", "romanceio_fields") == "page"
+    assert (("Navigating embedded web engine to http://127.0.0.1/fixture",), True) in printed
+
+
 @pytest.mark.parametrize("outcome", ["disabled", "cancelled", "success", "chrome-fails"])
 def test_chrome_does_not_launch_unnecessarily_or_repeat(monkeypatch, outcome):
     import threading
