@@ -166,6 +166,24 @@ def _read_process_metadata(process, attribute, unreadable):
         return None
 
 
+def _describe_processes(processes):
+    """Name each surviving process so a cleanup failure shows what was left behind."""
+    import psutil
+
+    descriptions = []
+    for process in processes:
+        try:
+            name = _read_process_metadata(process, "name", set())
+            details = f"name={name!r} ppid={process.ppid()} status={process.status()}"
+            command = _read_process_metadata(process, "cmdline", set())
+            if command:
+                details += f" command={' '.join(command)[:300]!r}"
+        except (psutil.Error, OSError) as error:
+            details = f"details unavailable ({type(error).__name__})"
+        descriptions.append(f"PID {process.pid}: {details}")
+    return descriptions
+
+
 def _is_caller_exit_helper(process, owner_pid, unreadable):
     """Exclude only an identified Calibre helper that lives until caller exit."""
     if process.ppid() != owner_pid:
@@ -404,7 +422,7 @@ def main():
     # supervisor's own reaping allows about 9; anything left after that leaked.
     alive = helper.wait_for_browser_processes(list(tracked), timeout=15)
     if alive:
-        raise AssertionError(f"Browser descendants survived cleanup: {[p.pid for p in alive]}")
+        raise AssertionError(f"Browser descendants survived cleanup: {_describe_processes(alive)}")
     attempt_count = 1 + (2 + (args.backend == "chrome") if args.failure_first else 0)
     expected = ["embedded", "chrome"] if args.chrome_fallback else [args.backend] * attempt_count
     if attempts != expected:
