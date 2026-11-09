@@ -78,6 +78,7 @@ def _load_action_module():
         "romanceio_fields.jobs",
         INTERNAL_CUSTOM_FIELDS_TO_UPDATE="__custom_fields_to_update__",
         INTERNAL_TAG_FIELDS_TO_UPDATE="__tag_fields_to_update__",
+        PENDING_VERIFICATION_WARNINGS=(),
         call_plugin_callback=lambda *args, **kwargs: None,
     )
     sys.modules["romanceio_fields.rating_tags"] = rating_tags
